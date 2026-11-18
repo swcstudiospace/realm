@@ -1,20 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v5.0
-milestone_name: Cold attach, enforced capability tokens and evidence (Starting)
-status: Starting
-stopped_at: Milestone v5.0 started, phases 33 to 37 planned
-last_updated: "2026-11-18T04:10:00.000Z"
+milestone_name: Cold attach, enforced capability tokens and evidence
+current_phase: 34
+current_phase_name: Capability tokens enforce by default
+status: executing
+stopped_at: Phase 33 complete, ready to execute Phase 34
+last_updated: "2026-11-18T06:52:45.748Z"
 last_activity: 2026-11-18
-last_activity_desc: Milestone v5.0 started
-state_head: 26097b6fd6b0a47246707d19c2e0d56d2aec6215
+last_activity_desc: Phase 33 complete, transitioned to Phase 34
+state_head: ba148323990e82ac3027295a83926f792fbed697
 progress:
-  total_phases: 5
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-current_phase: 33
+  total_phases: 26
+  completed_phases: 40
+  total_plans: 13
+  completed_plans: 6
+  percent: 91
 ---
 
 # Project State
@@ -28,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-11-18)
 
 ## Current Position
 
-Phase: 33 (Cold attach), not started
-Plan: —
-Status: Starting milestone v5.0 (phases 33 to 37, release line 0.5.x)
-Last activity: 2026-11-18 — Milestone v5.0 started
+Phase: 34 — Capability tokens enforce by default
+Plan: Not started
+Status: Ready to execute
+Last activity: 2026-11-18 — Phase 33 complete, transitioned to Phase 34
 
 ## Current Recovery Boundaries
 
@@ -57,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 91
+- Total plans completed: 94
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -86,6 +87,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 30 | 2 | - | - |
 | 31 | 2 | - | - |
 | 32 | 3 | - | - |
+| 33 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -232,7 +234,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 32 complete — all phases complete
+Stopped at: Phase 33 complete, ready to execute Phase 34
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
