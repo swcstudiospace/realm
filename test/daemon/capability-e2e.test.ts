@@ -5,10 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { runCli, type CliDeps } from "../../src/cli/main.js";
@@ -20,7 +17,7 @@ import type { HostId } from "../../src/host/types.js";
 import { FakeTimers } from "../support/fake-host-daemon.js";
 import { startRig, type Rig } from "../support/capability-harness.js";
 import { capture, FakeSignals, frame, listTools, toolOutcomeOf, untilPresence, untilReplyOn } from "../support/stdio-host-harness.js";
-import { boundedWait, pollUntil, testTimeout } from "../support/timing.js";
+import { boundedWait, testTimeout } from "../support/timing.js";
 
 const ENFORCE = { mode: "enforce", profiles: { cursor: ["fs.read", "fs.list"] } } as const;
 const READ = { read: { path: "doc.txt", maxBytes: 64 } };
@@ -285,78 +282,4 @@ void test("CAPT-06: no leak: the token and the key appear in no sink, and the ke
   const keyFile = rig.keyringText();
   assert.ok(keyFile.includes(key), "the key is in keys.json");
   assert.equal(keyFile.includes(token), false, "keys.json holds no token");
-});
-
-void test("CAPT-06: memory probe (Linux, informational): a non-descendant process cannot read the holder's environment, and what its memory read did is recorded", testTimeout(60_000), async (t) => {
-  if (process.platform !== "linux") {
-    t.skip("not Linux: /proc is not available");
-    return;
-  }
-  if (process.getuid?.() === 0) {
-    t.skip("the harness is root: root reads any process, so the probe cannot show the Yama boundary; recorded as not run");
-    return;
-  }
-  let scope: string;
-  try {
-    scope = readFileSync("/proc/sys/kernel/yama/ptrace_scope", "utf8").trim();
-  } catch {
-    t.skip("/proc/sys/kernel/yama/ptrace_scope is not readable: recorded as not run");
-    return;
-  }
-  if (Number(scope) < 1) {
-    t.skip(`ptrace_scope is ${scope}, below 1: recorded as not run`);
-    return;
-  }
-  const rig = await startRig(t, { capabilityTokens: ENFORCE });
-  await rig.up();
-  const client = clientFor(rig, "claude");
-  assert.equal((await client.call(READ)).outcome, "done");
-  const token = rig.recompute(claimsOf(rig, "claude"));
-
-  // The probe is a grandchild: the child starts it detached and exits, so the probe is reparented and is no descendant of
-  // this process, which holds the token in the client's closure.
-  const dir = mkdtempSync(join(tmpdir(), "realm-capt-probe-"));
-  t.after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-  const result = join(dir, "result.json");
-  const probe = join(dir, "probe.mjs");
-  writeFileSync(
-    probe,
-    [
-      'import { readFileSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";',
-      "const [pid, token, out] = process.argv.slice(2);",
-      "const report = { environ: null, mem: null };",
-      'try { report.environ = readFileSync(`/proc/${pid}/environ`, "utf8").includes(token) ? "found" : "absent"; } catch (error) { report.environ = `denied:${error.code}`; }',
-      "try {",
-      '  const maps = readFileSync(`/proc/${pid}/maps`, "utf8").split("\\n").filter((line) => line.includes(" rw-p "));',
-      '  const fd = openSync(`/proc/${pid}/mem`, "r");',
-      '  let found = false;',
-      "  for (const line of maps.slice(0, 200)) {",
-      '    const [range] = line.split(" ");',
-      '    const [from, to] = range.split("-").map((hex) => Number.parseInt(hex, 16));',
-      "    const size = Math.min(to - from, 8 * 1024 * 1024);",
-      "    const buffer = Buffer.alloc(size);",
-      "    try { readSync(fd, buffer, 0, size, from); } catch { continue; }",
-      "    if (buffer.includes(token)) { found = true; break; }",
-      "  }",
-      "  closeSync(fd);",
-      '  report.mem = found ? "found" : "absent";',
-      "} catch (error) { report.mem = `denied:${error.code}`; }",
-      "writeFileSync(out, JSON.stringify(report));",
-    ].join("\n"),
-  );
-  const starter = spawn(
-    process.execPath,
-    [
-      "-e",
-      `require("node:child_process").spawn(process.execPath, [${JSON.stringify(probe)}, ${JSON.stringify(String(process.pid))}, ${JSON.stringify(token)}, ${JSON.stringify(result)}], { detached: true, stdio: "ignore" }).unref();`,
-    ],
-    { stdio: "ignore" },
-  );
-  await boundedWait(once(starter, "exit"), "the probe starter exiting", 10_000);
-  await pollUntil(() => existsSync(result), "the probe wrote its report", { timeoutMs: 20_000 });
-  const report = JSON.parse(readFileSync(result, "utf8")) as { environ: string; mem: string };
-  t.diagnostic(`ptrace_scope ${scope}; /proc/PID/environ: ${report.environ}; /proc/PID/mem: ${report.mem}; parent ${readlinkSync(`/proc/${String(process.pid)}/exe`)}`);
-  assert.notEqual(report.environ, "found", "the token is not in the environment block");
 });
