@@ -234,9 +234,10 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
       return snapshot.state;
     },
     markerPath: (host) => join(stateDir, "hosts", `${host}-active`, `${String(process.pid)}.json`),
-    // A real client whose up never settles: a host hung in the daemon's up.
-    hangingUp: () => (socketPath, selection): DaemonClient => {
-      const real = connectDaemon(socketPath, selection);
+    // A real client whose up never settles: a host hung in the daemon's up. The connect seam's third argument is forwarded, so the
+    // real client keeps the host id it would carry in production.
+    hangingUp: () => (socketPath, selection, options): DaemonClient => {
+      const real = connectDaemon(socketPath, selection, options);
       return {
         status: () => real.status(),
         up: () => new Promise<DaemonStatus>(() => undefined),
@@ -250,13 +251,13 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
     flakyConnect(failures) {
       let failed = 0;
       let ups = 0;
-      const connect: ConnectDaemon = (socketPath, selection): DaemonClient => {
+      const connect: ConnectDaemon = (socketPath, selection, options): DaemonClient => {
         if (failed < failures) {
           failed += 1;
           const reject = (): Promise<never> => Promise.reject(new RealmError("DAEMON_START_TIMEOUT"));
           return { status: reject, up: reject, call: reject, metrics: reject, close: () => undefined };
         }
-        const real = connectDaemon(socketPath, selection);
+        const real = connectDaemon(socketPath, selection, options);
         return {
           status: () => real.status(),
           up: () => {

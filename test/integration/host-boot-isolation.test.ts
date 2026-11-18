@@ -12,6 +12,7 @@
 //   S3  B's stdin ends: exit 0, marker gone, the sandbox is still active, no down row.
 //   S4  a hostile process floods host-boot frames: bounded at the bucket, a fresh host still boots, the boot audit chain verifies.
 //   S5  two hosts (claude, codex) and an ACP host on one project boot together; one ends, the others keep the sandbox.
+//   S5b a labelled host driven through a wrapped connect keeps its host id: the daemon counts a capability-attach request.
 //   S6  a project directory named with a newline, a quote, an ANSI escape and a token appears in no sink.
 //   S7  stdout holds only protocol frames in every scenario above.
 
@@ -206,10 +207,11 @@ async function sandboxState(path: string): Promise<unknown> {
   return snapshot.state;
 }
 
-// A real client whose up never settles: a host hung in the daemon's up.
+// A real client whose up never settles: a host hung in the daemon's up. The connect seam's third argument is forwarded, so the real
+// client keeps the host id it would carry in production.
 function hangingUp(): ConnectDaemon {
-  return (socketPath, selection): DaemonClient => {
-    const real = connectDaemon(socketPath, selection);
+  return (socketPath, selection, options): DaemonClient => {
+    const real = connectDaemon(socketPath, selection, options);
     return {
       status: () => real.status(),
       up: () => new Promise<DaemonStatus>(() => undefined),
@@ -341,6 +343,38 @@ void test("S5: two hosts and an ACP host on one project boot together; one ends 
   assert.equal(await sandboxState(shared), "active", "the sandbox lasts until realm down");
   assert.equal(await downCount(), releases, "no boot path issued down: only the test's own releases are counted");
   await releaseProject(shared);
+});
+
+// A pass-through wrapper of the real client, the shape of hangingUp without the hang. A wrapper that dropped the connect seam's third
+// argument would hand the real client no host id, and the client would never send capability-attach.
+function passThrough(): ConnectDaemon {
+  return (socketPath, selection, options): DaemonClient => {
+    const real = connectDaemon(socketPath, selection, options);
+    return {
+      status: () => real.status(),
+      up: () => real.up(),
+      call: (tool) => real.call(tool),
+      metrics: () => real.metrics(),
+      close: () => {
+        real.close();
+      },
+    };
+  };
+}
+
+async function attachCount(): Promise<number> {
+  const snapshot = await metrics();
+  return snapshot.controlRequests.find((row) => row.method === "capability-attach")?.count ?? 0;
+}
+
+void test("S5b: a labelled host driven through a wrapped connect keeps its host id: the daemon counts a capability-attach request", async () => {
+  const projectFour = project("four");
+  const before = await attachCount();
+  const host = mcpHost("claude", projectFour, { connect: passThrough() });
+  assert.equal(await serveStatus(host, 1), "active");
+  assert.ok((await attachCount()) - before >= 1, "the real client sent capability-attach, so its host id went through the wrapper");
+  assert.equal((await end(host)).exitCode, 0);
+  await releaseProject(projectFour);
 });
 
 void test("S6: a project directory named with a newline, a quote, an ANSI escape and a token appears in no log, report, metric, audit line or marker", async () => {

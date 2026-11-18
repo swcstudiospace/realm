@@ -58,6 +58,7 @@ import { currentBootId } from "../../src/session/proc-identity.js";
 import { writeRunnerRecord } from "../../src/session/runner-record.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
+import { CAPABILITY_TOKENS_OFF } from "../support/policy-document.js";
 import { FakeContainerStore, FakeLibpod } from "../support/fake-libpod.js";
 import { FakeOpenShell } from "../support/fake-openshell.js";
 import { boundedWait, pollUntil, scaledMs } from "../support/timing.js";
@@ -143,7 +144,9 @@ function makeDirs(): Fixture {
 
 function writePolicy(fixture: Fixture, name: string, policy: Record<string, unknown>): string {
   const path = join(fixture.policyDir, name);
-  writeFileSync(path, JSON.stringify(policy));
+  // A daemon test is not about capability tokens (its raw tool frames are tokenless on purpose), so it opts out unless it names its own.
+  const document = "capabilityTokens" in policy ? policy : { ...CAPABILITY_TOKENS_OFF, ...policy };
+  writeFileSync(path, JSON.stringify(document));
   return path;
 }
 

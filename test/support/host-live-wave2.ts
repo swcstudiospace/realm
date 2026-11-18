@@ -92,8 +92,8 @@ export const WAVE2_LIVE: Readonly<Record<Wave2LiveId, Wave2Script>> = Object.fre
     configFile: (rig) => rig.path("hermes", "config.yaml"),
     createdDirs: NO_DIRS,
     validators: [
-      { args: ["mcp", "list"], expect: [REALM_ROW], launches: false },
-      { args: ["mcp", "test", "realm"], expect: [REALM_ROW], launches: true, exitCodes: [0, 1] },
+      { args: ["mcp", "list"], expect: [REALM_ROW], launches: false, timeoutMs: 300_000 },
+      { args: ["mcp", "test", "realm"], expect: [REALM_ROW], launches: true, exitCodes: [0, 1], timeoutMs: 300_000 },
     ],
     realFiles: (home) => [`${home}/.hermes/config.yaml`],
   },

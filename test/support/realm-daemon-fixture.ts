@@ -15,6 +15,8 @@ import type { PolicyMode } from "../../src/contract/validate.js";
 import type { Logger } from "../../src/observe/logger.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { FakeExecutionService } from "./fake-execution.js";
+import type { HostId } from "../../src/host/types.js";
+import { CAPABILITY_TOKENS_OFF } from "./policy-document.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -29,6 +31,9 @@ export interface RealmDaemonOptions {
   readonly mode: PolicyMode;
   // The daemon's structured logger, so a test can read the daemon log lines. Absent: the daemon's own default.
   readonly logger?: Logger;
+  // The capabilityTokens posture of the policy document the fixture writes. "default" (the default) writes no capabilityTokens key, so the
+  // daemon follows the product default. "off" spreads the shared opt-out member in, for a test whose client is tokenless and is not about tokens.
+  readonly capabilityTokens?: "default" | "off";
 }
 
 export interface RealmDaemonFixture {
@@ -46,8 +51,9 @@ export interface RealmDaemonFixture {
   status(project?: string): Promise<ControlReply>;
   // The selection of one project, built by the production selectionOf.
   selectionFor(project: string): ControlSelection;
-  // A client attached to one project's selection, the client an MCP or ACP surface dispatches through.
-  connectFor(project: string): DaemonClient;
+  // A client attached to one project's selection, the client an MCP or ACP surface dispatches through. With a host id it attaches
+  // as that host, as a labelled realm mcp or realm acp does; without one it is tokenless.
+  connectFor(project: string, host?: HostId): DaemonClient;
   readonly done: Promise<void>;
 }
 
@@ -69,7 +75,14 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   const policyDir = dirname(options.stateDir);
   mkdirSync(policyDir, { recursive: true });
   const policyPath = join(policyDir, "policy.json");
-  writeFileSync(policyPath, JSON.stringify({ mode: options.mode, workspaceRoots: [options.workspace] }));
+  writeFileSync(
+    policyPath,
+    JSON.stringify({
+      mode: options.mode,
+      workspaceRoots: [options.workspace],
+      ...(options.capabilityTokens === "off" ? CAPABILITY_TOKENS_OFF : {}),
+    }),
+  );
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
@@ -126,8 +139,8 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     selectionFor(project: string): ControlSelection {
       return selectionOf(project);
     },
-    connectFor(project: string): DaemonClient {
-      return connectDaemon(daemon.socketPath, selectionOf(project));
+    connectFor(project: string, host?: HostId): DaemonClient {
+      return connectDaemon(daemon.socketPath, selectionOf(project), host === undefined ? {} : { host });
     },
   });
 }

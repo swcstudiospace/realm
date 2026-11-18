@@ -14,13 +14,15 @@ import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 import { boundedWait, testTimeout } from "../support/timing.js";
 import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
+import { CAPABILITY_TOKENS_OFF } from "../support/policy-document.js";
 
 // CRASH-06 (TD-01, D-1406): a refusal cause code reaches a host the same way whether the surface answers from the
 // dispatcher in process or through the daemon. The shapes still differ by design: in process the refused outcome is
 // the result (MCP structuredContent, ACP result), over the daemon it is an error reply that the client throws as a
 // RealmError (MCP structuredContent of a tool error, ACP error.data). The cause code is what must agree. The only
 // fakes are the ones the daemon tests already use at the adapter seam; dispatcher.call is replaced by a function
-// returning a scripted refused outcome, as test/daemon/client.test.ts does.
+// returning a scripted refused outcome, as test/daemon/client.test.ts does. The daemon runs with capabilityTokens off by design: the
+// comparison is of the daemon's audit lines with the direct dispatcher's, which carry no host or kid, and the clients are tokenless.
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const TS = "2026-10-29T00:00:00.000Z";
@@ -34,7 +36,7 @@ async function startRealDaemon(t: TestContext): Promise<{ readonly daemon: Start
   const workspace = join(base, "ws");
   mkdirSync(workspace);
   const policyPath = join(base, "policy.json");
-  writeFileSync(policyPath, JSON.stringify({ workspaceRoots: [workspace] }));
+  writeFileSync(policyPath, JSON.stringify({ ...CAPABILITY_TOKENS_OFF, workspaceRoots: [workspace] }));
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: join(base, "state"), workspaceRoot: workspace },
     policyPath,
@@ -235,7 +237,7 @@ void test("two projects: CLI, MCP and Omp observe their selected lifecycle on on
   const b = join(root, "b");
   mkdirSync(a, { recursive: true });
   mkdirSync(b, { recursive: true });
-  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory", capabilityTokens: "off" });
   t.after(async () => {
     // The last release stops the daemon, so a failed release of an already stopped daemon is expected.
     for (const project of [a, b]) {
