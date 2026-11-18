@@ -4,6 +4,17 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-18
+
+### Documentation
+- docs(phase-36): v1.0 open item dispositions, Anda closure, supply-chain re-verification (36-02) (#160) (5af036f)
+- docs(plan): plans for phases 33 to 36 (v5.0) (#158) (745c19f)
+- docs(spec): retire the Anda bridge statements in realm-spec.xml (SPEC-01) (#157) (90e7127)
+
+### Maintenance
+- test(phase-36): Muse live validator, Hermes gate bootstrap, Omp responsiveness harness (36-01) (#161) (32fac98)
+- test(capability): decouple the non-token tests and rigs from the capability default (34-01) (#159) (e7b4d57)
+
 ## [0.5.0] - 2026-11-18
 
 ### Added
