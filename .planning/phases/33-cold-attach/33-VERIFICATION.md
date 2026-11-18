@@ -41,6 +41,7 @@ covered_files:
   - "docs/hosts/snippets/claude-code.md"
   - "docs/hosts/snippets/codex.md"
   - "docs/hosts/snippets/opencode.md"
+covered_digest: "v3:sha256:5fec6c4138c8fbfd5dbe1b1b29721f11677733fd8b51d03db6ff41d54f305d96"
 ---
 
 # Phase 33 Verification: cold attach
@@ -68,7 +69,7 @@ What this phase is, stated once: `realm mcp` serves its MCP handshake and `tools
 | Earlier cold windows, after PR 166 | failed | the probe's `list` call needed its required `depth` argument (fixed in PR 167); the host tiers' original criterion was wrong: they required `realm status` active and an attached boot report after the host left, but a health check exits before the realm is ready and its child `realm mcp` is stopped during ensure and up, so status stayed unbound or the daemon was absent (fixed in PR 169, which asserts the bounded connect and the six tools); an interrupted run left the shared host receipt behind and the next gate refused it |
 | Window 3, `main` after PRs 166 to 169 | passed, 14 of 14 | the results in the coverage table |
 
-No `covered_digest` is recorded for this phase.
+The covered digest is recorded in the frontmatter.
 
 ## Key facts checked
 
