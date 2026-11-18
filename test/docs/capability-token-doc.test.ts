@@ -343,3 +343,31 @@ void test("ENF-03: the README says which hosts are unlabelled and links Q10", ()
   assert.ok(paragraph.includes("does not stop a process of the same user"), "the same-user limit, no stronger than Q10");
   assert.ok(paragraph.includes("docs/integration/mcp.md"), "the link to Q10");
 });
+
+// EVID-02 (plan 35-03 Task 8): the Q10 memory sentence follows the status the evidence page records. The pin states no result: while the
+// page says not-run, Q10 keeps the expected-not-proven wording; once the page records a run, that wording is gone and Q10 links the page.
+void test("EVID-02: the Q10 memory sentence agrees with the status of the evidence page", () => {
+  const page = read("docs/integration/capability-token-evidence.md");
+  const status = /^\| EVID-02 \| ([a-z-]+) \|/m.exec(page)?.[1];
+  assert.ok(status !== undefined, "the evidence page has an EVID-02 summary row");
+  const paragraph = q10Section()
+    .split("\n")
+    .find((line) => line.startsWith("**Evidence limits.**"));
+  assert.ok(paragraph !== undefined, "the Evidence limits paragraph exists");
+  if (status === "not-run") {
+    assert.ok(paragraph.includes("expected, not proven"), "no run is recorded, so Q10 says the claim is expected, not proven");
+    return;
+  }
+  assert.ok(!paragraph.includes("expected, not proven"), `the page records EVID-02 as ${status}, so Q10 no longer calls the claim expected, not proven`);
+  assert.ok(paragraph.includes("capability-token-evidence.md"), "Q10 links the evidence page once a result is recorded");
+  assert.match(paragraph, /20\d\d-\d\d-\d\d/, "Q10 carries the date of the recorded result");
+});
+
+void test("EVID-02: the first paragraph of Q10 keeps the same-user limit whatever the page records", () => {
+  const first = q10Section()
+    .split("\n")
+    .slice(2)
+    .find((line) => line.trim() !== "");
+  assert.ok(first !== undefined, "Q10 has a first paragraph");
+  assert.ok(first.includes("same user"), "the first paragraph states the same-user limit");
+});

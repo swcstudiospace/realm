@@ -556,6 +556,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
 // The state-root entries the run may create, by directory. Entries already present are never removed.
 const SHARED_STATE_DIRECTORIES: readonly string[] = Object.freeze([
   "audit",
+  "capability",
   "checkpoints",
   "runtime",
   "run",
@@ -1095,6 +1096,8 @@ export interface McpSession {
   kill(): void;
   // The clipped stderr text, as one JSON string.
   stderr(): string;
+  // The child's pid, for a probe aimed at it; undefined when the process could not start.
+  readonly pid: number | undefined;
 }
 
 // The host label of every `realm mcp` session the live suites start. Capability tokens are enforced by default, and a session with no
@@ -1102,15 +1105,29 @@ export interface McpSession {
 // profile. These suites test the daemon, not a host, so they use one fixed label.
 export const LIVE_MCP_HOST = "claude";
 
-// The argv of `realm mcp` for a live session: the compiled CLI, the host label and the pinned workspace root.
-export function mcpArgvOf(inputs: LiveInputs): readonly string[] {
-  return [inputs.cliPath, "mcp", "--host", LIVE_MCP_HOST, "--workspace", inputs.workspaceRoot];
+export interface McpSessionOptions {
+  // The host id after --host. Absent: LIVE_MCP_HOST. null: the unlabelled form (no host flag), which an enforcing daemon refuses.
+  readonly host?: string | null;
+  // The project the session claims. Absent: the pinned workspace root.
+  readonly workspace?: string;
 }
 
-// Starts `realm mcp --host <LIVE_MCP_HOST> --workspace <pinned root>` on the current node binary with the scenario's explicit
-// environment and stdio pipes. Nothing is written until the first request.
-export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment): McpSession {
-  const child = spawn(process.execPath, mcpArgvOf(inputs), {
+// The argv after node for a live `realm mcp` session: the compiled CLI, the host label (unless unlabelled) and the workspace.
+export function mcpSessionArgv(inputs: LiveInputs, options: McpSessionOptions = {}): readonly string[] {
+  const host = options.host === undefined ? LIVE_MCP_HOST : options.host;
+  return [inputs.cliPath, "mcp", ...(host === null ? [] : ["--host", host]), "--workspace", options.workspace ?? inputs.workspaceRoot];
+}
+
+// The argv of `realm mcp` for a live session at the pinned workspace root with the default label.
+export function mcpArgvOf(inputs: LiveInputs): readonly string[] {
+  return mcpSessionArgv(inputs);
+}
+
+// Starts `realm mcp --host <host> --workspace <root>` on the current node binary with the scenario's explicit environment and stdio
+// pipes (default host LIVE_MCP_HOST, default workspace the pinned root; see McpSessionOptions). Nothing is written until the first
+// request. The child's pid is exposed so a probe can be aimed at it.
+export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment, options: McpSessionOptions = {}): McpSession {
+  const child = spawn(process.execPath, mcpSessionArgv(inputs, options), {
     env: { ...scenario.cliEnvironment },
     cwd: scenario.root,
     stdio: ["pipe", "pipe", "pipe"],
@@ -1220,6 +1237,7 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
     stderr() {
       return clip(stderrText);
     },
+    pid: child.pid,
   };
 }
 
