@@ -1,5 +1,5 @@
 // The always-running hermetic test of test/support/host-live.ts: no host CLI, no Podman, no network (ADPT-08). It pins the skip-reason
-// order of the four live files, the version parsing, the archived-Kimi detection, the stub realm, the isolated-environment allowlist,
+// order of the five live files, the version parsing, the archived-Kimi detection, the stub realm, the isolated-environment allowlist,
 // the temporary-directory guard and the process-group kill. The only processes it starts are `sh` and the scripts it writes itself.
 
 import assert from "node:assert/strict";
@@ -23,15 +23,19 @@ import {
   HOST_OVERRIDE_VARIABLES,
   type HostLiveGateInputs,
   hostLiveSkipReason,
+  type HostCommandDrive,
+  type HostDrive,
   type HostLiveTier,
+  type HostProductionId,
+  type HostSessionDrive,
   isolatedHostEnv,
   isUnderTemp,
-  KIMI_CODE_GAP,
   LIVE_HOST_IDS,
   type LiveHostId,
   ownedTableOf,
   parseHostVersion,
   processAlive,
+  productionOverrides,
   readStubArgv,
   refusalReasonOf,
   requireReturned,
@@ -52,6 +56,7 @@ const RECORDED_OUTPUT: Readonly<Record<LiveHostId, string>> = {
   codex: "codex-cli 0.154.0\n",
   opencode: "1.19.5\n",
   kimi: "kimi, version 1.51.0\n",
+  "kimi-code": "2.6.3\n",
   qwen: "0.22.0\n",
   pi: "1.5.2\n",
   hermes: "Hermes Agent v0.23.2 (2026.11.13)\n",
@@ -95,14 +100,15 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-void test("HOST_LIVE is a frozen table of the thirteen hosts with the recorded facts", () => {
-  assert.deepEqual([...LIVE_HOST_IDS], ["claude", "codex", "opencode", "kimi", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"]);
+void test("HOST_LIVE is a frozen table of the fourteen hosts with the recorded facts", () => {
+  assert.deepEqual([...LIVE_HOST_IDS], ["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"]);
   assert.ok(Object.isFrozen(HOST_LIVE));
   const expected: Record<LiveHostId, readonly [string, string, string, string, boolean, boolean]> = {
     claude: ["REALM_LIVE_CLAUDE", "REALM_CLAUDE_BIN", "claude", "2.1.322", true, true],
     codex: ["REALM_LIVE_CODEX", "REALM_CODEX_BIN", "codex", "0.154.0", false, true],
     opencode: ["REALM_LIVE_OPENCODE", "REALM_OPENCODE_BIN", "opencode", "1.19.5", true, true],
-    kimi: ["REALM_LIVE_KIMI", "REALM_KIMI_BIN", "kimi", "1.51.0", true, false],
+    kimi: ["REALM_LIVE_KIMI", "REALM_KIMI_BIN", "kimi", "1.51.0", true, true],
+    "kimi-code": ["REALM_LIVE_KIMI_CODE", "REALM_KIMI_CODE_BIN", "kimi", "2.6.3", false, true],
     qwen: ["REALM_LIVE_QWEN", "REALM_QWEN_BIN", "qwen", "0.22.0", true, false],
     pi: ["REALM_LIVE_PI", "REALM_PI_BIN", "pi", "1.5.2", true, false],
     hermes: ["REALM_LIVE_HERMES", "REALM_HERMES_BIN", "hermes", "0.23.2", true, false],
@@ -136,10 +142,14 @@ void test("HOST_LIVE is a frozen table of the thirteen hosts with the recorded f
   }
   assert.equal(new Set(LIVE_HOST_IDS.map((host) => HOST_LIVE[host].optIn)).size, LIVE_HOST_IDS.length, "the opt-in variables are unique");
   assert.equal(new Set(LIVE_HOST_IDS.map((host) => HOST_LIVE[host].binOverride)).size, LIVE_HOST_IDS.length, "the executable override variables are unique");
+  // The default binary name is shared by design: the two Kimi products are both `kimi`, and the gate tells them apart by version.
+  assert.equal(HOST_LIVE.kimi.defaultBinary, HOST_LIVE["kimi-code"].defaultBinary);
+  assert.equal(new Set(LIVE_HOST_IDS.map((host) => HOST_LIVE[host].defaultBinary)).size, LIVE_HOST_IDS.length - 1);
   assert.equal(HOST_LIVE.codex.productionTier, true);
   assert.equal(HOST_LIVE.codex.productionGap, null);
-  assert.match(HOST_LIVE.kimi.productionGap ?? "", /the Python Kimi CLI is archived: its last release is a deprecation stub, so no session can run/);
-  assert.match(KIMI_CODE_GAP, /no validator command and no listing command \(24-CONTEXT E-K5\)/);
+  assert.equal(HOST_LIVE.kimi.productionGap, null);
+  assert.equal(HOST_LIVE["kimi-code"].productionGap, null);
+  assert.equal(HOST_LIVE["kimi-code"].displayName, "Kimi Code");
 });
 
 // ---- Skip reasons ----------------------------------------------------------------------------------------------------------
@@ -151,6 +161,8 @@ void test("hostLiveSkipReason is false when every prerequisite holds, for both t
   assert.equal(hostLiveSkipReason("claude", "production", gateInputs("claude")), false);
   assert.equal(hostLiveSkipReason("codex", "production", gateInputs("codex")), false);
   assert.equal(hostLiveSkipReason("opencode", "production", gateInputs("opencode")), false);
+  assert.equal(hostLiveSkipReason("kimi", "production", gateInputs("kimi")), false);
+  assert.equal(hostLiveSkipReason("kimi-code", "production", gateInputs("kimi-code")), false);
 });
 
 void test("hostLiveSkipReason names the opt-in variable first, and only the exact value 1 opens it", () => {
@@ -221,8 +233,11 @@ void test("hostLiveSkipReason names an unavailable or versionless --version four
   for (const host of LIVE_HOST_IDS) {
     assert.match(String(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: { kind: "unavailable" } }))), /--version did not run to a successful exit/, host);
     assert.match(String(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: { kind: "output", stdout: "no number here" } }))), /--version printed no x\.y\.z version/, host);
-    assert.equal(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: { kind: "output", stdout: RECORDED_OUTPUT[host].replace(/\d+\.\d+\.\d+/, "99.0.0") } })), false, `${host}: a newer version never skips`);
-    if (HOST_LIVE[host].minVersion === null) {
+    // The legacy Kimi CLI is 1.x by definition: a 99.x kimi is Kimi Code and skips with the product sentence (tested below).
+    const newer = host === "kimi" ? "1.99.0" : "99.0.0";
+    assert.equal(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: { kind: "output", stdout: RECORDED_OUTPUT[host].replace(/\d+\.\d+\.\d+/, newer) } })), false, `${host}: a newer version never skips`);
+    // 0.0.1 is below the guard of kimi-code (Kimi Code is 2.x or newer): its sentence is asserted below.
+    if (HOST_LIVE[host].minVersion === null && host !== "kimi-code") {
       assert.equal(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: { kind: "output", stdout: RECORDED_OUTPUT[host].replace(/\d+\.\d+\.\d+/, "0.0.1") } })), false, `${host}: an older version never skips either`);
     }
   }
@@ -232,6 +247,30 @@ void test("hostLiveSkipReason recognises the archived Kimi stub, and no other ho
   const stub = { kind: "output", stdout: "kimi, version 1.51.0\nThis project is no longer maintained.\n" } as const;
   assert.match(String(hostLiveSkipReason("kimi", "validator", gateInputs("kimi", { versionProbe: stub }))), /archived Python stub, which writes no configuration and answers no subcommand/);
   assert.equal(hostLiveSkipReason("claude", "validator", gateInputs("claude", { versionProbe: { kind: "output", stdout: `${stub.stdout}2.1.322\n` } })), false);
+  // The stub marker skips the Kimi Code row too, before the product guard.
+  assert.match(String(hostLiveSkipReason("kimi-code", "validator", gateInputs("kimi-code", { versionProbe: stub }))), /archived Python stub, which writes no configuration and answers no subcommand/);
+});
+
+void test("hostLiveSkipReason separates the two Kimi products behind the shared command name by version", () => {
+  const output = (stdout: string): HostLiveGateInputs["versionProbe"] => ({ kind: "output", stdout });
+  const kimiCodeSentence = /the installed kimi is Kimi Code \(2\.6\.3\), not the legacy Python CLI this row covers; point REALM_KIMI_BIN at the pinned legacy package kimi-cli 1\.51\.0/;
+  const legacySentence = /the installed kimi is the legacy Python CLI \(1\.51\.0\), not Kimi Code; point REALM_KIMI_CODE_BIN at the npm package @moonshot-ai\/kimi-code/;
+  assert.match(String(hostLiveSkipReason("kimi", "validator", gateInputs("kimi", { versionProbe: output("2.6.3\n") }))), kimiCodeSentence);
+  assert.match(String(hostLiveSkipReason("kimi", "production", gateInputs("kimi", { versionProbe: output("2.6.3\n") }))), kimiCodeSentence);
+  assert.equal(hostLiveSkipReason("kimi", "validator", gateInputs("kimi", { versionProbe: output("kimi, version 1.51.0\n") })), false);
+  assert.match(String(hostLiveSkipReason("kimi-code", "validator", gateInputs("kimi-code", { versionProbe: output("kimi, version 1.51.0\n") }))), legacySentence);
+  assert.match(String(hostLiveSkipReason("kimi-code", "production", gateInputs("kimi-code", { versionProbe: output("kimi, version 1.51.0\n") }))), legacySentence);
+  assert.match(String(hostLiveSkipReason("kimi-code", "validator", gateInputs("kimi-code", { versionProbe: output("0.0.1\n") }))), /the installed kimi is the legacy Python CLI \(0\.0\.1\)/);
+  assert.equal(hostLiveSkipReason("kimi-code", "validator", gateInputs("kimi-code", { versionProbe: output("2.6.3\n") })), false);
+  assert.equal(hostLiveSkipReason("kimi-code", "validator", gateInputs("kimi-code", { versionProbe: output("10.0.0\n") })), false);
+  // The guard comes after the version floor and before the built CLI: a wrong product is named even without a build.
+  assert.match(String(hostLiveSkipReason("kimi", "validator", gateInputs("kimi", { versionProbe: output("2.6.3\n"), cliBuilt: false }))), /is Kimi Code/);
+  // No other host is ever skipped for the Kimi product text.
+  for (const host of LIVE_HOST_IDS) {
+    if (host !== "kimi" && host !== "kimi-code") {
+      assert.doesNotMatch(String(hostLiveSkipReason(host, "validator", gateInputs(host, { versionProbe: output(`${RECORDED_OUTPUT[host]}2.6.3\n`) }))), /installed kimi/, host);
+    }
+  }
 });
 
 void test("hostLiveSkipReason names the missing built CLI before the production prerequisites", () => {
@@ -249,9 +288,8 @@ void test("hostLiveSkipReason: the validator tier ignores the production facts a
   }
 });
 
-void test("hostLiveSkipReason: the production tier names the gap of kimi, then the production reason, then an existing receipt", () => {
-  assert.equal(hostLiveSkipReason("kimi", "production", gateInputs("kimi")), HOST_LIVE.kimi.productionGap);
-  for (const host of ["claude", "codex", "opencode"] as const) {
+void test("hostLiveSkipReason: the production tier names the production reason first, then an existing receipt", () => {
+  for (const host of ["claude", "codex", "opencode", "kimi", "kimi-code"] as const) {
     assert.equal(hostLiveSkipReason(host, "production", gateInputs(host, { production: "no Podman 5.x", receiptExists: true })), "no Podman 5.x", host);
     const receipt = hostLiveSkipReason(host, "production", gateInputs(host, { receiptExists: true }));
     assert.ok(typeof receipt === "string" && receipt.includes(`Realm host receipt for ${host}`), `${host}: ${String(receipt)}`);
@@ -345,6 +383,13 @@ void test("collectHostLiveGate runs a version probe in a throwaway home and deci
   const kimi = fake("kimi-fake", "kimi: this project is no longer maintained, version 1.51.0");
   const stub = await collectHostLiveGate("kimi", "validator", { env: { REALM_LIVE_KIMI: "1", REALM_KIMI_BIN: kimi }, platform: "linux", cliPath: cli });
   assert.match(String(stub.skip), /archived Python stub/);
+  const kimiCodeStub = await collectHostLiveGate("kimi-code", "validator", { env: { REALM_LIVE_KIMI_CODE: "1", REALM_KIMI_CODE_BIN: kimi }, platform: "linux", cliPath: cli });
+  assert.match(String(kimiCodeStub.skip), /archived Python stub/);
+  const kimiCode = fake("kimi-code-fake", "2.6.3");
+  const kimiCodeOpen = await collectHostLiveGate("kimi-code", "validator", { env: { REALM_LIVE_KIMI_CODE: "1", REALM_KIMI_CODE_BIN: kimiCode }, platform: "linux", cliPath: cli });
+  assert.deepEqual([kimiCodeOpen.skip, kimiCodeOpen.bin, kimiCodeOpen.version], [false, kimiCode, "2.6.3"]);
+  const wrongProduct = await collectHostLiveGate("kimi", "validator", { env: { REALM_LIVE_KIMI: "1", REALM_KIMI_BIN: kimiCode }, platform: "linux", cliPath: cli });
+  assert.match(String(wrongProduct.skip), /is Kimi Code \(2\.6\.3\)/);
   const codex = fake("codex-fake", "codex-cli 0.154.0");
   const closed = await collectHostLiveGate("codex", "production", { env: { REALM_LIVE_CODEX: "1", REALM_CODEX_BIN: codex }, platform: "linux", cliPath: cli });
   assert.match(String(closed.skip), /REALM_LIVE_PRODUCTION=1 is not set/, "a closed production gate of codex names the production reason, not a gap sentence");
@@ -501,7 +546,11 @@ void test("isolatedHostEnv throws, before it creates anything, for a root, stub 
   assert.throws(() => isolatedHostEnv(root, "opencode", { stubDir, overrides: { CODEX_HOME: join(root, "codex") } }), /CODEX_HOME is not an override variable of opencode/);
   assert.throws(() => isolatedHostEnv(root, "kimi", { stubDir, overrides: { CLAUDE_CONFIG_DIR: join(root, "cfg") } }), /CLAUDE_CONFIG_DIR is not an override variable of kimi/);
   assert.equal(existsSync(join(root, "home")), false, "a refused call created nothing in the root either");
+  assert.throws(() => isolatedHostEnv(root, "kimi-code", { stubDir, overrides: { KIMI_SHARE_DIR: join(root, "kimi") } }), /KIMI_SHARE_DIR is not an override variable of kimi-code/);
+  assert.throws(() => isolatedHostEnv(root, "kimi", { stubDir, overrides: { KIMI_CODE_HOME: join(root, "kimi-code") } }), /KIMI_CODE_HOME is not an override variable of kimi$/);
+  assert.equal(existsSync(join(root, "home")), false, "the refused Kimi calls created nothing either");
   assert.doesNotThrow(() => isolatedHostEnv(root, "kimi", { stubDir, overrides: { KIMI_SHARE_DIR: join(root, "kimi") } }));
+  assert.equal(isolatedHostEnv(root, "kimi-code", { stubDir, overrides: { KIMI_CODE_HOME: join(root, "kimi-code") } })["KIMI_CODE_HOME"], join(root, "kimi-code"));
 });
 
 const WAVE2_OVERRIDES: Readonly<Record<Wave2LiveId, readonly string[]>> = {
@@ -560,7 +609,7 @@ void test("isolatedHostEnv of each wave-2 host keeps only its own override varia
 // ---- The wave-2 script table (test/support/host-live-wave2.ts) -----------------------------------------------------------------
 
 void test("the wave-2 script table covers the nine hosts, runs only commands that need no login and no prompt, and agrees with the live table and the real recipes", (t) => {
-  assert.deepEqual([...WAVE2_LIVE_IDS], LIVE_HOST_IDS.slice(4), "the nine wave-2 ids are the hosts after the four wave-1 ones");
+  assert.deepEqual([...WAVE2_LIVE_IDS], LIVE_HOST_IDS.slice(5), "the nine wave-2 ids are the hosts after the five wave-1 hosts (claude, codex, opencode, kimi, kimi-code)");
   assert.deepEqual(Object.keys(WAVE2_LIVE).sort(), [...WAVE2_LIVE_IDS].sort());
   const allowed = new Set(["mcp list", "mcp get realm", "mcp list --json", "mcp test realm", "config mcp --json"]);
   const noAdd = new Set<LiveHostId>(["kilo", "cursor", "hermes"]);
@@ -806,4 +855,51 @@ void test("downAcceptable tolerates a down for a session that never became activ
   assert.equal(downAcceptable({ exitCode: 1, stdout: "REALM_NOT_ACTIVE\n", stderr: "" }), true);
   assert.equal(downAcceptable({ exitCode: 1, stdout: "", stderr: "realm down: POLICY_DENIED\n" }), false);
   assert.equal(downAcceptable({ exitCode: undefined, stdout: "", stderr: "" }), false);
+});
+
+// ---- Production drives and the host configuration homes ----------------------------------------------------------------------
+
+void test("the production drive types accept a session drive with a fixed key and a command drive, and the host union has five hosts", () => {
+  const session: HostSessionDrive = {
+    kind: "session",
+    provider: { baseUrl: "http://127.0.0.1:1/v1", requests: () => [], close: () => Promise.resolve() },
+    args: ["-p", "x"],
+    env: { A: "1" },
+    credential: "fixed-key",
+  };
+  const command: HostCommandDrive = { kind: "command", args: ["mcp", "test", "realm"], restore: ["XDG_RUNTIME_DIR"] };
+  const drives: readonly HostDrive[] = [session, command];
+  assert.deepEqual(
+    drives.map((drive) => drive.kind),
+    ["session", "command"],
+  );
+  const hosts: readonly HostProductionId[] = ["claude", "codex", "opencode", "kimi", "kimi-code"];
+  for (const host of hosts) {
+    assert.equal(HOST_LIVE[host].productionTier, true, host);
+  }
+});
+
+void test("productionOverrides creates each host's own configuration home inside the scenario, and refuses an unknown host", (t) => {
+  const root = tempDir(t);
+  const configHome = join(root, "config");
+  const expected: Readonly<Record<HostProductionId, readonly [string, string] | null>> = {
+    claude: ["CLAUDE_CONFIG_DIR", "cfg"],
+    codex: ["CODEX_HOME", "codex"],
+    opencode: null,
+    kimi: ["KIMI_SHARE_DIR", "kimi"],
+    "kimi-code": ["KIMI_CODE_HOME", "kimi-code"],
+  };
+  for (const host of Object.keys(expected) as HostProductionId[]) {
+    const overrides = productionOverrides(host, root, configHome);
+    const entry = expected[host];
+    if (entry === null) {
+      assert.deepEqual(overrides, {}, host);
+      assert.equal(existsSync(join(configHome, "opencode")), true, "opencode reads its own subdirectory of XDG_CONFIG_HOME");
+    } else {
+      assert.deepEqual(overrides, { [entry[0]]: join(root, entry[1]) }, host);
+      assert.equal(statSync(join(root, entry[1])).isDirectory(), true, `${host}: the directory exists`);
+      assert.ok(HOST_OVERRIDE_VARIABLES[host].includes(entry[0]), `${host}: the variable is one of its override variables`);
+    }
+  }
+  assert.throws(() => productionOverrides("bogus" as HostProductionId, root, configHome), /no production configuration home is defined for host bogus/);
 });

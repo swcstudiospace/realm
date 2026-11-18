@@ -218,13 +218,13 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     t3: { status: "gap", note: "the Python Kimi CLI is archived, its last release is a deprecation stub" },
     deferral: null,
   }),
-  // Source: contract page, Phase 24 table: T2 not available (no validator command is documented); T3 gap (not run, none attempted). HOST_LIVE has no entry (KIMI_CODE_GAP).
+  // Source: contract page, Phase 24 table: T2 not available (no validator command is documented); T3 gap (not run, none attempted).
   "kimi-code": record({
     id: "kimi-code",
     family: "json-merge",
     suites: ["test/host/kimi-recipe.test.ts"],
     snippet: "kimi.md",
-    live: null,
+    live: "kimi-code",
     t2: null,
     t3: { status: "gap", note: "functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9)" },
     deferral: null,

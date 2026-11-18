@@ -360,3 +360,170 @@ void test("writeWireRecorder and writeFakeMcpServer write only under the given d
   assert.equal(wireSummary(readWireLog(wireLog)).answered, true);
   assert.equal(readFakeServerLog(serverLog).starts.length, 1);
 });
+
+// ---- The fixed-key provider ------------------------------------------------------------------------------------------------
+
+void test("the refusing provider with an expected key records, per header, whether it equals Bearer plus the key, and never a value", async (t) => {
+  const key = "FIXED-NON-SECRET-KEY";
+  const other = "SOME-OTHER-KEY";
+  const provider = await startRefusingProvider({ expectedKey: key });
+  t.after(() => provider.close());
+  for (const headers of [{ Authorization: `Bearer ${key}` }, { Authorization: `Bearer ${other}` }, { Authorization: key }, {}]) {
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, { method: "POST", headers, body: "{}" });
+    assert.equal(response.status, 503);
+    await response.text();
+  }
+  const seen = provider.requests();
+  assert.deepEqual(
+    seen.map((request) => [request.authorization, request.matchesKey]),
+    [
+      [true, true],
+      [true, false],
+      [true, false],
+      [false, undefined],
+    ],
+  );
+  assert.equal("matchesKey" in (seen[3] ?? {}), false, "a request without a header has no matchesKey member");
+  const text = JSON.stringify(seen);
+  assert.equal(text.includes(key), false, "the key is never recorded");
+  assert.equal(text.includes(other), false, "no header value is ever recorded");
+
+  const plain = await startRefusingProvider();
+  t.after(() => plain.close());
+  const response = await fetch(`${plain.baseUrl}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: "{}" });
+  await response.text();
+  assert.deepEqual(
+    plain.requests().map((request) => Object.keys(request).sort()),
+    [["authorization", "method", "path", "peer"]],
+    "without an expected key the record shape is unchanged",
+  );
+});
+
+// ---- The recorder environment restore --------------------------------------------------------------------------------------
+
+// Like runToEnd, with an explicit environment for the command.
+async function runToEndWithEnv(command: string, env: Readonly<Record<string, string>>): Promise<RunEnd> {
+  const child = spawn(command, [], { stdio: ["pipe", "pipe", "ignore"], env: { ...env } });
+  const chunks: Buffer[] = [];
+  child.stdout.on("data", (chunk: Buffer) => {
+    chunks.push(chunk);
+  });
+  const closed = new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => {
+      resolve(code);
+    });
+  });
+  child.stdin.on("error", () => {
+    // The child may close its stdin first; the run still ends by its close.
+  });
+  child.stdin.end("");
+  try {
+    const code = await boundedWait(closed, "a hermetic child run", 30_000);
+    return { stdout: Buffer.concat(chunks).toString("utf8"), code };
+  } finally {
+    child.kill("SIGKILL");
+  }
+}
+
+// A target that writes the values of two environment variables to a file and ends at EOF.
+function writeProbeTarget(dir: string, outFile: string): string {
+  const script = join(dir, "probe-target.mjs");
+  writeFileSync(
+    script,
+    [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(outFile)}, JSON.stringify({ restored: process.env.RESTORED_NAME ?? null, forwarded: process.env.FORWARDED_NAME ?? null }));`,
+      "process.stdin.resume();",
+      "",
+    ].join("\n"),
+  );
+  return script;
+}
+
+void test("the recorder restores absent names into the target, keeps a forwarded one, logs only the sorted names and writes the pairs with mode 0600", async (t) => {
+  const dir = tempDir(t);
+  const outFile = join(dir, "probe.json");
+  const wireLog = join(dir, "wire.log");
+  const target = writeProbeTarget(dir, outFile);
+  const bin = join(dir, "bin");
+  const shim = writeWireRecorder(bin, {
+    nodePath: process.execPath,
+    target: [process.execPath, target],
+    logFile: wireLog,
+    restoreEnv: { RESTORED_NAME: "restored-value-marker", FORWARDED_NAME: "file-value-marker", ANOTHER_RESTORED: "another-value-marker" },
+  });
+  assert.deepEqual(readdirSync(bin).sort(), ["realm", "wire-restore.json", "wire-tee.mjs"]);
+  assert.equal(statSync(join(bin, "wire-restore.json")).mode & 0o777, 0o600);
+  assert.equal(readFileSync(shim, "utf8").includes("restored-value-marker"), false, "no value in the shim");
+  assert.equal(readFileSync(join(bin, "wire-tee.mjs"), "utf8").includes("restored-value-marker"), false, "no value in the tee script");
+
+  const ended = await runToEndWithEnv(shim, { PATH: process.env["PATH"] ?? "/usr/bin:/bin", FORWARDED_NAME: "host-value-marker" });
+  assert.equal(ended.code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(outFile, "utf8")), { restored: "restored-value-marker", forwarded: "host-value-marker" });
+
+  const events = readWireLog(wireLog);
+  assert.deepEqual(events, [{ dir: "host-to-realm", kind: "other", restored: ["ANOTHER_RESTORED", "RESTORED_NAME"] }]);
+  assert.deepEqual([...wireSummary(events).restoredNames], ["ANOTHER_RESTORED", "RESTORED_NAME"]);
+  const text = readFileSync(wireLog, "utf8");
+  for (const value of ["restored-value-marker", "file-value-marker", "another-value-marker", "host-value-marker"]) {
+    assert.equal(text.includes(value), false, "no environment value reaches the log");
+  }
+});
+
+void test("a recorder with restoreEnv that restores nothing logs an empty list, and one without restoreEnv logs no restored event", async (t) => {
+  const withRestore = tempDir(t);
+  const outFile = join(withRestore, "probe.json");
+  const wireLog = join(withRestore, "wire.log");
+  const shim = writeWireRecorder(join(withRestore, "bin"), {
+    nodePath: process.execPath,
+    target: [process.execPath, writeProbeTarget(withRestore, outFile)],
+    logFile: wireLog,
+    restoreEnv: { FORWARDED_NAME: "file-value-marker" },
+  });
+  await runToEndWithEnv(shim, { PATH: process.env["PATH"] ?? "/usr/bin:/bin", FORWARDED_NAME: "host-value-marker" });
+  assert.deepEqual(readWireLog(wireLog), [{ dir: "host-to-realm", kind: "other", restored: [] }]);
+  assert.deepEqual([...wireSummary(readWireLog(wireLog)).restoredNames], []);
+
+  const plain = recorderRig(t);
+  const ended = await runToEnd(plain.shim, [], HOST_INPUT);
+  assert.equal(ended.code, 0);
+  const events = readWireLog(plain.wireLog);
+  assert.equal(events.some((event) => event.restored !== undefined), false, "no restored event without restoreEnv");
+  assert.deepEqual([...wireSummary(events).restoredNames], []);
+  assert.equal(existsSync(join(plain.dir, "bin", "wire-restore.json")), false, "and no pair file");
+});
+
+void test("writeWireRecorder refuses a bad restore pair before it writes anything", (t) => {
+  const dir = join(tempDir(t), "bin");
+  const options = { nodePath: process.execPath, target: [process.execPath, "server.mjs"], logFile: join(dir, "wire.log") };
+  assert.throws(() => writeWireRecorder(dir, { ...options, restoreEnv: { "": "x" } }), /restoreEnv holds a pair/);
+  assert.throws(() => writeWireRecorder(dir, { ...options, restoreEnv: { "A=B": "x" } }), /restoreEnv holds a pair/);
+  assert.throws(() => writeWireRecorder(dir, { ...options, restoreEnv: { GOOD: "x", BAD: 5 as unknown as string } }), /restoreEnv holds a pair/);
+  assert.equal(existsSync(dir), false, "a refused call created nothing");
+});
+
+void test("readWireLog and wireSummary carry the restored names, sorted, and skip a malformed restored member", (t) => {
+  const dir = tempDir(t);
+  const wire = join(dir, "wire.log");
+  writeFileSync(
+    wire,
+    [
+      "not json",
+      JSON.stringify({ dir: "host-to-realm", kind: "other", restored: ["B", "A"] }),
+      JSON.stringify({ dir: "host-to-realm", kind: "other", restored: ["Z"] }),
+      JSON.stringify({ dir: "host-to-realm", kind: "other", restored: ["C", 3] }),
+      JSON.stringify({ dir: "host-to-realm", kind: "request", method: "tools/list", id: 1 }),
+      "",
+    ].join("\n"),
+  );
+  const events = readWireLog(wire);
+  assert.deepEqual(events, [
+    { dir: "host-to-realm", kind: "other", restored: ["B", "A"] },
+    { dir: "host-to-realm", kind: "other", restored: ["Z"] },
+    { dir: "host-to-realm", kind: "other" },
+    { dir: "host-to-realm", kind: "request", method: "tools/list", id: 1 },
+  ]);
+  assert.deepEqual([...wireSummary(events).restoredNames], ["A", "B"], "the first restored event, sorted");
+  assert.deepEqual([...wireSummary(events).hostMethods], ["tools/list"]);
+});

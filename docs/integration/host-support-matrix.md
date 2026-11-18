@@ -59,7 +59,7 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `codebuddy` | `test/host/codebuddy-recipe.test.ts`, `test/host/shadows.test.ts` | `REALM_LIVE_CODEBUDDY=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `cline` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CLINE=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `kimi` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI=1` | not run | gap: the Python Kimi CLI is archived, its last release is a deprecation stub | - |
-| `kimi-code` | `test/host/kimi-recipe.test.ts` | none | not run | gap: functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9) | - |
+| `kimi-code` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI_CODE=1` | not run | gap: functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9) | - |
 | `zcode` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the native config is owned by a GUI application and cannot be observed (OQ-25-03) |
 | `pi` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_PI=1`, floor 1.3.0 | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 <!-- host-support-matrix:end -->
