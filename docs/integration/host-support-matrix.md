@@ -55,7 +55,7 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `augment` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_AUGMENT=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `trae` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | no documented global MCP file exists for the IDE (OQ-25-02) |
 | `qwen` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_QWEN=1` | 2026-11-17, 0.22.0: PASS; covers 0.22.0 only | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
-| `hermes` | `test/host/hermes-recipe.test.ts` | `REALM_LIVE_HERMES=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `hermes` | `test/host/hermes-recipe.test.ts` | `REALM_LIVE_HERMES=1` | 2026-11-18, 0.23.1: PASS; covers 0.23.1 only | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `codebuddy` | `test/host/codebuddy-recipe.test.ts`, `test/host/shadows.test.ts` | `REALM_LIVE_CODEBUDDY=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `cline` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_CLINE=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `kimi` | `test/host/kimi-recipe.test.ts` | `REALM_LIVE_KIMI=1` | not run | gap: the Python Kimi CLI is archived, its last release is a deprecation stub | - |

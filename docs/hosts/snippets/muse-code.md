@@ -72,6 +72,12 @@ Installing the bundle with `muse plugins install` and approving its hooks with
 `muse plugins approve` change the user's Muse Code configuration. They are not
 part of this snippet.
 
+## Evidence reached
+
+Validator tier, run on 2026-11-18 (Phase 36) with Muse Code 1.4.23, base commit e32bb05: `REALM_LIVE_MUSE=1 node --test dist/test/integration/host-live-muse.test.js` (`test/integration/host-live-muse.test.ts`), 1 test, 1 pass. In an isolated home the settings entry above was written verbatim, with a recorder named `realm` first on `PATH` forwarding to a fake MCP server (the real `realm` is not run). Shown: the plugin bundle validates; `muse mcp list --json` and `muse mcp get realm --json` print the entry and start nothing; `muse exec --provider echo --trust-workspace` starts the entry through `PATH` with the argument `mcp`, completes the handshake and lists the six Realm tools; a stub that does not speak MCP makes the run fail with `failed during startup`; the operator's real settings file is byte-equal before and after. Muse did not start the entry in a workspace it did not trust (observed, not asserted). The result covers Muse Code 1.4.23 only.
+
+Not shown: a Muse Code boot against the production stack (no recipe, no registry record and no `--host` id for Muse Code, a 30 s default start timeout; to rehearse after Phase 33), and the behavior of this unlabelled launcher under capability-token enforcement (GAP-34-01 in `docs/integration/host-plugin-gaps.md`). No model-driven tool call was made.
+
 ## Not documented
 
 ACP: not documented in the pages read. Neither the extending nor the

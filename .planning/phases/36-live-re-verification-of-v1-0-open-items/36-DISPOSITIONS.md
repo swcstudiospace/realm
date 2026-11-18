@@ -1,8 +1,8 @@
 # Phase 36 dispositions: the 14 open items of the v1.0 re-verification
 
-Recorded 2026-11-18 by Plan 36-02 (the date of the runs below). Plan 36-03 completes the seven live rows and Part C.
+Recorded 2026-11-18 by Plans 36-02 and 36-03 (the date of every run below). Every row is final; Part C reconciles the list.
 
-Status vocabulary (36-CONTEXT D-36-08): Dropped (owner decision D-27-01); Closed: moot, not resolved (OI-04 only, no legal determination); Re-verified (dated run, command, commit); Closed by test (hermetic, dated); Re-verified, current contract form (OI-09 only); Closed: owner decision (accepted) (OI-13 only, if the owner accepts); Carried (named reason); Needs the owner (decision text proposed). Interim labels while a plan is open: Pending run, Pending owner, Pending Plan 36-03. No interim label may remain when Plan 36-03 ends.
+Status vocabulary (36-CONTEXT D-36-08): Dropped (owner decision D-27-01); Closed: moot, not resolved (OI-04 only, no legal determination); Re-verified (dated run, command, commit); Closed by test (hermetic, dated); Re-verified, current contract form (OI-09 only); Closed: owner decision (accepted) (OI-13 only, if the owner accepts); Carried (named reason); Needs the owner (decision text proposed). No interim label remains.
 
 Evidence tiers (36-CONTEXT): O observed by reading a repository file or by command, R a recorded owner statement or verification record, M measured on this host in a run, I inference (also marked as such).
 
@@ -16,13 +16,13 @@ No label is stronger than its evidence: a result that rests on a record and not 
 | OI-02 | 03 row 10 | `Live-gated item 5 (part): "ANDA-03 live RPC ... retry" (unreachable gives ANDA_UNREACHABLE, degraded, bounded backoff with jitter)` | Dropped (owner decision D-27-01) | R: the ANDA-03 row of the same Phase 27 file and Phase 3 re-verification row 10. O: see the Anda bridge checks below. |
 | OI-03 | 03 row 11 | `SC4 and requirements ANDA-01 and ANDA-04 (reported "SATISFIED (unit)")` | Dropped (owner decision D-27-01) | R: the ANDA-01 and ANDA-04 rows of the same Phase 27 file and Phase 3 re-verification row 11. O: see the Anda bridge checks below. |
 | OI-04 | 03 row 18 | `OQ-P3-11 (Open): "Anda licence conflict (anda.md Q6)"` | Closed: moot, not resolved | R: the OQ-P3-11 row of the same Phase 27 file (Closed: moot, not resolved; no legal determination). No legal determination is made here; the question reopens only if a later decision vendors Anda code. |
-| OI-05 | 06 row 6 | `Human Verification 3, sub-claim: daemon-down yields warn, not fail, on control-channel` | Pending Plan 36-03 | Method in the Class notes below. |
-| OI-06 | 06 row 12 | `Human Verification 6 and the tail of 1: stat on STATE_DIR/run (700) and STATE_DIR/run/control.sock (600) after a live realm up; socket removed after down` | Pending Plan 36-03 | Method in the Class notes below. |
-| OI-07 | 06 row 10 | `Human Verification 5, Muse Code ~/.config/muse/settings.json entry` | Pending Plan 36-03 | Plan 36-01 builds and runs the validator tier and writes its run record; Plan 36-03 records the result here. |
-| OI-08 | 06 row 11 | `Human Verification 5, Hermes Agent ~/.hermes/config.yaml entry` | Pending Plan 36-03 | Plan 36-01 fixes the gate and runs the wave 2 validator tier and writes its run record; Plan 36-03 records the result here. |
-| OI-09 | 04 Human Verification 3 | `Live crash reap on the next start (SC1)` | Pending Plan 36-03 | Live half in the window (production live 5 and 11). Hermetic half already run, see Part B, section OI-09 hermetic half. |
-| OI-10 | 04 Human Verification 5 | `Live policy acceptance and hung-exec timeout (SC2, SC4)` | Pending Plan 36-03 | Method in the Class notes below. |
-| OI-11 | 05 re-verification 1b | `The session UI stays responsive during startup (handler returned without awaiting)` (UI-01) | Pending Plan 36-03 | Plan 36-01 builds the test; Plan 36-03 measures on a quiet host. UI-01 as a requirement status stays the owner's call. |
+| OI-05 | 06 row 6 | `Human Verification 3, sub-claim: daemon-down yields warn, not fail, on control-channel` | Re-verified (dated run, command, commit) | M: `live closeout A` (`test/integration/live-closeout.test.ts`), 1 of 1 passed, 2026-11-18, window run 1, main at dbdbf23. `realm doctor` with no daemon exited 0, stderr `realm doctor: daemon absent (REALM_NOT_ACTIVE); ran 15 local checks`; the `control-channel` row was `warn`, not `fail`, with the catalogue fix. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
+| OI-06 | 06 row 12 | `Human Verification 6 and the tail of 1: stat on STATE_DIR/run (700) and STATE_DIR/run/control.sock (600) after a live realm up; socket removed after down` | Re-verified (dated run, command, commit) | M: `live closeout B`, 1 of 1 passed, 2026-11-18, window run 1, main at dbdbf23. After `realm up`: run directory mode 700, `control.sock` a socket of mode 600, both owned by the invoking user, one daemon process; after `realm down` the socket was gone and the stop poll succeeded on its first attempt. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
+| OI-07 | 06 row 10 | `Human Verification 5, Muse Code ~/.config/muse/settings.json entry` | Re-verified (dated run, command, commit) | M: the Plan 36-01 validator-tier run, `test/integration/host-live-muse.test.ts`, 1 of 1 passed, 2026-11-18, Muse Code 1.4.23, base commit e32bb05, `REALM_LIVE_MUSE=1`. Entry listed, started through `PATH`, handshake and the six Realm tools, a broken entry fails visibly, the real settings file byte-equal. Run record in `36-01-SUMMARY.md`. Named gap: no Muse Code production-stack boot. |
+| OI-08 | 06 row 11 | `Human Verification 5, Hermes Agent ~/.hermes/config.yaml entry` | Re-verified (dated run, command, commit) | M: the Plan 36-01 gate repair and the wave 2 hermes scenario of `test/integration/host-live-wave2.test.ts`, 1 passed (the other 8 hosts skipped by their unset opt-ins), 2026-11-18, Hermes Agent 0.23.1, base commit e32bb05, `REALM_LIVE_HERMES=1`. Run record in `36-01-SUMMARY.md`; the scenario was skipped before the repair because a fresh Hermes data root fails `--version`. |
+| OI-09 | 04 Human Verification 3 | `Live crash reap on the next start (SC1)` | Re-verified, current contract form | M: `production live 5` (`test/integration/production-driver.test.ts`), 1 of 1 passed, 2026-11-18, window run 3, main at 04ca807 (runs 1 and 2 failed in the harness first, findings F-1 and F-2); `production live 11`, 1 of 1 passed, 2026-11-18, window run 1, main at dbdbf23. The Phase 04 wording (remove everything at the next start) was superseded by decision D5; the checks are scenarios 5 and 11. Hermetic half in Part B. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
+| OI-10 | 04 Human Verification 5 | `Live policy acceptance and hung-exec timeout (SC2, SC4)` | Re-verified (dated run, command, commit) | M: `live closeout C`, 1 of 1 passed, 2026-11-18, window run 3, main at 04ca807 (runs 1 and 2 failed in the harness first, findings F-1 and F-2). The exec of `sleep 47` through `realm mcp` answered `TOOL_TIMEOUT` after 28083 ms, the sleeper was seen in flight (positive control), and none remained at the 14th poll after the reply; observation F-3 records that the sleeper was still present at the 13 polls before. The policy-acceptance half is cited from earlier production runs (scenario 3), not rerun. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
+| OI-11 | 05 re-verification 1b | `The session UI stays responsive during startup (handler returned without awaiting)` (UI-01) | Carried (named reason) | Not measured: the cold-attach test refused to run because the host was not quiet, on all three tries of the window (1.67, 0.76 and 1.47 load per CPU, the bound is 0.5). The earlier mechanics run of Plan 36-01 was labelled LOADED (41 probes, 0 unanswered, maximum 114 ms) and is not a measurement. Lift condition: a quiet slot on the production stack. UI-01 stays the owner's call. |
 | OI-12 | 07 re-verification row 7 | `Human item 3 (MCP half): "notifications take no reply, unusable ids diagnose only"` (security review 5.8) | Closed by test (hermetic, dated) | M: the two tests of `test/mcp/server.test.ts`, 2 of 2 passed on 2026-11-18, base commit e32bb057a9f6. Details in Part B. |
 | OI-13 | 07 row 10 | `Human item 3: "stdin-writer trust boundary (5.8 residual) accepted or mitigated"` | Needs the owner (decision text proposed) | No owner answer in this run (OQ-36-01). No docs file was changed. The proposed text and the lift condition are in Part B. |
 | OI-14 | 07 row 12 | `Human item 4: "npm audit signatures, recompute each direct tarball SHA-512 against the lockfile integrity"` | Re-verified (dated run, command, commit) | M: scratch run of 2026-11-18, base commit e32bb057a9f6: `npm ci` exit 0, 145 verified registry signatures, 39 verified attestations, 10 of 10 direct tarballs equal. Details in Part B. |
@@ -32,7 +32,7 @@ Anda bridge checks (tier O, run 2026-11-18 on the base commit, for OI-01 to OI-0
 - The directory `src/anda` does not exist (`test ! -e src/anda` holds).
 - A case-insensitive word-boundary search of `src` for `anda` and for the codes `ANDA_UNREACHABLE` and `ANDA_VERSION_MISMATCH` (generated protocol files excluded) finds no bridge code. The only hit is `src/runtime/config.ts` line 53, a refusal message for the removed config key `andaUrl`: "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json".
 
-Count: 7 rows final (OI-01, OI-02, OI-03, OI-04, OI-12, OI-13, OI-14; OI-13 is final as Needs the owner), 7 rows Pending Plan 36-03 (OI-05 to OI-11).
+Count: 14 rows, all final; none Pending. By label: Dropped 3 (OI-01 to OI-03), Closed: moot 1 (OI-04), Re-verified (dated run, command, commit) 6 (OI-05, OI-06, OI-07, OI-08, OI-10, OI-14), Re-verified, current contract form 1 (OI-09), Closed by test 1 (OI-12), Carried 1 (OI-11), Needs the owner 1 (OI-13).
 
 ### Class notes
 
@@ -50,7 +50,7 @@ Methods of the live rows, copied in short from 36-CONTEXT D-36-02 to D-36-06 so 
 
 ## Part B. Run records
 
-Plan 36-02 fills OI-12, OI-14 and OI-13 and the OI-09 hermetic half; Plan 36-03 fills the rest.
+Plan 36-02 filled OI-12, OI-14, OI-13 and the OI-09 hermetic half. Plan 36-03 recorded the window below and the live rows from its evidence; OI-07 and OI-08 take their outcome from the Plan 36-01 run records (`36-01-SUMMARY.md`).
 
 ### OI-12
 
@@ -66,7 +66,7 @@ Plan 36-02 fills OI-12, OI-14 and OI-13 and the OI-09 hermetic half; Plan 36-03 
 - Same date, commit and toolchain as OI-12.
 - Command: `node --test --test-name-pattern="null containerId|null-containerId" dist/test/session/reap.test.js`.
 - Result: 2 tests, 2 pass, 0 fail, 0 skipped. Titles begin with D19-1 D-86: "a record with a null containerId and no live container is deleted with cause no-container, with no removal and no proof listing" and "a null-containerId record never reaches the verdict, and the live labelled container left by the crash is removed as no-record before the record is deleted".
-- This is the hermetic half only. The live half (production live 5 and 11) is Plan 36-03; the OI-09 row stays Pending Plan 36-03.
+- This is the hermetic half only. The live half (production live 5 and 11) is recorded below, section OI-09 live half.
 
 ### OI-14
 
@@ -90,6 +90,85 @@ Plan 36-02 fills OI-12, OI-14 and OI-13 and the OI-09 hermetic half; Plan 36-03 
 - On (a) or (b): add subsection Q11. Stdin trust boundary to `docs/integration/mcp.md` after Q10 and before the Blocked module heading, with a line naming the date and the decision (owner decision of this phase, OQ-36-01) and the sources (Phase 07 security review item 5.8, Phase 07 re-verification row 10); add one sentence to the stdio paragraph of Q2 in `docs/integration/acp.md` pointing to it; no policy default or mode stated; then set the row to Closed: owner decision (accepted) with the date.
 - Lift condition for the carry: the owner accepts, or states a mitigation as a requirement.
 
+### The window (Plan 36-03)
+
+- Date 2026-11-18, authorized by the owner on 2026-11-18 for any phase that needs a live window. Production stack, account `realmlive`, rootless Podman 5.7.1, shared live lock held, one test at a time, run by a person. No agent started the stack. Evidence is kept outside the repository (names below; no path, no environment value, no secret).
+- Three runs of the window, because two test-harness findings stopped the first two:
+  - Run 1 (about 06:39 UTC), main at dbdbf23 (PR 169): live closeout A, B and production live 11 passed; live closeout C, production live 5 and the Omp cold-attach test failed. Evidence set: A, B, C, D5, D11 and E output files, `snapshots.txt`, and the closeout evidence files (names `live-closeout.A.commands.txt`, `live-closeout.A.control-channel-row.json`, `live-closeout.A.doctor.stderr.txt`, `live-closeout.A.doctor.stdout.json`, `live-closeout.B.stat-after-up.txt`, `live-closeout.B.after-down.txt`, `live-closeout.B.commands.txt`, `live-closeout.C.commands.txt`, `live-closeout.C.sandbox-processes.txt`) plus `omp-responsiveness.transcript.txt`.
+  - Run 2 (about 06:52 UTC), main after PR 172 (waitUntilServed): live closeout C and production live 5 failed again; the Omp test refused to run again. Evidence set: C, D5, E output files and `snapshots.txt`.
+  - Run 3 (about 07:08 UTC), main at 04ca807, after PR 172 and PR 174 (the `--host claude` label in `startMcpSession`): live closeout C and production live 5 passed; the Omp test refused to run a third time. Evidence set: C, D5, E output files, `snapshots.txt`, the closeout C files and the Omp transcript.
+- Residue: every snapshot of every run (before, after each step, final) read 0 containers, 0 sandboxes, an empty workspace and no daemon. Host load (one-minute average, 8 CPUs) in the snapshots: run 1 from 9.15 to 13.39, run 2 from 5.60 to 6.38, run 3 from 7.94 to 12.20.
+- The exact command lines were not recorded in the evidence. Each step ran the compiled test file named in its row with the test-name pattern of its title and the opt-in variables of the file's header set by the person; the TAP files give the counts below.
+
+### Findings of the window (test harness, not product defects)
+
+- F-1 (run 1). The live suites called `tools/call` before the serve-early session was ready (Phase 33: `realm mcp` answers the handshake at once and refuses calls with `REALM_NOT_ACTIVE`, retryable, until the realm is active). `production live 5`: `tools/call status returned a tool error ... REALM_NOT_ACTIVE`. `live closeout C`: `the probe must see the sleeper while the exec runs, or the absence check below proves nothing: no sleep 47 process in the sandbox yet`, after 47.5 s. Fixed by PR 172 (`waitUntilServed`). No product change.
+- F-2 (run 2). With PR 172 the status call waited for the served session and then got `POLICY_DENIED`: the live `realm mcp` session carried no host label, and a session with no label is refused when capability tokens are enforced (Phase 34, GAP-34-01 class). Both `live closeout C` and `production live 5` failed on it. Fixed by PR 174 (`--host claude` in `startMcpSession`). No product change.
+- F-3 (run 3, observation on OI-10). After the `TOOL_TIMEOUT` reply (28083 ms) the poll saw the `sleep 47` process present on 13 consecutive polls, then none. The test passes when the sleeper is gone within its 30 s bound. [INFERENCE] The sleeper may have ended by its own 47 s run time and not because the timeout killed it; the test as written cannot tell the two apart. This is recorded as a limit of the evidence, not as a defect.
+- F-4 (run 1 to 3, OI-11). The host was never quiet during the window: 1.67, 0.76 and 1.47 load per CPU against the bound of 0.5.
+
+### OI-05 and OI-06 (live closeout A and B)
+
+- Run 1, date 2026-11-18, main at dbdbf23, test file `test/integration/live-closeout.test.ts`.
+- A: title "live closeout A: with no daemon, realm doctor runs its local checks and its control-channel row is a warn with the catalogue fix". 1 test, 1 pass, 0 fail, 0 skipped, 1288 ms. `realm doctor` exit 0; stderr `realm doctor: daemon absent (REALM_NOT_ACTIVE); ran 15 local checks`; the row, as recorded: `{"id":"control-channel","status":"warn","detail":"control socket is absent, so the daemon looks stopped","fix":"Run realm up to start the daemon, then rerun doctor."}`.
+- B: title "live closeout B: after realm up the run directory is 0700 and control.sock is 0600 and owned by the user, and after realm down the daemon stops and the socket is gone". 1 test, 1 pass, 0 fail, 0 skipped, 12323 ms. Observed after `realm up` (stat): `700 realmlive directory` for the run directory and `600 realmlive socket` for `control.sock`, one daemon process. After `realm down`: socket present false; the stop poll succeeded after 1 attempt. `realm up` reported `realm active`, `realm down` reported `realm disconnected`.
+- Residue after A and after B: 0 containers, 0 sandboxes, empty workspace, no daemon.
+- Status: both Re-verified (dated run, command, commit). The Phase 06 sub-claim (warn, not fail, with no daemon) and the modes of the run directory and the socket hold on the production stack.
+
+### OI-09 live half (production live 5 and 11)
+
+- Production live 11 (run 1, main at dbdbf23): "production live 11: a container whose pids limit no longer matches its profile is destroyed at the next start, and the sandbox is created again". 1 test, 1 pass, 0 fail, 0 skipped, 28947 ms.
+- Production live 5 (run 3, main at 04ca807): "production live 5: after the daemon is killed, the next realm up keeps the sandbox and its container, and destroys a stray". 1 test, 1 pass, 0 fail, 0 skipped, 29882 ms. Earlier failures of this scenario: run 1 `REALM_NOT_ACTIVE` (F-1), run 2 `POLICY_DENIED` (F-2).
+- Residue after each: 0 containers, 0 sandboxes, empty workspace, no daemon.
+- Status: Re-verified, current contract form. The Phase 04 wording (remove everything at the next start) was superseded by decision D5; the checks are scenarios 5 and 11 of `test/integration/production-driver.test.ts`. The hermetic half is in section OI-09 hermetic half.
+
+### OI-10 (live closeout C)
+
+- Run 3, date 2026-11-18, main at 04ca807: "live closeout C: an exec that times out through the dispatcher leaves no process behind in the sandbox". 1 test, 1 pass, 0 fail, 0 skipped, 60891 ms.
+- Observed: the sleeper (`sleep 47`) was visible in flight 409 ms after the call started; the call answered `{"outcome":"refused","tool":"exec","code":"TOOL_TIMEOUT","retryable":true}` after 28083 ms; the process was present on 13 consecutive polls after the reply (1 s poll interval) and absent on the next. Finding F-3 explains how far this evidence goes.
+- Residue after C: 0 containers, 0 sandboxes, empty workspace, no daemon. Earlier failures: run 1 (F-1), run 2 (F-2).
+- Status: Re-verified (dated run, command, commit), as the test defines the check: a positive control, the `TOOL_TIMEOUT` reply, and no sleeper within the bound.
+
+### OI-07 and OI-08 (from the Plan 36-01 run records)
+
+- OI-07: `REALM_LIVE_MUSE=1`, `test/integration/host-live-muse.test.ts`, Muse Code 1.4.23, 2026-11-18, base commit e32bb05, 1 test, 1 pass, 0 fail. Steps shown: plugin bundle validated; settings entry written verbatim (command `realm`, args `mcp`) into an isolated settings file; `muse mcp list --json` and `muse mcp get realm --json` print the entry and start nothing; `muse exec --provider echo --trust-workspace` started the entry through `PATH` (1 start, argument `mcp`), handshake `initialize`, `notifications/initialized`, `tools/list`, tools exec, list, read, retry, status, write; a stub that does not speak MCP fails the run with `failed during startup`; the operator's real Muse settings file byte-equal before and after. Named gap: no Muse Code production-stack boot (no recipe, no registry record, a 30 s default start timeout; rehearse after Phase 33). The validator tier uses a recorder in place of the real `realm`, so it does not exercise capability-token enforcement for an unlabelled Muse launcher (GAP-34-01).
+- OI-08: `REALM_LIVE_HERMES=1`, `REALM_TEST_TIMEOUT_SCALE=3`, `test/integration/host-live-wave2.test.ts`, Hermes Agent 0.23.1 (recorded 0.23.2), 2026-11-18, base commit e32bb05: 9 tests, 1 pass (hermes, about 26 s), 0 fail, 8 skipped (other hosts, opt-ins unset). The gate repair (the version probe bootstraps a fresh data root with `mcp list`) is what let the scenario run: a fresh Hermes data root made `hermes --version` fail with "no dependency environment is committed for this install". A manual run against a fake server that answers the handshake showed `hermes mcp list` with the `realm` row enabled and `hermes mcp test realm` with Connected and 6 tools discovered, exit 0; the first command bootstrapped the data root in about 20 s.
+
+### OI-11 (Omp responsiveness, cold attach)
+
+- Test: `test/integration/omp-responsiveness.test.ts`, cold-attach test, run in all three runs of the window. Result each time: failed before starting Omp, assertion `the host is not quiet: N load per cpu, above 0.5; run in a quiet slot or set REALM_OMP_RESPONSIVENESS_ALLOW_LOADED=1 ...`, code `ERR_ASSERTION`, run time under 1 s. Load before the baseline: run 1 13.39 on 8 CPUs (1.67 per CPU), run 2 6.08 (0.76), run 3 11.79 (1.47). No probe was sent; no latency was measured; nothing was set to override the refusal.
+- Earlier, in Plan 36-01 (2026-11-18, Omp 18.22.2, no extension, no production stack), the baseline mechanics ran with `REALM_OMP_RESPONSIVENESS_ALLOW_LOADED=1`: LOADED (load 9.97 on 8 CPUs), 41 probes, 0 unanswered, maximum 114 ms, median 5 ms, 95th percentile 14 ms, longest gap 265 ms. It proves the mechanics and is not a measurement of an extension attach and not an unloaded measurement.
+- Status: Carried (named reason: the host was not quiet, so the cold-attach responsiveness was not measured). Lift condition: a quiet slot (one-minute load per CPU at most 0.5, no realm daemon of the account running) on the production stack. UI-01 stays the owner's call (Phase 27, D-27-08).
+
 ## Part C. Reconciliation
 
-Plan 36-03 fills this section: every one of the 14 rows with its final label, the window record and the reconciliation against V1LIVE-01 and V1LIVE-02.
+Every one of the 14 open items of the v1.0 re-verification has a final label (V1LIVE-02). No row reads Pending and no interim label remains.
+
+| Id | Original id | Final label |
+| --- | --- | --- |
+| OI-01 | 03 re-verification row 9 | Dropped (owner decision D-27-01) |
+| OI-02 | 03 row 10 | Dropped (owner decision D-27-01) |
+| OI-03 | 03 row 11 | Dropped (owner decision D-27-01) |
+| OI-04 | 03 row 18 | Closed: moot, not resolved |
+| OI-05 | 06 row 6 | Re-verified (dated run, command, commit) |
+| OI-06 | 06 row 12 | Re-verified (dated run, command, commit) |
+| OI-07 | 06 row 10 | Re-verified (dated run, command, commit) |
+| OI-08 | 06 row 11 | Re-verified (dated run, command, commit) |
+| OI-09 | 04 Human Verification 3 | Re-verified, current contract form |
+| OI-10 | 04 Human Verification 5 | Re-verified (dated run, command, commit) |
+| OI-11 | 05 re-verification 1b | Carried (named reason) |
+| OI-12 | 07 row 7 | Closed by test (hermetic, dated) |
+| OI-13 | 07 row 10 | Needs the owner (decision text proposed) |
+| OI-14 | 07 row 12 | Re-verified (dated run, command, commit) |
+
+Count by label: Dropped 3; Closed: moot, not resolved 1; Re-verified (dated run, command, commit) 6; Re-verified, current contract form 1; Closed by test (hermetic, dated) 1; Carried (named reason) 1; Needs the owner (decision text proposed) 1. Total 14.
+
+Carried or waiting, with the named reason and the lift condition:
+
+- OI-11 (Carried): the Omp cold-attach responsiveness was not measured because the host was not quiet on three tries (1.67, 0.76 and 1.47 load per CPU, bound 0.5). Lift condition: a quiet slot on the production stack. UI-01 stays the owner's call.
+- OI-13 (Needs the owner): the stdin trust boundary needs the owner's answer to the proposed text in Part B. Lift condition: the owner accepts, changes or declines it.
+
+Failed scenarios: none is carried. Live closeout C and production live 5 failed twice and passed on the third run; the two causes were test-harness findings (F-1 and F-2), fixed by PR 172 and PR 174, with no product change. Observation F-3 (the sleeper outlived the `TOOL_TIMEOUT` reply for 13 polls) is an evidence limit, not a defect.
+
+What this phase did not do: it did not rehearse a Muse Code boot against the production stack (named gap, no recipe or registry record for Muse Code), did not drive a model-driven tool call through any host, did not change the status of UI-01 (the owner's call), and did not edit the archived v1.0 reports (history).
+
