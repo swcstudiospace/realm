@@ -97,6 +97,14 @@ export interface HostLiveSpec {
   readonly productionTier: boolean;
   // The fixed sentence of a host without a production tier; null for a host that has one.
   readonly productionGap: string | null;
+  // A host whose `--version` fails on a fresh data root until another command has bootstrapped it (Hermes, 36-CONTEXT E-36-07): the
+  // version probe sets `variable` to a directory in its throwaway home and runs the `prepare` arguments once before `versionArgs`.
+  readonly versionRoot?: HostVersionRoot;
+}
+
+export interface HostVersionRoot {
+  readonly variable: string;
+  readonly prepare: readonly string[];
 }
 
 // The production-tier gap of every wave-2 host.
@@ -110,6 +118,7 @@ interface Wave2SpecInit {
   readonly recordedVersion: string;
   readonly minVersion?: string;
   readonly launchesOnValidate: boolean;
+  readonly versionRoot?: HostVersionRoot;
 }
 
 // One wave-2 table entry: a config-only host whose validator runs `<bin> --version` and has no production tier.
@@ -125,6 +134,7 @@ function wave2Spec(init: Wave2SpecInit): HostLiveSpec {
     launchesOnValidate: init.launchesOnValidate,
     productionTier: false,
     productionGap: CONFIG_ONLY_GAP,
+    ...(init.versionRoot === undefined ? {} : { versionRoot: Object.freeze({ variable: init.versionRoot.variable, prepare: Object.freeze([...init.versionRoot.prepare]) }) }),
   });
 }
 
@@ -180,7 +190,7 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
   qwen: wave2Spec({ optIn: "REALM_LIVE_QWEN", binOverride: "REALM_QWEN_BIN", defaultBinary: "qwen", displayName: "Qwen Code", recordedVersion: "0.22.0", launchesOnValidate: true }),
   // pi below 1.3.0 has no MCP and ignores mcp.json (E-PI2): the floor skips it.
   pi: wave2Spec({ optIn: "REALM_LIVE_PI", binOverride: "REALM_PI_BIN", defaultBinary: "pi", displayName: "Pi", recordedVersion: "1.5.2", minVersion: "1.3.0", launchesOnValidate: true }),
-  hermes: wave2Spec({ optIn: "REALM_LIVE_HERMES", binOverride: "REALM_HERMES_BIN", defaultBinary: "hermes", displayName: "Hermes Agent", recordedVersion: "0.23.2", launchesOnValidate: true }),
+  hermes: wave2Spec({ optIn: "REALM_LIVE_HERMES", binOverride: "REALM_HERMES_BIN", defaultBinary: "hermes", displayName: "Hermes Agent", recordedVersion: "0.23.2", launchesOnValidate: true, versionRoot: { variable: "HERMES_HOME", prepare: ["mcp", "list"] } }),
   cursor: wave2Spec({ optIn: "REALM_LIVE_CURSOR", binOverride: "REALM_CURSOR_BIN", defaultBinary: "cursor-agent", displayName: "Cursor", recordedVersion: "2026.11.13", launchesOnValidate: true }),
   kilo: wave2Spec({ optIn: "REALM_LIVE_KILO", binOverride: "REALM_KILO_BIN", defaultBinary: "kilo", displayName: "Kilo Code", recordedVersion: "7.8.27", launchesOnValidate: true }),
   copilot: wave2Spec({ optIn: "REALM_LIVE_COPILOT", binOverride: "REALM_COPILOT_BIN", defaultBinary: "copilot", displayName: "GitHub Copilot CLI", recordedVersion: "1.0.112", launchesOnValidate: false }),
@@ -355,6 +365,9 @@ export function resolveExecutable(nameOrPath: string, pathValue: string | undefi
   return undefined;
 }
 
+// The bound of the one-time bootstrap command of a host with a version root: a cold bootstrap took 20 to 36 s here and up to 230 s on a loaded host.
+const VERSION_PREPARE_TIMEOUT_MS = 300_000;
+
 const versionProbes = new Map<string, Promise<HostVersionProbe>>();
 
 // `<bin> --version` once per binary for the process, run in a throwaway temporary home so the probe never reads or writes a real
@@ -367,7 +380,13 @@ function versionOnce(host: LiveHostId, bin: string): Promise<HostVersionProbe> {
   const probe = (async (): Promise<HostVersionProbe> => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "rlh-ver-")));
     try {
-      const env = { PATH: [dirname(bin), dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter), HOME: home, LANG: "C.UTF-8", TERM: "dumb" };
+      const base = { PATH: [dirname(bin), dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter), HOME: home, LANG: "C.UTF-8", TERM: "dumb" };
+      const { versionRoot } = HOST_LIVE[host];
+      const env: Record<string, string> = versionRoot === undefined ? base : { ...base, [versionRoot.variable]: join(home, "version-root") };
+      if (versionRoot !== undefined) {
+        // The first command bootstraps the data root; its exit code and output are ignored (36-CONTEXT E-36-07).
+        await runHost(bin, versionRoot.prepare, env, home, scaledMs(VERSION_PREPARE_TIMEOUT_MS));
+      }
       const result = await runHost(bin, HOST_LIVE[host].versionArgs, env, home, scaledMs(VALIDATOR_TIMEOUT_MS));
       return result.exitCode === 0 ? { kind: "output", stdout: result.stdout } : { kind: "unavailable" };
     } finally {
