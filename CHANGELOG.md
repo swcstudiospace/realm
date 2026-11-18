@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-18
+
+### Added
+- feat(mcp): realm mcp serves the handshake before up completes (33-01, COLD-01..03) (#163) (1d7d6d9)
+
 ## [0.5.2] - 2026-11-18
 
 ### Added
