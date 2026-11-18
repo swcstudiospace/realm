@@ -23,6 +23,8 @@ import {
   describeValue,
   findRpcReply,
   isBenchmarkAddress,
+  LIVE_MCP_HOST,
+  mcpArgvOf,
   parseDaemonPids,
   parseListeningSockets,
   parseNodeProbe,
@@ -795,4 +797,19 @@ void test("waitUntilServed lets a request failure through, such as a child that 
     stderr: () => "",
   };
   await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /realm mcp ended before it answered/);
+});
+
+// ---- mcpArgvOf -----------------------------------------------------------------------------------------------------------------
+
+void test("a live realm mcp session is labelled with a host id, so enforced capability tokens apply to it and it is not refused unlabelled", () => {
+  const inputs: LiveInputs = {
+    image: "localhost/realm-agentos@sha256:0",
+    stateRoot: "/driver/state",
+    secretRoot: "/driver/secret",
+    workspaceRoot: "/driver/workspace",
+    cliPath: "/driver/cli.js",
+    hostEnvironment: {},
+  };
+  assert.deepEqual(mcpArgvOf(inputs), ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace"]);
+  assert.equal(LIVE_MCP_HOST, "claude");
 });

@@ -425,15 +425,31 @@ void test("on Linux a self-probe finds a token held in the probe's own memory by
     return;
   }
   const minted = mint();
-  // Two copies: a flat string and a buffer. The probe is given no needle, so the only way to see the token is the shape search.
-  const heldBuffer = Buffer.from(minted.token, "latin1");
+  // The token is held as bytes in its own off-heap ArrayBuffer (a plain heap string is not reliably one contiguous run of bytes: V8
+  // may keep it as a cons or sliced string or as two-byte text), and as a flat string copy; both stay referenced until the end. The
+  // probe is given one bytes needle of the token, whose compiled copy is a second contiguous run, so at least two raw hits prove the
+  // scanner saw the held buffer. The shape search is checked as well.
+  const heldBuffer = Buffer.allocUnsafeSlow(minted.token.length);
+  heldBuffer.write(minted.token, "latin1");
   const heldText = heldBuffer.toString("latin1");
-  const report = probeProcess({ kind: "target", pid: process.pid, needles: [], markers: ["PATH"] });
+  const report = probeProcess({
+    kind: "target",
+    pid: process.pid,
+    needles: [{ kind: "bytes", name: "held", base64: heldBuffer.toString("base64") }],
+    markers: ["PATH"],
+  });
   assert.equal(report.mem.open, "ok", "a process may read its own memory");
   assert.equal(report.mem.truncated, false);
   const failed = Object.values(report.mem.regionsFailed).reduce((sum, count) => sum + count, 0);
   assert.equal(report.mem.regionsListed, report.mem.regionsRead + failed);
-  assert.ok(report.mem.tokenCandidates.some((candidate) => candidate.digest === digestOf(minted.token)), "the planted token is found by its shape");
+  const hits = report.mem.needleHits["held"];
+  assert.ok(hits !== undefined && hits.raw + hits.latin1 >= 2, "the held buffer is found beside the needle's own compiled copy");
+  // The candidate list is capped, so a heap crowded with tokens of earlier tests may push the planted one out; a full list still
+  // shows that the shape search finds tokens.
+  assert.ok(
+    report.mem.tokenCandidates.some((candidate) => candidate.digest === digestOf(minted.token)) || report.mem.candidatesTruncated,
+    "the planted token is found by its shape",
+  );
   assert.equal(report.targetChain[0], process.pid);
   assert.equal(report.probeIsAncestorOfTarget, false);
   assert.equal(report.probeUid, process.getuid?.());

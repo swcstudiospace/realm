@@ -337,21 +337,20 @@ function seeded(from: string, to: string): string {
   return PAGE_TEXT.replace(from, to);
 }
 
-const SUMMARY_EVID01 = "| EVID-01 | not-run | - | - | - | EVID-01: the non-root run |";
+const SUMMARY_EVID01 =
+  "| EVID-01 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, Set A twice as uid 5002 | EVID-01: the non-root run |";
 const FIRST_RUN = "| first run (plan 35-01 window) | Set A | - | - | - | - | - | - | - | - | not-run | - |";
 
 void test("EVID: the real page keeps every rule", () => {
   assert.deepEqual(inspectPage(PAGE_TEXT), []);
 });
 
-void test("EVID: every row of the real page starts as not-run", () => {
+void test("EVID: the live enforce proof rows of the real page stay not-run until its window", () => {
   const findings: string[] = [];
   const lines = proseLines(PAGE_TEXT);
-  for (const heading of [SUMMARY, EVID01, EVID02, EVID03]) {
-    for (const table of tablesOf(sectionLines(lines, heading), heading, findings)) {
-      for (const row of table.rows) {
-        assert.equal(cell(table, row, "Status"), "not-run", `${heading}: ${row[0] ?? ""} is not-run until a window fills it`);
-      }
+  for (const table of tablesOf(sectionLines(lines, EVID03), EVID03, findings)) {
+    for (const row of table.rows) {
+      assert.equal(cell(table, row, "Status"), "not-run", `${EVID03}: ${row[0] ?? ""} is not-run until a window fills it`);
     }
   }
   assert.deepEqual(findings, []);
@@ -429,7 +428,7 @@ void test("EVID guard: a result sentence without an evidence label is rejected o
     unlabelled.some((finding) => finding.includes("Not shown: a bullet has no evidence label")),
     unlabelled.join("\n"),
   );
-  const verdict = seeded("Verdict: not-run.", "Verdict: recorded.");
+  const verdict = seeded("Verdict: recorded. Observed on 2026-11-18, the frozen rule", "Verdict: recorded. The frozen rule");
   const verdictFindings = inspectPage(verdict);
   assert.ok(
     verdictFindings.some((finding) => finding.includes("a verdict sentence has no evidence label")),

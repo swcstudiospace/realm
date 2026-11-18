@@ -8,8 +8,8 @@ This page does not give a defence. A process of the same user that can read the 
 
 | Requirement | Status | Tier | Date | Version and run | Section |
 | --- | --- | --- | --- | --- | --- |
-| EVID-01 | not-run | - | - | - | EVID-01: the non-root run |
-| EVID-02 | not-run | - | - | - | EVID-02: the memory probe |
+| EVID-01 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, Set A twice as uid 5002 | EVID-01: the non-root run |
+| EVID-02 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, kernel 6.8.0-149-generic, ptrace_scope 1, verdict settled | EVID-02: the memory probe |
 | EVID-03 | not-run | - | - | - | EVID-03: the live enforce proof |
 
 The vocabulary of the Status cell is exactly four words. `not-run`: no dated run produced a result. `recorded`: a dated run produced the result the requirement asks for. `partial`: a dated run produced part of it, and the row names which part. `failed`: a dated run failed, and the row names the first failing assertion or the catalogue code.
@@ -20,24 +20,26 @@ Each value is read in a window and never assumed. The label is `Observed` only f
 
 | Fact | Value | Evidence label | Date |
 | --- | --- | --- | --- |
-| Kernel release | not-run | - | - |
-| Yama ptrace_scope as read | not-run | - | - |
-| Security modules listed | not-run | - | - |
-| Node version | not-run | - | - |
-| Account uid and gid | not-run | - | - |
-| Harness account | not-run | - | - |
+| Kernel release | 6.8.0-149-generic | Observed | 2026-11-18 |
+| Yama ptrace_scope as read | 1 | Observed | 2026-11-18 |
+| Security modules listed | lockdown, capability, landlock, yama, apparmor | Observed | 2026-11-18 |
+| Node version | v24.18.0 | Observed | 2026-11-18 |
+| Account uid and gid | uid 5002, gid 5002, no supplementary groups | Observed | 2026-11-18 |
+| Harness account | realmlive | Observed | 2026-11-18 |
 | Podman version | not-run | - | - |
 
 ## EVID-01: the non-root run
 
-The capability test set (Set A) run twice, and the whole unit suite (Set B) run once, as a regular user (the realmlive account, not root) from a copy of the built tree owned by that account, on a host where Yama `ptrace_scope` was read as 1 in the same window, with a scrubbed environment and no live gate variable. The first run is made before the probe test moves into its own file; the final run is made with the final file list.
+The capability test set (Set A) run twice, and the whole unit suite (Set B) run once when the owner chooses it, as a regular user (the realmlive account, not root) from a copy of the built tree owned by that account, on a host where Yama `ptrace_scope` was read as 1 in the same window, with a scrubbed environment, a short temporary directory and no live gate variable. The first run is made before the probe test moves into its own file; the final run is made with the final file list.
 
 | Run | Test set | Commit | Node | Account | ptrace_scope | Tests | Pass | Fail | Skipped | Status | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | first run (plan 35-01 window) | Set A | - | - | - | - | - | - | - | - | not-run | - |
-| final run (plan 35-02 window) | Set A | - | - | - | - | - | - | - | - | not-run | - |
+| final run (plan 35-02 window) | Set A, 24 files | 7c44538 | v24.18.0 | uid 5002 gid 5002, not root | 1 | 494 (both runs) | 494 (both runs) | 0 | 0 | recorded | 2026-11-18 |
 
-Set A file list: not-run (recorded here with the first run). Set B result: not-run. Skip reasons: not-run.
+Observed on 2026-11-18, the two final runs agreed: each ran 494 tests, 494 passed, 0 failed, 0 were skipped. The harness ran as root and the tests as the realmlive account, and the host was clean before and after (0 containers, 0 sandboxes, 0 daemons, an empty workspace and an unchanged policy hash). The old informational probe test of the capability token work no longer exists (it was removed in plan 35-02), and the new probe tests ran and were not skipped. No separate first-run result of the plan 35-01 window is recorded on this page, so that row stays `not-run`. The whole-suite run (Set B) was not made: Set B is recorded without gating EVID-01, which is about the token tests, so the status is `recorded` for Set A only (From code, the plan definition of Set B).
+
+Set A file list (24 compiled test files): the capability tests admit, gate, keyring, limiter and token; the daemon tests capability-wire, capability-e2e, channel, client and capability-memory-probe; the cli tests host-token and stdio-host; the omp test extension; the doctor test capability-checks; the audit tests redaction and principal; the tools test principal; the core test policy.schema; the host tests recipes-bare, adapters-labelled and refusal-hint; the docs tests capability-token-doc and capability-token-evidence; the support test memory-probe. Skip reasons: none, 0 tests were skipped in either run. Evidence labels: Observed for the counts, From code for the file list.
 
 ## EVID-02: the memory probe
 
@@ -51,14 +53,14 @@ The decision rule, fixed before any run (From code: `verdictOf` in the probe sup
 
 | Arm | Probe | Target | Result | Coverage | Status | Date |
 | --- | --- | --- | --- | --- | --- | --- |
-| N (subject) | not-run | the token holder, a real client with a real token | not-run | - | not-run | - |
-| D (descendant control) | not-run | a synthetic holder started by the probe | not-run | - | not-run | - |
-| R (root control) | not-run | the same target as N | not-run | - | not-run | - |
-| Keyring file readability | not-run | the keyring file of the same user | not-run | - | not-run | - |
-| Holder environment | not-run | the environment block of the same target | not-run | - | not-run | - |
-| Cross-check with coreutils | not-run | a synthetic holder read with head, no probe code | not-run | - | not-run | - |
+| N (subject) | non-root probe of uid 5002, started detached and reparented, not a descendant of the holder | the token holder, a real client with a real token | mem open denied EACCES; token hits 0, key hits 0 | 153 regions listed, 0 read | recorded | 2026-11-18 |
+| D (descendant control) | same uid, a descendant of the synthetic holder | a synthetic holder started by the probe | mem open ok; the synthetic needle found 4 times in Latin-1, so the scanner works | 53 regions read, 53188352 bytes | recorded | 2026-11-18 |
+| R (root control) | the same probe run as root | the same target as N | mem open ok; the real token found 16 times in Latin-1, key bytes found 3 times raw, key text found 14 times in Latin-1 | 154 regions listed, 92768512 bytes | recorded | 2026-11-18 |
+| Keyring file readability | read of the key file as uid 5002 | the keyring file of the same user | readable by the same uid | not applicable, one file | recorded | 2026-11-18 |
+| Holder environment | read of the environment block as uid 5002 | the environment block of the same target | readable; no token in it, 0 token shapes; the markers PATH, HOME and TMPDIR are present | not applicable | recorded | 2026-11-18 |
+| Cross-check with coreutils | `head -c 64` on the memory file of a same-uid non-descendant synthetic holder, and a read of the environment file of a same-uid sleeper | a synthetic holder read with head, no probe code | the memory read was refused with Permission denied; the environment file was readable and the planted marker was found | not applicable | recorded | 2026-11-18 |
 
-Verdict: not-run. No run has produced the triple (N, D, R). A negative result would be about one kernel, one `ptrace_scope` value and one Node version, and would not change that a same-user reader of the key file is not stopped (From code).
+Verdict: recorded. Observed on 2026-11-18, the frozen rule gives settled: arm N was denied at the open of the memory file (EACCES) with 0 token hits and 0 key hits, arm D found the synthetic needle and arm R found the real token and key, so both controls found. Observed, the environment of the holder is readable by the same uid and holds no token, which is why the token is never put in the environment. Inference, the result holds for Linux kernel 6.8.0-149-generic with Yama `ptrace_scope` 1 and Node v24.18.0 only, and other kernels and other `ptrace_scope` values are not covered. Inference, a reader that is root or a descendant of the holder is not covered, and the controls show only that the scanner finds the token when the kernel allows the read. From code, the key file at rest is readable by a same-uid process and no defence is added, so a same-uid process that can read the key file and run the attach step can obtain a token, whatever this memory result is.
 
 ## EVID-03: the live enforce proof
 
@@ -81,6 +83,8 @@ What this evidence does not cover, however the rows above fall:
 - A same-user reader of the key file: the key file is readable by the same user, the page records that beside the memory result, and a same-user reader can mint tokens whatever the memory result is (From code).
 - A real model turn, if the host-driven drive uses a scripted provider (From code).
 - Hosts other than claude (From code).
+- The whole unit suite (Set B) as the same user: not run in the window, and the Podman version was not read (Observed, 2026-11-18).
+- The live enforce proof (EVID-03): not run, so no live audit line or host-driven drive is recorded (Observed, 2026-11-18).
 
 ## Evidence kept outside the repository
 
