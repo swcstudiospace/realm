@@ -25,7 +25,7 @@ import {
   type ControlRequest,
   type ControlSelection,
 } from "../daemon/channel.js";
-import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { connectDaemon, selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { findNodeBinary } from "../daemon/node-runtime.js";
 import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
@@ -182,7 +182,11 @@ export type SendControlRequest = (
   timeoutMs: number,
 ) => Promise<ControlReply>;
 
-export type ConnectDaemon = (socketPath: string, selection: ControlSelection) => DaemonClient;
+export type ConnectDaemon = (
+  socketPath: string,
+  selection: ControlSelection,
+  options?: ConnectDaemonOptions,
+) => DaemonClient;
 
 type McpInput = Parameters<typeof createMcpServer>[1];
 type McpOutput = Parameters<typeof createMcpServer>[2];

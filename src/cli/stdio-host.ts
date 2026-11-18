@@ -21,7 +21,7 @@ import type { Readable, Writable } from "node:stream";
 import { runAcpOverStdio } from "../acp/stdio.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ControlReply, ControlRequest, ControlSelection } from "../daemon/channel.js";
-import { selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
+import { selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { createDaemonAttach, type RefusalRetention } from "../host/attach.js";
 import { BOOT_BOUNDS, isRetryableAttachCode, resolveBoot, type ResolvedBoot } from "../host/boot.js";
 import { bootHookOf, createBootDriver, type BootDriver } from "../host/boot-driver.js";
@@ -59,7 +59,7 @@ export interface StdioHostInput {
   readonly reattach: boolean;
   readonly socketPath: string;
   readonly stateDir: string;
-  readonly connect: (socketPath: string, selection: ControlSelection) => DaemonClient;
+  readonly connect: (socketPath: string, selection: ControlSelection, options?: ConnectDaemonOptions) => DaemonClient;
   readonly spawnDaemon: () => void;
   readonly send: (socketPath: string, request: ControlRequest, timeoutMs: number) => Promise<ControlReply>;
   readonly diagnostics: Writable;
@@ -160,6 +160,8 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
     socketPath: input.socketPath,
     stateDir: input.stateDir,
     connect: input.connect,
+    // The host id it was given, never the unlabelled placeholder: an unlabelled session attaches as no host (CAPT-06).
+    ...(input.hostId === null ? {} : { host: input.hostId }),
     spawnDaemon: input.spawnDaemon,
     diagnostics: input.diagnostics,
     upBoundMs: input.upBoundMs,

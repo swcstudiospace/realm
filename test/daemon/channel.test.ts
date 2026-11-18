@@ -120,8 +120,11 @@ void test("RT-06: requests and replies round-trip over a live socket with matchi
   }
 });
 
-void test("RT-06: the control methods are exactly status, up, down, doctor, tool, metrics, and host-boot, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
-  assert.deepEqual([...CONTROL_METHODS].sort(), ["doctor", "down", "host-boot", "metrics", "status", "tool", "up"]);
+void test("RT-06: the control methods are exactly status, up, down, doctor, tool, metrics, host-boot and capability-attach, and tool outlasts one dispatcher call (P6-D2, P6-D12)", () => {
+  assert.deepEqual(
+    [...CONTROL_METHODS].sort(),
+    ["capability-attach", "doctor", "down", "host-boot", "metrics", "status", "tool", "up"],
+  );
   assert.ok(
     CONTROL_TIMEOUT_MS.tool > TOOL_CALL_TIMEOUT_MS,
     "a tool request must outlast one dispatcher call",
@@ -140,6 +143,7 @@ void test("RT-06: the up request outlasts the policy startup budget by a positiv
   assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
   assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
   assert.equal(CONTROL_TIMEOUT_MS["host-boot"], 5_000);
+  assert.equal(CONTROL_TIMEOUT_MS["capability-attach"], 5_000);
 });
 
 void test("RT-06: the schema maximum of startupBudgetMs equals its default and the channel's mirrored default, and the up request outlasts it plus the reply margin", () => {
@@ -598,4 +602,65 @@ void test("MULTI-03: doctor with no params returns no selection; a present but m
   assert.deepEqual(parseControlSelection("doctor", { selection: SELECTION }), { selection: SELECTION });
   assertRefusesSchemaInvalid(() => parseControlSelection("doctor", {}));
   assertRefusesSchemaInvalid(() => parseControlSelection("doctor", { selection: { workspaceRoot: "x" } }));
+});
+
+void test("CAPT-06: capability-attach carries exactly { selection, host } with a host label of 1 to 32 lowercase characters", () => {
+  assert.deepEqual(parseControlSelection("capability-attach", { selection: SELECTION, host: "claude" }), {
+    selection: SELECTION,
+  });
+  assert.deepEqual(parseControlSelection("capability-attach", { selection: SELECTION, host: "kimi-code" }), {
+    selection: SELECTION,
+  });
+  assert.deepEqual(parseControlSelection("capability-attach", { selection: SELECTION, host: "a" }), {
+    selection: SELECTION,
+  });
+  assert.deepEqual(
+    parseControlSelection("capability-attach", { selection: SELECTION, host: `a${"b".repeat(31)}` }),
+    { selection: SELECTION },
+  );
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("capability-attach", { selection: SELECTION, host: "claude", extra: 1 }),
+  );
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION, host: "Claude" }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION, host: "1claude" }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION, host: "-claude" }));
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("capability-attach", { selection: SELECTION, host: `a${"b".repeat(32)}` }),
+  );
+  assert.equal(`a${"b".repeat(32)}`.length, 33);
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION, host: "" }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { selection: SELECTION, host: 7 }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", { host: "claude" }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("capability-attach", undefined));
+});
+
+void test("CAPT-06: tool carries exactly { selection, tool } plus an optional token string of at most 512 characters", () => {
+  const call = { read: { path: "a.txt" } };
+  assert.deepEqual(parseControlSelection("tool", { selection: SELECTION, tool: call }), { selection: SELECTION });
+  assert.deepEqual(parseControlSelection("tool", { selection: SELECTION, tool: call, token: "rcap1.a.b" }), {
+    selection: SELECTION,
+  });
+  // The shape is checked here and the secret by the gate, so an empty string passes.
+  assert.deepEqual(parseControlSelection("tool", { selection: SELECTION, tool: call, token: "" }), {
+    selection: SELECTION,
+  });
+  assert.deepEqual(parseControlSelection("tool", { selection: SELECTION, tool: call, token: "x".repeat(512) }), {
+    selection: SELECTION,
+  });
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("tool", { selection: SELECTION, tool: call, token: "x".repeat(513) }),
+  );
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { selection: SELECTION, tool: call, token: 7 }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { selection: SELECTION, tool: call, token: null }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { selection: SELECTION, tool: call, host: "claude" }));
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("tool", { selection: SELECTION, tool: call, principal: { host: "claude", kid: "k1" } }),
+  );
+  assertRefusesSchemaInvalid(() =>
+    parseControlSelection("tool", { selection: SELECTION, tool: call, token: "rcap1.a.b", host: "claude" }),
+  );
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { selection: SELECTION, tool: call, extra: 1 }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { selection: SELECTION }));
+  assertRefusesSchemaInvalid(() => parseControlSelection("tool", { tool: call }));
 });

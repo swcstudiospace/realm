@@ -11,7 +11,7 @@ import { runCli, type CliDeps, type CliResult, type ConnectDaemon, type SendCont
 import { RealmError, type ErrorCode } from "../../src/core/errors.js";
 import type { State } from "../../src/core/states.js";
 import type { ControlReply, ControlRequest, ControlSelection } from "../../src/daemon/channel.js";
-import type { DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
+import type { ConnectDaemonOptions, DaemonClient, DaemonStatus } from "../../src/daemon/client.js";
 import { parseHostBootReport, type HostBootReport } from "../../src/host/boot-report.js";
 import type { MetricsSnapshot } from "../../src/observe/metrics.js";
 import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
@@ -79,6 +79,8 @@ export class ScriptedClient implements DaemonClient {
   constructor(
     private readonly world: World,
     private readonly selection: ControlSelection,
+    // The third argument the host passed to connect (CAPT-06): undefined when it passed two.
+    readonly options?: ConnectDaemonOptions,
   ) {}
 
   async status(): Promise<DaemonStatus> {
@@ -156,8 +158,8 @@ export function startSession(options: StartOptions, rig: StdioRig): Session {
   const spawns: string[] = [];
   const signals = new FakeSignals();
   const timers = new FakeTimers();
-  const connect: ConnectDaemon = (_socketPath, selection) => {
-    const client = new ScriptedClient(world, selection);
+  const connect: ConnectDaemon = (_socketPath, selection, options) => {
+    const client = new ScriptedClient(world, selection, options);
     world.clients.push(client);
     return client;
   };

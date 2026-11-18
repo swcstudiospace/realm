@@ -108,48 +108,8 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/capability/admit.ts",
-      "name": "capabilityPolicyOf",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/admit.ts",
-      "name": "profileFor",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/admit.ts",
-      "name": "requiredCapability",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "KeyringOptions",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "KeyringSnapshot",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "ensureKeyring",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "keyringIdentity",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
       "file": "src/capability/keyring.ts",
       "name": "keyringPathOf",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "readKeyring",
       "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
     },
     {
@@ -164,27 +124,7 @@
     },
     {
       "file": "src/capability/token.ts",
-      "name": "RefusalClass",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/token.ts",
       "name": "TOKEN_PREFIX",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/token.ts",
-      "name": "VerifyResult",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/token.ts",
-      "name": "mintToken",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/token.ts",
-      "name": "verifyToken",
       "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
     },
     {
