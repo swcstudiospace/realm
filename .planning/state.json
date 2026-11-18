@@ -206,7 +206,7 @@
     {
       "number": "34",
       "name": "Capability tokens enforce by default",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "35",
@@ -227,7 +227,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 23 of 26 · 95% · executing"
+    "reason": "Phase 24 of 26 · 98% · executing"
   },
-  "updated_at": "2026-11-18T07:53:07.250Z"
+  "updated_at": "2026-11-18T08:03:28.457Z"
 }

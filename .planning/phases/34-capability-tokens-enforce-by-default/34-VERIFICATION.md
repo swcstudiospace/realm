@@ -55,6 +55,7 @@ covered_files:
   - "test/support/realm-daemon-fixture.ts"
   - "test/support/stdio-world.ts"
   - "test/support/policy-document.ts"
+covered_digest: "v3:sha256:106e33f0a53456f7f52569e2b995865d16b6eb73d2f6faf654043a8290cc0bab"
 ---
 
 # Phase 34 Verification: capability tokens enforce by default
