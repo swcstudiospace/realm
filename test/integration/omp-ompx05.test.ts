@@ -64,6 +64,7 @@ import {
   startMcpSession,
   type ScenarioEnvironment,
   waitForActive,
+  waitUntilServed,
   waitForNoResidue,
   removeSharedStateCreatedBy,
   restoreSharedPolicy,
@@ -236,6 +237,7 @@ void test(
     let mcpExit: McpExit | undefined;
     try {
       await initializeMcp(mcp);
+      await waitUntilServed(mcp);
       const sandboxPath = `/workspace/${name}`;
       const sandboxExec = async (argv: readonly string[]): Promise<string> => {
         const value = await callTool(mcp, "exec", { argv });

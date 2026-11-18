@@ -1259,6 +1259,47 @@ export async function initializeMcp(session: McpSession): Promise<void> {
   session.notify("notifications/initialized");
 }
 
+// realm mcp answers the handshake at once (serve-early) and refuses every tool call REALM_NOT_ACTIVE, retryable, until the daemon
+// has adopted the client. A live test that calls a tool straight after the handshake must first wait until the session is served.
+// The bound is the cold-attach ready bound (COLD_PROBE_READY_TIMEOUT_MS, 240 s); the helper lives here because cold-attach-probe.ts
+// imports this module.
+export const SERVED_TIMEOUT_MS = 240_000;
+export const SERVED_POLL_INTERVAL_MS = 2_000;
+
+export interface ServedOptions {
+  readonly timeoutMs?: number;
+  readonly intervalMs?: number;
+  readonly clock?: PollClock;
+}
+
+// Polls a status tools/call until it is not refused REALM_NOT_ACTIVE. Any other tool error fails at once with its fields; a bound
+// that passes while the session still refuses fails with the last refusal and the child's stderr. A child that ends rejects the
+// request, which the poll lets through.
+export async function waitUntilServed(session: Pick<McpSession, "request" | "stderr">, options: ServedOptions = {}): Promise<void> {
+  const outcome = await pollUntil(
+    async () => {
+      const result = await session.request("tools/call", { name: "status", arguments: {} }, MCP_RESPONSE_TIMEOUT_MS);
+      if (field(result, "isError") !== true) {
+        return { done: true };
+      }
+      const refusal = toolErrorOf(result);
+      if (refusal === undefined || refusal.code !== "REALM_NOT_ACTIVE") {
+        assert.fail(`the status call that waits for the served session returned a tool error that is not REALM_NOT_ACTIVE: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+      }
+      return { done: false, detail: `REALM_NOT_ACTIVE retryable ${String(refusal.retryable)}` };
+    },
+    {
+      timeoutMs: options.timeoutMs ?? SERVED_TIMEOUT_MS,
+      intervalMs: options.intervalMs ?? SERVED_POLL_INTERVAL_MS,
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+    },
+  );
+  assert.ok(
+    outcome.ok,
+    `realm mcp must serve a tool call within ${String((options.timeoutMs ?? SERVED_TIMEOUT_MS) / 1000)} s of the handshake; ${String(outcome.attempts)} status calls were refused, the last: ${outcome.detail}; realm mcp stderr ${session.stderr()}`,
+  );
+}
+
 // ---- Log files ----------------------------------------------------------------------------------------------------------------
 
 // The lines of a log file in file order, without their line ends. A final line end adds no empty line, but an empty line inside
