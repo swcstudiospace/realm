@@ -4,6 +4,18 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-18
+
+### Fixed
+- fix(test): the cold probe lists the workspace root with its required depth (#167) (439e9eb)
+
+### Documentation
+- docs(phase-35): capability token evidence page and its guard test (35-01, not-run placeholders) (#165) (fda1b77)
+- docs(mcp): serve-early boot window documented; GAP-23-02 and GAP-31-04 narrowed (33-02) (#164) (77922ea)
+
+### Maintenance
+- test(mcp): cold production tier without warm-up and the direct cold-attach probe (33-03 code) (#166) (1b0b077)
+
 ## [0.5.3] - 2026-11-18
 
 ### Added
