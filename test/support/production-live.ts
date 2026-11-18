@@ -556,6 +556,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
 // The state-root entries the run may create, by directory. Entries already present are never removed.
 const SHARED_STATE_DIRECTORIES: readonly string[] = Object.freeze([
   "audit",
+  "capability",
   "checkpoints",
   "runtime",
   "run",
@@ -1095,12 +1096,28 @@ export interface McpSession {
   kill(): void;
   // The clipped stderr text, as one JSON string.
   stderr(): string;
+  // The child's pid, for a probe aimed at it; undefined when the process could not start.
+  readonly pid: number | undefined;
 }
 
-// Starts `realm mcp --workspace <pinned root>` on the current node binary with the scenario's explicit environment and stdio
-// pipes. Nothing is written until the first request.
-export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment): McpSession {
-  const child = spawn(process.execPath, [inputs.cliPath, "mcp", "--workspace", inputs.workspaceRoot], {
+export interface McpSessionOptions {
+  // The host id after --host. Absent: the unlabelled form (no host flag).
+  readonly host?: string;
+  // The project the session claims. Absent: the pinned workspace root.
+  readonly workspace?: string;
+}
+
+// The argv after node: the compiled CLI, mcp, the workspace, and the host flag when a host is named.
+export function mcpSessionArgv(inputs: LiveInputs, options: McpSessionOptions = {}): readonly string[] {
+  return [inputs.cliPath, "mcp", "--workspace", options.workspace ?? inputs.workspaceRoot, ...(options.host === undefined ? [] : ["--host", options.host])];
+}
+
+// Starts `realm mcp --workspace <root>` on the current node binary with the scenario's explicit environment and stdio pipes, with
+// `--host <id>` after the workspace when options.host is set (the labelled form a host's registered command takes; without it the
+// session is unlabelled, which an enforcing daemon refuses). options.workspace names another project than the pinned root. Nothing is
+// written until the first request. The child's pid is exposed so a probe can be aimed at it.
+export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment, options: McpSessionOptions = {}): McpSession {
+  const child = spawn(process.execPath, mcpSessionArgv(inputs, options), {
     env: { ...scenario.cliEnvironment },
     cwd: scenario.root,
     stdio: ["pipe", "pipe", "pipe"],
@@ -1210,6 +1227,7 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
     stderr() {
       return clip(stderrText);
     },
+    pid: child.pid,
   };
 }
 

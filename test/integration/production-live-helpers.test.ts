@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
@@ -35,6 +35,9 @@ import {
   statusFieldsOf,
   toolErrorOf,
   unparsedLinesOf,
+  mcpSessionArgv,
+  removeSharedStateCreatedBy,
+  restoreSharedPolicy,
   waitUntilServed,
   SERVED_POLL_INTERVAL_MS,
   type LiveInputs,
@@ -42,6 +45,7 @@ import {
   type PollCheck,
   type PollClock,
   type ProductionGateInputs,
+  type ScenarioEnvironment,
 } from "../support/production-live.js";
 
 // ---- parseProbeFields -----------------------------------------------------------------------------------------------------
@@ -795,4 +799,81 @@ void test("waitUntilServed lets a request failure through, such as a child that 
     stderr: () => "",
   };
   await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /realm mcp ended before it answered/);
+});
+
+// ---- startMcpSession arguments and the shared-state cleanup of the capability keyring ----------------------------------------
+
+const ARGV_INPUTS: LiveInputs = {
+  image: "localhost/realm-agentos@sha256:0",
+  stateRoot: "/driver/state",
+  secretRoot: "/driver/secret",
+  workspaceRoot: "/driver/workspace",
+  cliPath: "/driver/cli.js",
+  hostEnvironment: {},
+};
+
+void test("mcpSessionArgv is exactly the unlabelled form without options, and puts the host flag after the workspace with a host", () => {
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, {}), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "claude" }), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace", "--host", "claude"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "claude", workspace: "/driver/workspace/p" }), [
+    "/driver/cli.js",
+    "mcp",
+    "--workspace",
+    "/driver/workspace/p",
+    "--host",
+    "claude",
+  ]);
+});
+
+// A driver state directory that already holds an operator policy, and the scenario built over it.
+function sharedScenario(existing: (stateDir: string) => void): { readonly stateDir: string; readonly scenario: ScenarioEnvironment; readonly clean: () => void } {
+  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "rls-")));
+  writeFileSync(join(stateDir, "policy.json"), '{"operator":"policy"}\n');
+  existing(stateDir);
+  const inputs: LiveInputs = { ...ARGV_INPUTS, driverStateDir: stateDir };
+  const scenario = createScenarioEnvironment(inputs, { image: inputs.image });
+  return {
+    stateDir,
+    scenario,
+    clean: () => {
+      rmSync(scenario.root, { recursive: true, force: true });
+      rmSync(stateDir, { recursive: true, force: true });
+    },
+  };
+}
+
+void test("the shared-state cleanup removes a keyring the run created and restores the operator policy byte for byte", () => {
+  const world = sharedScenario(() => undefined);
+  try {
+    assert.notEqual(readFileSync(join(world.stateDir, "policy.json"), "utf8"), '{"operator":"policy"}\n', "the scenario replaced the policy");
+    mkdirSync(join(world.stateDir, "capability"), { mode: 0o700 });
+    writeFileSync(join(world.stateDir, "capability", "keys.json"), "keyring bytes", { mode: 0o600 });
+    mkdirSync(join(world.stateDir, "audit"));
+    writeFileSync(join(world.stateDir, "audit", "s.jsonl"), "{}\n");
+    restoreSharedPolicy(world.scenario);
+    removeSharedStateCreatedBy(world.scenario);
+    assert.equal(existsSync(join(world.stateDir, "capability")), false, "the keyring directory the run created is removed");
+    assert.equal(existsSync(join(world.stateDir, "audit")), false);
+    assert.equal(readFileSync(join(world.stateDir, "policy.json"), "utf8"), '{"operator":"policy"}\n');
+  } finally {
+    world.clean();
+  }
+});
+
+void test("the shared-state cleanup leaves a keyring that existed before the run untouched, with the same bytes", () => {
+  const keyring = '{"version":1,"active":"k1","keys":[]}\n';
+  const world = sharedScenario((stateDir) => {
+    mkdirSync(join(stateDir, "capability"), { mode: 0o700 });
+    writeFileSync(join(stateDir, "capability", "keys.json"), keyring, { mode: 0o600 });
+  });
+  try {
+    writeFileSync(join(world.stateDir, "capability", "scratch"), "made by the run");
+    restoreSharedPolicy(world.scenario);
+    removeSharedStateCreatedBy(world.scenario);
+    assert.equal(readFileSync(join(world.stateDir, "capability", "keys.json"), "utf8"), keyring, "the pre-existing keyring is byte-identical");
+    assert.equal(existsSync(join(world.stateDir, "capability", "scratch")), false, "what the run added beside it is removed");
+  } finally {
+    world.clean();
+  }
 });

@@ -53,6 +53,9 @@ const ADVISORY_NEXT_TO_DEFAULT = /advisory.{0,40}default|default.{0,40}advisory/
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/;
 // A raw angle token the docs publisher would read as markup: an angle bracket followed by a letter, a slash or a bang.
 const RAW_ANGLE_TOKEN = /<[A-Za-z/!]/;
+// The sentence a partial EVID-03 carries, and the claim no EVID-03 text may make (35-03: the tier is named, a scripted provider is not a model).
+const CLAUDE_DID_NOT_CALL = "claude did not itself issue a tool call";
+const CLAIMS_REAL_MODEL = /claude used realm with a (?:real )?model/i;
 
 interface Table {
   readonly header: readonly string[];
@@ -274,7 +277,46 @@ function inspectPage(text: string): string[] {
   // The three requirement sections, each with its table.
   checkTable(findings, "EVID-01", tablesOf(sectionLines(lines, EVID01), "EVID-01", findings)[0], EVID01_COLUMNS, ["Commit", "Node"]);
   checkTable(findings, "EVID-02", tablesOf(sectionLines(lines, EVID02), "EVID-02", findings)[0], EVID02_COLUMNS, []);
-  checkTable(findings, "EVID-03", tablesOf(sectionLines(lines, EVID03), "EVID-03", findings)[0], EVID03_COLUMNS, ["Version"]);
+  const evid03Lines = sectionLines(lines, EVID03);
+  const evid03 = checkTable(findings, "EVID-03", tablesOf(evid03Lines, "EVID-03", findings)[0], EVID03_COLUMNS, ["Version"]);
+  if (evid03 !== undefined) {
+    const evid03Status = summaryStatuses[2] ?? "not-run";
+    const statusOf = (drive: string): string => {
+      const row = evid03.rows.find((candidate) => candidate[0] === drive);
+      return row === undefined ? "not-run" : cell(evid03, row, "Status");
+    };
+    for (const row of evid03.rows) {
+      const drive = row[0] ?? "";
+      const status = cell(evid03, row, "Status");
+      if (status === "not-run") {
+        continue;
+      }
+      if (isDash(cell(evid03, row, "Tier"))) {
+        findings.push(`EVID-03: ${drive} is ${status} without a Tier`);
+      }
+      if (drive === "host-driven" && status === "recorded") {
+        const result = cell(evid03, row, "Result");
+        if (!result.includes("tools/list") || !result.includes("tools/call") || !/provider[^|]*\d/.test(result)) {
+          findings.push("EVID-03: a recorded host-driven row needs the wire methods and the provider counts in its Result");
+        }
+        if (!cell(evid03, row, "Tier").includes("scripted provider")) {
+          findings.push("EVID-03: a recorded host-driven row names the scripted provider in its Tier");
+        }
+      }
+    }
+    if (evid03Status === "partial" && !evid03Lines.join("\n").includes(CLAUDE_DID_NOT_CALL)) {
+      findings.push(`EVID-03: a partial status needs the sentence: ${CLAUDE_DID_NOT_CALL}`);
+    }
+    if (evid03Status === "recorded" && statusOf("host-driven") !== "recorded") {
+      findings.push("EVID-03: the status is recorded only when the host-driven row is recorded");
+    }
+    if (evid03Status === "recorded" && statusOf("launcher-driven") === "not-run") {
+      findings.push("EVID-03: the status is recorded only when the launcher-driven row ran too");
+    }
+    if (CLAIMS_REAL_MODEL.test(evid03Lines.join("\n"))) {
+      findings.push("EVID-03: the section says claude used Realm with a model");
+    }
+  }
 
   // The Verdict paragraph: a status from the vocabulary; every sentence after the status sentence carries a label unless the status is
   // not-run.
@@ -454,4 +496,51 @@ void test("EVID guard: a first-run row with a commit, a Node version and a date 
     findings.some((finding) => finding.includes("is partial without Commit")),
     findings.join("\n"),
   );
+});
+
+// ---- EVID-03 structure (plan 35-03 Task 8 pins; they fire only once a row left not-run) ---------------------------------------
+
+const EVID03_SUMMARY = "| EVID-03 | not-run | - | - | - | EVID-03: the live enforce proof |";
+const LAUNCHER_ROW = "| launcher-driven | not-run | - | not-run | - | not-run | not-run | - |";
+const HOST_ROW = "| host-driven | not-run | - | not-run | - | not-run | not-run | - |";
+
+void test("EVID-03 guard: a partial status without the sentence that claude did not itself issue a tool call is rejected, with it the page passes", () => {
+  const summary = "| EVID-03 | partial | scripted client | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
+  const launcher = "| launcher-driven | scripted client | claude 2.1.322 | cold start ok | 1 attach, 6 call lines | clean (12 sinks) | recorded | 2026-11-18 |";
+  const without = seeded(EVID03_SUMMARY, summary).replace(LAUNCHER_ROW, launcher);
+  const findings = inspectPage(without);
+  assert.ok(
+    findings.some((finding) => finding.includes(`a partial status needs the sentence: ${CLAUDE_DID_NOT_CALL}`)),
+    findings.join("\n"),
+  );
+  const withSentence = without.replace("## Not shown", `The registered host command was driven by a script; ${CLAUDE_DID_NOT_CALL}.\n\n## Not shown`);
+  assert.ok(withSentence !== without);
+  assert.deepEqual(
+    inspectPage(withSentence).filter((finding) => !finding.startsWith("Not shown")),
+    [],
+  );
+});
+
+void test("EVID-03 guard: a recorded host-driven row needs the wire methods, the provider counts and the scripted provider tier", () => {
+  const summary = "| EVID-03 | recorded | scripted provider | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
+  const launcher = "| launcher-driven | scripted client | claude 2.1.322 | cold start ok | 1 attach, 6 call lines | clean (12 sinks) | recorded | 2026-11-18 |";
+  const goodHost = "| host-driven | scripted provider | claude 2.1.322 | wire initialize, tools/list, tools/call; provider requests 2 | 2 attach, 8 call lines | clean (14 sinks) | recorded | 2026-11-18 |";
+  const base = seeded(EVID03_SUMMARY, summary).replace(LAUNCHER_ROW, launcher);
+  assert.deepEqual(inspectPage(base.replace(HOST_ROW, goodHost)).filter((finding) => !finding.startsWith("Not shown")), []);
+  const noWire = base.replace(HOST_ROW, goodHost.replace("wire initialize, tools/list, tools/call; ", ""));
+  assert.ok(inspectPage(noWire).some((finding) => finding.includes("needs the wire methods and the provider counts")), inspectPage(noWire).join("\n"));
+  const noCounts = base.replace(HOST_ROW, goodHost.replace("; provider requests 2", ""));
+  assert.ok(inspectPage(noCounts).some((finding) => finding.includes("needs the wire methods and the provider counts")));
+  const wrongTier = base.replace(HOST_ROW, goodHost.replace("| scripted provider |", "| production |"));
+  assert.ok(inspectPage(wrongTier).some((finding) => finding.includes("names the scripted provider in its Tier")));
+});
+
+void test("EVID-03 guard: recorded needs both drives, a ran row needs a tier, and the page never says claude used Realm with a model", () => {
+  const summary = "| EVID-03 | recorded | scripted provider | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
+  const base = seeded(EVID03_SUMMARY, summary);
+  assert.ok(inspectPage(base).some((finding) => finding.includes("only when the host-driven row is recorded")));
+  const bareTier = seeded(LAUNCHER_ROW, "| launcher-driven | - | claude 2.1.322 | cold start ok | 1 attach | clean | recorded | 2026-11-18 |");
+  assert.ok(inspectPage(bareTier).some((finding) => finding.includes("launcher-driven is recorded without a Tier")));
+  const claims = inspectPage(seeded("## Not shown", "Claude used Realm with a real model.\n\n## Not shown"));
+  assert.ok(claims.includes("EVID-03: the section says claude used Realm with a model"), claims.join("\n"));
 });
