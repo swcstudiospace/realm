@@ -4,6 +4,20 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-18
+
+### Documentation
+- docs(phase-36): record the live re-verification of the v1.0 open items (dispositions, summary, verification) (#177) (2d8f631)
+- docs(phase-33): close phase 33, cold attach (#173) (38ac81c)
+- docs(phase-35): record EVID-01 and EVID-02 live results (2026-11-18) (#175) (8a67886)
+- docs(phase-33): record the cold-attach live results; close GAP-23-02 and GAP-31-04; summaries and verification (#171) (745d5de)
+
+### Maintenance
+- test(capability): make the memory-probe self-check deterministic (off-heap buffer needle) (#176) (04ca807)
+- test(live): live MCP sessions carry a host label so they attach under enforced capability tokens (#174) (c9130d1)
+- test(live): wait until the session is served before the first tool call in the live suites (serve-early) (#172) (7c44538)
+- test(capability): non-root memory probe with frozen verdict rule; evidence page EVID-02 design (35-02, no results yet) (#170) (d2fc568)
+
 ## [0.5.5] - 2026-11-18
 
 ### Added
