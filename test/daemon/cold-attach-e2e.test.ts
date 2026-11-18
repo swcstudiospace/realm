@@ -2,7 +2,7 @@
 // on a real socket, with the sandbox create held. In the window the handshake and tools/list are answered, the daemon's own
 // status is not active, and a tool call is refused REALM_NOT_ACTIVE (retryable) without a daemon request. After the create is
 // released the same connection forwards calls, and the audit lines of those calls carry the host and the kid under capability
-// enforce (and neither for an unlabelled session under the default policy).
+// enforce (and neither for an unlabelled session with capability tokens off).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -170,8 +170,8 @@ void test("cold attach, capability enforce with a labelled host: window, refusal
   assert.equal(rig.exec.callCount("create"), 1, "one create");
 });
 
-void test("cold attach with no --host and the default policy: the same window and transition, and the audit lines carry no host and no kid", testTimeout(60_000), async (t) => {
-  const rig = await startRig(t);
+void test("cold attach with no --host and capability tokens off: the same window and transition, and the audit lines carry no host and no kid", testTimeout(60_000), async (t) => {
+  const rig = await startRig(t, { capabilityTokens: { mode: "off" } });
   const release = rig.exec.holdNext("create");
   const launched = launch(rig, ["mcp", "--workspace", rig.workspace]);
   await checkWindow(rig, launched);
