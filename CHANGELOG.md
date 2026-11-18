@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-18
+
+### Fixed
+- fix(test): the production tier accepts the modern handshake (server/discover); record the 2026-11-18 live results (#148) (efa7847)
+
 ## [0.4.8] - 2026-11-18
 
 ### Added
