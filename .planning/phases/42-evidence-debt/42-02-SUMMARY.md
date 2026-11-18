@@ -11,12 +11,12 @@ provides:
 requirements: [DEBT-03]
 metrics:
   completed: 2026-11-18
-status: partial-awaiting-owner
+status: option-a-written-awaiting-head-review
 ---
 
 # 42-02 summary: the replay, D42-1 and the CI proposal
 
-Status: Tasks 1 and 5 are done in their report-only form. Task 2 (the owner's wiring answer), Task 3 (a person applies a workflow change) and Task 4 (throwaway pull request controls) have not run. No file under `.github/workflows` was edited, staged or proposed as a diff to apply.
+Status: Tasks 1 and 5 are done. Task 2: the owner chose option A on 2026-11-18 (HITL). Task 3: the workflow file `.github/workflows/breaking-change-guard.yml` is written exactly as the proposal below (the only file under `.github/workflows` that changed; `ci.yml` is untouched) and awaits a person's review of its exact head before merge, as `.github/workflows/**` requires. `AGENTS.md` (Commands, Layout, Merge and release flow steps 3 and 5) and `CONTRIBUTING.md` (the gates row, Branches and pull requests step 3) now name the check, and D42-1 records the state. Task 4 (throwaway pull request controls) has not run.
 
 ## Files
 
@@ -101,12 +101,12 @@ Nothing from the event reaches a shell line: the script reads the title, body an
 
 Risk common to A and B: `base.sha` of the event is the base branch tip at event time, and the merge-ref checkout may be built against an older tip, so the base commit can be missing. The guard then reports `range-unavailable`, which fails under `--enforce` (fail closed); a re-run after the merge ref refreshes fixes it. If that proves frequent, a step `git fetch --no-tags origin BASE_SHA` is a further workflow change, not proposed now.
 
-## Owner decisions still open (Task 2)
+## Owner decisions (Task 2)
 
-1. CI wiring: A, B or C. With no answer: C, and D42-1 already says CI does not run the guard and the proposal stands.
+1. CI wiring: option A chosen on 2026-11-18. Applied as the new workflow file; B and C are not taken.
 2. Whether the ship flow runs the enforce command before every merge (OQ-42-04); user configuration, not changed here.
 3. Whether a follow-up marked commit or a note for PR 168 is wanted (OQ-42-06). Default no; D42-1 states the partial as a closed process gap and an open historical fact.
-4. For A or B: who applies the change and reviews its exact head. After it merges, Task 4 controls (red on an unmarked title, green after editing the title, red on a ticked declaration with no marked commit) run on a throwaway pull request, and AGENTS.md and CONTRIBUTING.md step 3 then name the job.
+4. Open: the review of the exact head of the workflow file and its merge. After it merges, the Task 4 controls (red on an unmarked title, green after editing the title, red on a ticked declaration with no marked commit) run on a throwaway pull request.
 
 ## Checks run
 

@@ -28,7 +28,7 @@ A change must pass every gate below before it is reviewed.
 | `npm run check:docs` | Documentation checks |
 | `npm run build` | Compile to `dist/` |
 | `npm run check:gates` | Gate closure (TOOL-02): the exec gate modules' import closure reaches no forbidden module and no `child_process` (`scripts/check/gate-closure.mjs`); module-size ratchet: a src file over 1000 lines fails unless its entry in `scripts/check/module-size-allowlist.json` sets a ceiling at or above its line count (`scripts/check/module-size.mjs`); export-usage gate: fails on a src export that only its own file or only test files use, unless `scripts/check/export-usage-allowlist.json` names it (`scripts/check/export-usage-gate.mjs`) |
-| `npm run check:breaking` | Breaking-change marker guard (`scripts/check/breaking-change-guard.mjs`): reads the commits of `origin/main` to `HEAD` and the pull request fields given as flags or JSON, and reports a breaking change whose commit subjects or squash title lack the `!` marker; it reports and exits 0 by default and fails only with `--enforce`; it is not part of `check:gates` or CI |
+| `npm run check:breaking` | Breaking-change marker guard (`scripts/check/breaking-change-guard.mjs`): reads the commits of `origin/main` to `HEAD` and the pull request fields given as flags or JSON, and reports a breaking change whose commit subjects or squash title lack the `!` marker; it reports and exits 0 by default and fails only with `--enforce`; the `Breaking change guard` workflow runs it with `--enforce` on every pull request, and it is not part of `check:gates` |
 | `npm run check:pack` | Pack smoke test: packs the package, installs the tarball into a throwaway consumer and loads the schemas and adapter manifests; run `npm run build` first |
 | `npm audit --omit=dev --audit-level=high` | Dependency audit of production dependencies; CI runs it as the `audit` job and release waits for it. Needs the npm registry |
 | `npm run check:mcp` | MCP smoke test: spawns the built `realm mcp` over stdio, drives one session in both protocol eras and checks the result shapes, the status call and each tool's `title` and annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) against a pinned table in both eras; run `npm run build` first |
@@ -45,7 +45,7 @@ A weekly scheduled mutation run (`node scripts/mutation/run.mjs`, `.github/workf
 
 1. Create a feature branch from `main`.
 2. Open a pull request into `main` and complete the pull request template.
-3. CI must be green.
+3. CI must be green, including the `Breaking change guard` check. Editing the pull request title or ticking the Breaking change line re-runs only that check.
 4. The Greptile review must reach 5/5 with no open comments. This is a process rule that the ship flow enforces; `main` has no branch protection.
 5. A maintainer merges the change through the ship flow. A pull request whose commits are individually meaningful Conventional Commits lands with a merge commit, so the release notes list each commit. A single-commit or throwaway-commit pull request may be squash-merged with a Conventional Commit title, which becomes its one entry. A pull request with a breaking commit lands as a merge commit, or is squash-merged with a title that carries the `!` marker.
 
