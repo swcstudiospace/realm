@@ -66,6 +66,8 @@ const RECORDED_OUTPUT: Readonly<Record<LiveHostId, string>> = {
   augment: "1.2.1 (commit 0a1b2c3)\n",
   codebuddy: "2.185.0\n",
   cline: "3.0.74\n",
+  "prime-agent": "0.10.2\n",
+  "grok-build": "grok 1.0.77 (50ca579fa996) [stable]\n",
 };
 
 // A temporary directory removed when the test ends.
@@ -100,8 +102,8 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-void test("HOST_LIVE is a frozen table of the fourteen hosts with the recorded facts", () => {
-  assert.deepEqual([...LIVE_HOST_IDS], ["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"]);
+void test("HOST_LIVE is a frozen table of the sixteen hosts with the recorded facts", () => {
+  assert.deepEqual([...LIVE_HOST_IDS], ["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline", "prime-agent", "grok-build"]);
   assert.ok(Object.isFrozen(HOST_LIVE));
   const expected: Record<LiveHostId, readonly [string, string, string, string, boolean, boolean]> = {
     claude: ["REALM_LIVE_CLAUDE", "REALM_CLAUDE_BIN", "claude", "2.1.322", true, true],
@@ -118,6 +120,8 @@ void test("HOST_LIVE is a frozen table of the fourteen hosts with the recorded f
     augment: ["REALM_LIVE_AUGMENT", "REALM_AUGMENT_BIN", "auggie", "1.2.1", false, false],
     codebuddy: ["REALM_LIVE_CODEBUDDY", "REALM_CODEBUDDY_BIN", "codebuddy", "2.185.0", true, false],
     cline: ["REALM_LIVE_CLINE", "REALM_CLINE_BIN", "cline", "3.0.74", false, false],
+    "prime-agent": ["REALM_LIVE_PRIME_AGENT", "REALM_PRIME_AGENT_BIN", "prime-agent", "0.10.2", false, false],
+    "grok-build": ["REALM_LIVE_GROK_BUILD", "REALM_GROK_BUILD_BIN", "grok", "1.0.77", true, false],
   };
   const displayNames: Record<Wave2LiveId, string> = {
     qwen: "Qwen Code",
@@ -129,6 +133,8 @@ void test("HOST_LIVE is a frozen table of the fourteen hosts with the recorded f
     augment: "Augment (Auggie)",
     codebuddy: "CodeBuddy Code",
     cline: "Cline CLI",
+    "prime-agent": "Prime Agent",
+    "grok-build": "Grok Build",
   };
   for (const host of LIVE_HOST_IDS) {
     const spec = HOST_LIVE[host];
@@ -444,6 +450,8 @@ void test("parseHostVersion reads every recorded --version shape and refuses gar
     ["augment", "1.2.1 (commit 0a1b2c3)\n", "1.2.1"],
     ["codebuddy", "2.185.0\n", "2.185.0"],
     ["cline", "3.0.74\n", "3.0.74"],
+    ["prime-agent", "0.10.2\n", "0.10.2"],
+    ["grok-build", "grok 1.0.77 (50ca579fa996) [stable]\n", "1.0.77"],
     ["hermes", "hermes: no dependency environment is committed for this install; run `hermes pm repair`\n", undefined],
   ];
   for (const [host, stdout, expected] of shapes) {
@@ -563,6 +571,8 @@ const WAVE2_OVERRIDES: Readonly<Record<Wave2LiveId, readonly string[]>> = {
   augment: ["AUGMENT_CACHE_DIR"],
   codebuddy: ["CODEBUDDY_CONFIG_DIR"],
   cline: ["CLINE_DIR"],
+  "prime-agent": ["PRIME_AGENT_CODING_AGENT_DIR"],
+  "grok-build": [],
 };
 
 void test("isolatedHostEnv of each wave-2 host keeps only its own override variable inside the root and drops every credential", (t) => {
@@ -608,10 +618,10 @@ void test("isolatedHostEnv of each wave-2 host keeps only its own override varia
 
 // ---- The wave-2 script table (test/support/host-live-wave2.ts) -----------------------------------------------------------------
 
-void test("the wave-2 script table covers the nine hosts, runs only commands that need no login and no prompt, and agrees with the live table and the real recipes", (t) => {
-  assert.deepEqual([...WAVE2_LIVE_IDS], LIVE_HOST_IDS.slice(5), "the nine wave-2 ids are the hosts after the five wave-1 hosts (claude, codex, opencode, kimi, kimi-code)");
+void test("the wave-2 script table covers the eleven hosts, runs only commands that need no login and no prompt, and agrees with the live table and the real recipes", (t) => {
+  assert.deepEqual([...WAVE2_LIVE_IDS], LIVE_HOST_IDS.slice(5), "the eleven wave-2 ids are the hosts after the five wave-1 hosts (claude, codex, opencode, kimi, kimi-code)");
   assert.deepEqual(Object.keys(WAVE2_LIVE).sort(), [...WAVE2_LIVE_IDS].sort());
-  const allowed = new Set(["mcp list", "mcp get realm", "mcp list --json", "mcp test realm", "config mcp --json"]);
+  const allowed = new Set(["mcp list", "mcp get realm", "mcp list --json", "mcp test realm", "config mcp --json", "mcp doctor"]);
   const noAdd = new Set<LiveHostId>(["kilo", "cursor", "hermes"]);
   for (const host of WAVE2_LIVE_IDS) {
     const script = WAVE2_LIVE[host];
@@ -628,6 +638,7 @@ void test("the wave-2 script table covers the nine hosts, runs only commands tha
     assert.ok(script.validators.length >= 1, host);
     const recipe = wave2Recipe(host);
     assert.equal(recipe.yaml, host === "hermes", host);
+    assert.equal(recipe.toml, host === "grok-build", host);
     const rig = createHostRig({ host, bin: "/bin/sh", overrides: script.overrides }, {});
     t.after(() => {
       rig.dispose();
@@ -804,7 +815,7 @@ void test("V1LIVE-01 only the hermes record carries a version root, and the herm
       explicit[host] = WAVE2_LIVE[host].validators.flatMap((validator) => (validator.timeoutMs === undefined ? [] : [validator.timeoutMs]));
     }
   }
-  assert.deepEqual(explicit, { qwen: [], pi: [], cursor: [60_000], kilo: [], copilot: [], augment: [120_000], codebuddy: [120_000, 120_000], cline: [] });
+  assert.deepEqual(explicit, { qwen: [], pi: [], cursor: [60_000], kilo: [], copilot: [], augment: [120_000], codebuddy: [120_000, 120_000], cline: [], "prime-agent": [], "grok-build": [] });
 });
 
 void test("bootPhaseCountsOf sums the hostBoot rows of one host per phase and tolerates malformed metrics", () => {

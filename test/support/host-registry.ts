@@ -262,10 +262,10 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   pi: record({ id: "pi", family: "json-merge", suites: [WAVE2_SUITE], snippet: "pi.md", live: "pi", t2: null, t3: WAVE2_T3, deferral: null }),
   // Source: 40-CONTEXT D-40-02 and D-40-07 (the Phase 40 evidence E-40-02 to E-40-05). T2 is recorded by plan 40-03; no production tier is defined (D-40-06).
   "muse-code": record({ id: "muse-code", family: "json-merge", suites: ["test/host/muse-code-recipe.test.ts"], snippet: "muse-code.md", live: null, t2: null, t3: WAVE2_T3, deferral: null }),
-  // Source: 40-CONTEXT D-40-02 (E-40-06). T2 is recorded by plan 40-03.
-  "prime-agent": record({ id: "prime-agent", family: "json-merge", suites: ["test/host/prime-agent-recipe.test.ts"], snippet: "prime-agent.md", live: null, t2: null, t3: WAVE2_T3, deferral: null }),
-  // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). T2 is recorded by plan 40-03.
-  "grok-build": record({ id: "grok-build", family: "toml-table", suites: ["test/host/grok-build-recipe.test.ts"], snippet: "grok-build.md", live: null, t2: null, t3: WAVE2_T3, deferral: null }),
+  // Source: 40-CONTEXT D-40-02 (E-40-06). Its live tier is the wave-2 table (D-40-07); T2 is recorded by plan 40-03.
+  "prime-agent": record({ id: "prime-agent", family: "json-merge", suites: ["test/host/prime-agent-recipe.test.ts"], snippet: "prime-agent.md", live: "prime-agent", t2: null, t3: WAVE2_T3, deferral: null }),
+  // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). Its live tier is the wave-2 table (D-40-07); T2 is recorded by plan 40-03.
+  "grok-build": record({ id: "grok-build", family: "toml-table", suites: ["test/host/grok-build-recipe.test.ts"], snippet: "grok-build.md", live: "grok-build", t2: null, t3: WAVE2_T3, deferral: null }),
 });
 
 // The source text without block comments and without full-line double-slash comments, so a source check never matches a comment (a lesson of

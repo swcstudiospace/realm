@@ -3,7 +3,7 @@
 // one scenario per host from this table, test/integration/host-live-helpers.test.ts pins the table's shape without any host CLI.
 //
 // Every command is one the host runs without a login, without a model prompt and without a credential (E-QW2, E-CP2, E-AU2, E-CB1,
-// E-KL2, E-PI1, E-HM1, E-CU3, E-CL2). `launches` says whether the host starts the registered command: the stub `realm` then records
+// E-KL2, E-PI1, E-HM1, E-CU3, E-CL2, and for the two Phase 40 hosts E-40-06 to E-40-08). `launches` says whether the host starts the registered command: the stub `realm` then records
 // `mcp --host <id>`. A host that only prints the registered entry starts nothing, and the scenario asserts the stub was never run.
 
 import { isRecord } from "./omp-live.js";
@@ -11,7 +11,7 @@ import type { HostRig, LiveHostId } from "./host-live.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
 
 export type Wave2LiveId = Exclude<LiveHostId, "claude" | "codex" | "opencode" | "kimi" | "kimi-code">;
-export const WAVE2_LIVE_IDS: readonly Wave2LiveId[] = Object.freeze(["qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"] as const);
+export const WAVE2_LIVE_IDS: readonly Wave2LiveId[] = Object.freeze(["qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline", "prime-agent", "grok-build"] as const);
 
 // One of the host's own commands, run in the isolated environment after Realm's install.
 export interface Wave2Validator {
@@ -170,6 +170,36 @@ export const WAVE2_LIVE: Readonly<Record<Wave2LiveId, Wave2Script>> = Object.fre
     addOther: { args: ["mcp", "add", "other", "--yes", "--", "other-cmd"], note: "cline mcp add writes a nested shape and kept a flat entry verbatim (E-CL2)" },
     realFiles: (home) => [`${home}/.cline/data/settings/cline_mcp_settings.json`],
   },
+  // E-40-06: `prime-agent mcp list` and `mcp get realm` print the name and the transport only (`realm: stdio`) and start nothing, so the
+  // registered label is proven by the bytes the test reads back from the file. PRIME_AGENT_CODING_AGENT_DIR is the agent directory itself.
+  // `prime-agent mcp add` leaves Realm's entry value-identical.
+  "prime-agent": {
+    overrides: { PRIME_AGENT_CODING_AGENT_DIR: "prime-agent" },
+    homeDir: (rig) => rig.path("prime-agent"),
+    configFile: (rig) => rig.path("prime-agent", "settings.json"),
+    createdDirs: NO_DIRS,
+    validators: [
+      { args: ["mcp", "list"], expect: [/realm: stdio/], launches: false },
+      { args: ["mcp", "get", "realm"], expect: [/realm: stdio/], launches: false },
+    ],
+    addOther: { args: ["mcp", "add", "other", "--", "other-cmd"], note: "prime-agent mcp add leaves Realm's entry value-identical (E-40-06)" },
+    realFiles: (home) => [`${home}/.prime/agent/settings.json`],
+  },
+  // E-40-07, E-40-08: Grok documents no relocation variable, so the scenario's HOME holds `.grok/config.toml` (the rig creates the home). `grok mcp
+  // list` prints the registered command and starts nothing; `grok mcp doctor` starts it, prints `server started`, and exits 1 after its row because
+  // the stub does not speak MCP. `grok mcp add` rewrites the file with a comment-dropping editor and leaves the Realm table byte-identical.
+  "grok-build": {
+    overrides: {},
+    homeDir: (rig) => rig.path("home", ".grok"),
+    configFile: (rig) => rig.path("home", ".grok", "config.toml"),
+    createdDirs: NO_DIRS,
+    validators: [
+      { args: ["mcp", "list"], expect: [hostFlag("grok-build")], launches: false },
+      { args: ["mcp", "doctor"], expect: [/server started/], launches: true, exitCodes: [0, 1] },
+    ],
+    addOther: { args: ["mcp", "add", "other", "--", "other-cmd"], note: "grok mcp add rewrites the file with a comment-dropping editor and the Realm table stays byte-identical (E-40-07)" },
+    realFiles: (home) => [`${home}/.grok/config.toml`],
+  },
 });
 
 // What the real table installs for a host: the file below the config home, the key path of the owned entry (the map key and the server
@@ -179,17 +209,22 @@ export interface Wave2Recipe {
   readonly keyPath: readonly string[];
   readonly value: unknown;
   readonly yaml: boolean;
+  // A toml-table recipe: `value` is then the owned table text, and `keyPath` its table path.
+  readonly toml: boolean;
 }
 
 export function wave2Recipe(host: Wave2LiveId): Wave2Recipe {
   const recipe = HOST_RUNTIMES[host].recipe;
   if (recipe?.kind === "json-merge") {
-    return { file: recipe.file, keyPath: recipe.keyPath, value: recipe.value, yaml: false };
+    return { file: recipe.file, keyPath: recipe.keyPath, value: recipe.value, yaml: false, toml: false };
   }
   if (recipe?.kind === "yaml-map") {
-    return { file: recipe.file, keyPath: recipe.path, value: recipe.value, yaml: true };
+    return { file: recipe.file, keyPath: recipe.path, value: recipe.value, yaml: true, toml: false };
   }
-  throw new Error(`${host} has no json-merge or yaml-map recipe in the real table`);
+  if (recipe?.kind === "toml-table") {
+    return { file: recipe.file, keyPath: recipe.table, value: recipe.text, yaml: false, toml: true };
+  }
+  throw new Error(`${host} has no json-merge, yaml-map or toml-table recipe in the real table`);
 }
 
 // The value at `keyPath` below `root`, or undefined when any step is missing or not an object.

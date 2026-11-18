@@ -8,15 +8,18 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
+  countProcessesNamed,
   MUSE_BIN_VARIABLE,
   MUSE_OPT_IN,
   MUSE_PLUGIN_VALID_PATTERN,
   museEntryProblem,
   museGateReason,
   type MuseGateInputs,
+  museInstalledProblem,
   museIsolatedEnv,
   museListProblem,
   museSettingsText,
+  museUninstallExpectation,
   parseMuseVersion,
 } from "../support/host-live-muse.js";
 
@@ -179,4 +182,36 @@ void test("V1LIVE-01 museIsolatedEnv holds exactly the isolated keys, all paths 
   assert.equal(env["LANG"], "C.UTF-8");
   assert.equal(env["TERM"], "dumb");
   assert.equal(Object.keys(env).filter((name) => /TOKEN|KEY|SECRET|PASSWORD|MUSE/.test(name)).length, 0);
+});
+
+void test("40-03 museInstalledProblem accepts the document of the snippet in any formatting and names a difference", () => {
+  assert.equal(museInstalledProblem(SNIPPET_TEXT, SNIPPET_TEXT), undefined);
+  assert.equal(museInstalledProblem(JSON.stringify(snippetObject()), SNIPPET_TEXT), undefined, "formatting is not part of the document");
+  const withoutSeed = snippetObject();
+  delete withoutSeed["schema_version"];
+  assert.match(String(museInstalledProblem(JSON.stringify(withoutSeed), SNIPPET_TEXT)), /differs from the shipped snippet/);
+  const relabelled = snippetObject();
+  realmEntry(relabelled)["args"] = ["mcp", "--host", "claude"];
+  assert.match(String(museInstalledProblem(JSON.stringify(relabelled), SNIPPET_TEXT)), /differs/);
+  const extra = snippetObject();
+  (extra["mcpServers"] as Record<string, unknown>)["other"] = { type: "stdio", command: "other-cmd", args: [] };
+  assert.match(String(museInstalledProblem(JSON.stringify(extra), SNIPPET_TEXT)), /differs/);
+  assert.equal(museInstalledProblem("{not json", SNIPPET_TEXT), "the installed settings file is not JSON");
+  assert.equal(museInstalledProblem(SNIPPET_TEXT, "{not json"), "the shipped snippet is not a valid Muse settings document");
+});
+
+void test("40-03 museUninstallExpectation says the file goes only when nothing but the seed and the realm entry are in it", () => {
+  assert.equal(museUninstallExpectation(SNIPPET_TEXT), "file-removed");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, mcpServers: { realm: {} } })), "file-removed");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, mcpServers: { realm: {}, other: {} } })), "file-kept");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, theme: "dark", mcpServers: { realm: {} } })), "file-kept");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1 })), "file-kept");
+  assert.equal(museUninstallExpectation("[]"), "unreadable");
+  assert.equal(museUninstallExpectation("{not json"), "unreadable");
+});
+
+void test("40-03 countProcessesNamed counts the processes of a command name from /proc and is 0 for a name nobody runs", { skip: process.platform !== "linux" }, () => {
+  assert.equal(countProcessesNamed("rlh-no-such-command"), 0);
+  const own = readFileSync("/proc/self/comm", "utf8").trim();
+  assert.ok(countProcessesNamed(own) >= 1, "this test process counts under its own command name");
 });

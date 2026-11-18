@@ -66,8 +66,8 @@ The Support table reads the table: tier, integration kind, recipe kind (a host w
 | `zcode` | - | none | not run | gap: deferred host: no recipe exists, so no tier can run | the native config is owned by a GUI application and cannot be observed (OQ-25-03) |
 | `pi` | `test/host/wave2-json-recipes.test.ts` | `REALM_LIVE_PI=1`, floor 1.3.0 | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 | `muse-code` | `test/host/muse-code-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
-| `prime-agent` | `test/host/prime-agent-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
-| `grok-build` | `test/host/grok-build-recipe.test.ts` | none | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `prime-agent` | `test/host/prime-agent-recipe.test.ts` | `REALM_LIVE_PRIME_AGENT=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
+| `grok-build` | `test/host/grok-build-recipe.test.ts` | `REALM_LIVE_GROK_BUILD=1` | not run | none-defined: config-only host: no production tier is defined (OQ-25-09) | - |
 <!-- host-support-matrix:end -->
 
 ## Where to go next

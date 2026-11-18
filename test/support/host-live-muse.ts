@@ -6,10 +6,15 @@
 // Nothing here reads the process environment, reads a clock or starts a process at import time. The hermetic test is
 // test/integration/host-live-muse-helpers.test.ts; the gated test is test/integration/host-live-muse.test.ts.
 //
+// Since plan 40-03 the live test installs through the real `realm host install muse-code` and uses three more helpers: the comparison of
+// the installed file with the snippet document, the expectation of what uninstall leaves, and a count of processes by name.
+//
 // Exports: MUSE_OPT_IN, MUSE_BIN_VARIABLE, MUSE_RECORDED_VERSION, MUSE_PLUGIN_VALID_PATTERN, parseMuseVersion, museSettingsText,
-// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv.
+// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv, museInstalledProblem, museUninstallExpectation, countProcessesNamed.
 
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { HostVersionProbe } from "./host-live.js";
 import { isRecord } from "./omp-live.js";
@@ -174,4 +179,66 @@ export function museIsolatedEnv(root: string, pathValue: string): Record<string,
     LANG: "C.UTF-8",
     TERM: "dumb",
   };
+}
+
+// What the real recipe wrote against the shipped snippet: both parse to the same document (the snippet, the recipe and the live run are one
+// entry, 40-CONTEXT D-40-04). Undefined when they are equal, else one sentence.
+export function museInstalledProblem(installedText: string, snippetText: string): string | undefined {
+  let installed: unknown;
+  try {
+    installed = JSON.parse(installedText);
+  } catch {
+    return "the installed settings file is not JSON";
+  }
+  let snippet: unknown;
+  try {
+    snippet = JSON.parse(museSettingsText(snippetText));
+  } catch {
+    return "the shipped snippet is not a valid Muse settings document";
+  }
+  return isDeepStrictEqual(installed, snippet) ? undefined : "the installed settings document differs from the shipped snippet document";
+}
+
+// What `realm host uninstall muse-code` leaves of a settings file that holds the realm entry: the file is removed when nothing but the seed
+// (`schema_version`) and the realm entry would remain, and kept when the host or the operator put anything else in it. `unreadable` for text
+// that is not a JSON object.
+export function museUninstallExpectation(settingsText: string): "file-removed" | "file-kept" | "unreadable" {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(settingsText);
+  } catch {
+    return "unreadable";
+  }
+  if (!isRecord(parsed)) {
+    return "unreadable";
+  }
+  const extra = Object.keys(parsed).filter((key) => key !== "schema_version" && key !== "mcpServers");
+  const servers = parsed["mcpServers"];
+  if (extra.length > 0 || !isRecord(servers)) {
+    return "file-kept";
+  }
+  const others = Object.keys(servers).filter((name) => name !== "realm");
+  return others.length === 0 ? "file-removed" : "file-kept";
+}
+
+// The number of live processes whose command name (`comm`) is `name`, read from /proc; 0 where /proc does not exist. The live test compares the
+// count before and after a run: a host process the run left behind raises it.
+export function countProcessesNamed(name: string): number {
+  if (!existsSync("/proc/self/comm")) {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+    try {
+      if (readFileSync(join("/proc", entry, "comm"), "utf8").trim() === name) {
+        count += 1;
+      }
+    } catch {
+      // The process ended between the listing and the read.
+    }
+  }
+  return count;
 }

@@ -267,6 +267,43 @@ void test("ENF-04: Q10 has the migration subsection between the unlabelled hosts
   }
 });
 
+void test("HOSTID-03: the Q10 migration table tells an existing install of each of the three hosts the one command to run", () => {
+  const section = q10Section();
+  const migration = section.slice(section.indexOf("**Migrating to the enforced default.**"), section.indexOf("**Audit.**"));
+  const rows = migration.split("\n").filter((line) => line.startsWith("| "));
+  assert.ok(rows.length >= 8, `the migration table has its header, its delimiter and six rows: ${String(rows.length)} table lines`);
+  for (const phrase of [
+    "`realm host install muse-code`",
+    "`realm host install prime-agent`",
+    "`realm host install grok-build`",
+    "`muse mcp remove realm`",
+    "`prime-agent mcp remove realm`",
+    "`ambiguous_user_key`",
+    "`foreign-content`",
+    "`mcp_servers`",
+    "`mcpServers`",
+    "`profiles`",
+    "`realm host uninstall` removes only what the install wrote",
+  ]) {
+    assert.ok(migration.includes(phrase), `the migration table says: ${phrase}`);
+  }
+  const prose = proseOf(migration);
+  assert.ok(!/[<>]/.test(prose.replace(/^\|[- |]+\|$/gm, "")), "no raw angle token in the migration text outside code");
+});
+
+void test("HOSTID-03: each of the three snippet pages names the install command of its own id and no other host id in a launcher", () => {
+  const ids = ["muse-code", "prime-agent", "grok-build"] as const;
+  for (const id of ids) {
+    const page = read(`docs/hosts/snippets/${id}.md`);
+    assert.ok(page.includes(`realm host install ${id}`), `${id}: the page names its own install command`);
+    for (const other of ids.filter((candidate) => candidate !== id)) {
+      assert.ok(!page.includes(`--host ${other}`), `${id}: the page carries no launcher labelled ${other}`);
+    }
+    assert.ok(page.includes("`config-only`"), `${id}: the page states the tier`);
+    assert.ok(page.includes("GAP-40-01") || page.includes("GAP-34-01"), `${id}: the page names the gap row`);
+  }
+});
+
 void test("ENF-04: the migration steps are the five verbs in order", () => {
   const section = q10Section();
   const migration = section.slice(section.indexOf("**Migrating to the enforced default.**"), section.indexOf("**Audit.**"));
