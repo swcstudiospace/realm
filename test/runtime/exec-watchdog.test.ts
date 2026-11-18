@@ -1,17 +1,15 @@
 // watchdogWorkload (Phase 39, D-39-02, revised after the live proof) and the behaviour of the bash wrapper it returns. The live lab
 // found that inside the sandbox kill(2) on a process group is denied (EPERM), so coreutils `timeout` reaches only its direct child.
 // The wrapper therefore finds the exec's processes in /proc and signals each by pid. The second half of this file runs the exact
-// script on this host's bash against real process trees. To stay as strict as the sandbox, the tree tests load a BASH_ENV file that
-// makes the shell builtin `kill` refuse a group target (the `--` form and the pid 0 form) the way the sandbox does, so a wrapper that
+// script on this host's bash against real process trees. To stay as strict as the sandbox, the tree tests import an exported `kill`
+// function that makes the shell builtin `kill` refuse a group target (the `--` form and the pid 0 form) the way the sandbox does, so a wrapper that
 // used a group kill would fail here too. Linux only (it reads /proc), regular user, every fixed wait through scaledMs. Every process
 // a test starts is killed in t.after.
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test, type TestContext } from "node:test";
 import { watchdogWorkload } from "../../src/runtime/exec-watchdog.js";
 import { boundedWait, pollUntil } from "../support/timing.js";
@@ -182,32 +180,23 @@ function cleanUp(durations: readonly string[], mark?: string): void {
   }
 }
 
-function scratch(t: TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), "realm-watchdog-"));
-  chmodSync(dir, 0o755);
-  t.after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-  return dir;
-}
-
-// A BASH_ENV file that makes `kill` refuse a group target the way the sandbox's seccomp filter does (EPERM for a pid at or below
-// zero), and pass everything else to the builtin. Only bash reads BASH_ENV, so the dash shells in a tree are unaffected.
+// An exported bash function `kill` that refuses a group target the way the sandbox's seccomp filter does (EPERM for a pid at or
+// below zero) and passes everything else to the builtin. Every bash in a tree imports it from the environment, so a group kill in
+// the wrapper or in the workload fails here as it does in the sandbox; the dash shells in a tree are unaffected. The function is
+// exported through the environment, not through BASH_ENV: bash does not read BASH_ENV in every environment (a scrubbed one with no
+// SHLVL skips it), while an imported function does not depend on a file, a temporary directory or the user.
 const DENY_GROUP_KILL = [
-  "kill() {",
+  "() {",
   "  local a",
   '  for a in "$@"; do',
   '    if [[ $a == -- || $a == 0 ]]; then echo "kill: ($a): Operation not permitted" >&2; return 1; fi',
   "  done",
   '  builtin kill "$@"',
   "}",
-  "",
 ].join("\n");
 
-function denyGroupKillEnv(t: TestContext): NodeJS.ProcessEnv {
-  const file = join(scratch(t), "deny-group-kill.sh");
-  writeFileSync(file, DENY_GROUP_KILL);
-  return { ...process.env, BASH_ENV: file };
+function denyGroupKillEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, "BASH_FUNC_kill%%": DENY_GROUP_KILL };
 }
 
 interface RunOptions {
@@ -286,7 +275,7 @@ void test("a deadline ends a whole tree: background sleeps, a nested subshell, a
   t.after(() => {
     cleanUp(TREE_SECONDS, mark);
   });
-  const { done } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 4000, env: denyGroupKillEnv(t) });
+  const { done } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 4000, env: denyGroupKillEnv() });
   await pollUntil(treeRunning, "the whole tree is running", { timeoutMs: WAIT_MS, intervalMs: POLL_MS });
   assert.ok(processesHolding(mark).length >= 3, "the inner shells carry the mark while the tree runs");
   const finished = await boundedWait(done, "the wrapper ends the tree", WAIT_MS);
@@ -307,7 +296,7 @@ void test("an unrelated process outside the exec survives the sweep", async (t) 
   t.after(() => {
     cleanUp([], mark);
   });
-  const { done } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 2000, env: denyGroupKillEnv(t) });
+  const { done } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 2000, env: denyGroupKillEnv() });
   await pollUntil(treeRunning, "the tree is running", { timeoutMs: WAIT_MS, intervalMs: POLL_MS });
   assert.equal((await boundedWait(done, "the wrapper ends the tree", WAIT_MS)).code, 124);
   assert.equal(sibling.pid !== undefined && isRunning(sibling.pid), true, "the sibling is still running");
@@ -328,7 +317,7 @@ void test("a process that left the group with setsid keeps the token in its envi
     "( env -i setsid sleep 7115 </dev/null >/dev/null 2>&1 & )",
     "sleep 7114; wait",
   ].join("\n");
-  const { done } = runWrapper(t, ["bash", "-c", script], { deadlineMs: 3000, env: denyGroupKillEnv(t) });
+  const { done } = runWrapper(t, ["bash", "-c", script], { deadlineMs: 3000, env: denyGroupKillEnv() });
   await pollUntil(
     () => ["7112", "7113", "7114", "7115"].every((seconds) => processesWithArgv(["sleep", seconds]).length === 1),
     "the four sleeps are running",
@@ -370,7 +359,7 @@ void test("a workload that runs into the wrapper's deadline gives exit 124 after
   t.after(() => {
     cleanUp(["7111"]);
   });
-  const finished = await boundedWait(runWrapper(t, ["sleep", "7111"], { deadlineMs: 500, env: denyGroupKillEnv(t) }).done, "the wrapper times out", WAIT_MS);
+  const finished = await boundedWait(runWrapper(t, ["sleep", "7111"], { deadlineMs: 500, env: denyGroupKillEnv() }).done, "the wrapper times out", WAIT_MS);
   assert.equal(finished.code, 124);
   assert.ok(finished.elapsedMs >= 900, `the deadline is 1 s (500 ms plus the 500 ms margin): ${String(finished.elapsedMs)} ms`);
   await allGone("the sleeper", () => processesWithArgv(["sleep", "7111"]));
@@ -417,13 +406,22 @@ void test("a workload that ends before the wrapper first looks, and one that end
   assert.ok(performance.now() - started < 20_000, "sixty quick runs never wait for the deadline");
 });
 
-void test("the group-kill denial of the sandbox is reproduced by the BASH_ENV used above", (t) => {
-  const env = denyGroupKillEnv(t);
-  const denied = spawnSync("/usr/bin/bash", ["-c", "kill -0 -- 0"], { env, encoding: "utf8" });
-  assert.equal(denied.status, 1);
-  assert.match(denied.stderr, /Operation not permitted/);
-  const single = spawnSync("/usr/bin/bash", ["-c", "kill -0 $$"], { env, encoding: "utf8" });
-  assert.equal(single.status, 0, "a signal to one process still works");
+void test("the group-kill denial of the sandbox is reproduced by the exported kill function used above, in any environment", () => {
+  // The control: without the function a group signal works for this user, so the denial below is the function's doing.
+  const control = spawnSync("/usr/bin/bash", ["-c", "kill -0 -- 0"], { env: {}, encoding: "utf8" });
+  assert.equal(control.status, 0, "without the function a group signal is allowed");
+  // A scrubbed environment (no PATH, HOME, TMPDIR or SHLVL) and the full one both import the function.
+  for (const env of [{ "BASH_FUNC_kill%%": denyGroupKillEnv()["BASH_FUNC_kill%%"] }, denyGroupKillEnv()]) {
+    for (const group of ["kill -0 -- 0", "kill -0 -- -1", "kill -0 0", "kill -TERM -- 0"]) {
+      const denied = spawnSync("/usr/bin/bash", ["-c", group], { env, encoding: "utf8" });
+      assert.equal(denied.status, 1, group);
+      assert.match(denied.stderr, /Operation not permitted/, group);
+    }
+    const single = spawnSync("/usr/bin/bash", ["-c", "kill -0 $$"], { env, encoding: "utf8" });
+    assert.equal(single.status, 0, "a signal to one process still works");
+    const nested = spawnSync("/usr/bin/bash", ["-c", "/usr/bin/bash -c 'kill -0 -- 0'"], { env, encoding: "utf8" });
+    assert.equal(nested.status, 1, "a nested bash imports the function too");
+  }
 });
 
 void test("control: without the wrapper, killing only the shell (the local client) leaves the tree running", async (t) => {
