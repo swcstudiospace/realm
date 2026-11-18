@@ -42,7 +42,8 @@ async function startFixture(t: TestContext, mode: PolicyMode): Promise<{ base: s
     }
     rmSync(base, { recursive: true, force: true });
   });
-  const daemon = await startRealmDaemon({ stateDir: join(base, "realm"), workspace: join(base, "ws"), mode });
+  // The clients of this file are tokenless and the file is not about tokens, so the daemon runs with capabilityTokens off.
+  const daemon = await startRealmDaemon({ stateDir: join(base, "realm"), workspace: join(base, "ws"), mode, capabilityTokens: "off" });
   started.push(daemon);
   return { base, daemon };
 }
