@@ -2,7 +2,7 @@
 
 **Defined:** 2026-10-29
 **Core Value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Source:** `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` (the "Proposed change" of proposals 1 to 8 is the scope; each "Success measure" is the acceptance test) under the owner decisions D1 to D6 of 2026-10-29 in `.planning/MILESTONE-CONTEXT.md`. Research was skipped; the proposals and the findings documents beside them are the requirement basis.
+**Source:** `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` (the "Proposed change" of proposals 1 to 8 is the scope; each "Success measure" is the acceptance test) under the owner decisions D1 to D6 of 2026-10-29 in `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. Research was skipped; the proposals and the findings documents beside them are the requirement basis.
 
 All v3.0 requirements are hypotheses until shipped and verified.
 
@@ -194,6 +194,26 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **BOOTP-01**: Each wave 1 host that can run here (claude, codex; others named) is booted through its own CLI against the production stack, and Realm tools are listed or called, with results recorded
 - [x] **BOOTP-02**: Hosts that cannot be booted (missing CLI, no credentials, archived) have a named gap in docs/integration/host-plugin-gaps.md
 
+### v5.0 Cold attach, enforced capability tokens and evidence
+
+- [ ] **COLD-01**: `realm mcp` (`src/cli/stdio-host.ts`) answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete, so a host with a 30 s connect timeout connects on a cold start (closes GAP-31-04)
+- [ ] **COLD-02**: Until the session is ready, the realm is reported as not active (the existing status vocabulary) and every tool call is refused with the existing not-active refusal (fail closed); once ready, tools work on the same connection with no reconnect
+- [ ] **COLD-03**: The warm path does not regress (a warm attach answers as before) and the status and audit contracts are unchanged; tests assert the not-active window, the transition to ready and the refusal of calls in between
+- [ ] **COLD-04**: The claude, opencode and codex production tiers pass on the live stack from a cold start, with the warm-up (`realm up --workspace` first) removed from the test harness (`test/support/host-live.ts`); `GAP-31-04` is closed in `docs/integration/host-plugin-gaps.md` with the evidence
+- [ ] **ENF-01**: The default of `capabilityTokens.mode` is `enforce`; the schema (`src/core/policy.schema.json`), the defaults, `docs/policy-reference.md`, the README and the tests change together, and a policy file with no `capabilityTokens` key loads as enforce
+- [ ] **ENF-02**: Every client shipped in the repository (the stdio hosts, Omp, ACP and `realm mcp`) attaches and works under enforce with no policy edit; a test per client class proves it
+- [ ] **ENF-03**: The migration path is documented and visible: `"mode": "off"` opts out, `realm doctor` says what to do when a stale or unlabelled client is refused, and the refusal message names the cause and the fix
+- [ ] **ENF-04**: The default flip is a recorded breaking change: its commits carry `!` in the subject so the release notes list them, and the release note text and the migration notes are in the docs
+
+- [ ] **EVID-01**: The capability token tests run end to end as a non-root user on a host with `ptrace_scope` 1, and the result is recorded (the Phase 32 runs were as root)
+- [ ] **EVID-02**: The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process and its result is recorded either way, settling or leaving open the memory-read claim of the Phase 32 limits
+- [ ] **EVID-03**: A live enforce proof on the production stack: claude through the daemon with the host attached under enforce, and the audit lines are verified to carry the host and the kid; the evidence is kept outside the repository and cited by date
+
+- [ ] **V1LIVE-01**: The v1.0 live items this host can run are re-verified, each with dated evidence kept outside the repository and recorded in the phase, or carried with a named reason: the doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, Omp responsiveness
+- [ ] **V1LIVE-02**: The Anda live handshake and licence items from the v1.0 list are closed as dropped by owner decision D-27-01, and the v1.0 open-item list in the planning record is reconciled so that no item is left without a status
+
+- [ ] **SPEC-01**: `docs/specs/realm-spec.xml` no longer describes the Anda bridge, and the statements that require `andaUrl` or the degraded state are removed or retired; all other spec content is unchanged; the pull request records the owner's instruction of 2026-11-18 and the reason (an owner-directed edit of the spec)
+
 ## Carried from v2.0 (not in this milestone)
 
 - [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected (Accepted limitation, Phase 27 disposition, 2026-11-17: the requirement text is unmet; owner-confirmed approximation of 2026-10-23)
@@ -248,6 +268,8 @@ These requirements were completed in v1.0 and v2.0 and bind every phase of v3.0.
 ## Traceability
 
 v3.0 requirements: 52 total, 52 mapped
+
+v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Planned
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
@@ -374,6 +396,20 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | CAPT-09 | Phase 32 | Complete |
 | BOOTP-01 | Phase 31 | Complete |
 | BOOTP-02 | Phase 31 | Complete |
+| COLD-01 | Phase 33 | Planned |
+| COLD-02 | Phase 33 | Planned |
+| COLD-03 | Phase 33 | Planned |
+| COLD-04 | Phase 33 | Planned |
+| ENF-01 | Phase 34 | Planned |
+| ENF-02 | Phase 34 | Planned |
+| ENF-03 | Phase 34 | Planned |
+| ENF-04 | Phase 34 | Planned |
+| EVID-01 | Phase 35 | Planned |
+| EVID-02 | Phase 35 | Planned |
+| EVID-03 | Phase 35 | Planned |
+| V1LIVE-01 | Phase 36 | Planned |
+| V1LIVE-02 | Phase 36 | Planned |
+| SPEC-01 | Phase 37 | Planned |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
 | ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |

@@ -16,23 +16,19 @@ What exists, and what was verified live on the production stack (the realm accou
 
 Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
 
-## Current Milestone: v3.0 Containment by Default
+## Current Milestone: v5.0 Cold attach, enforced capability tokens and evidence
 
-**Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and the files in it survive crashes; an operator can see what happened, prove the audit log is intact, and ship the product with provenance and a rollback path.
+**Goal:** A host with a 30 second connect timeout connects to `realm mcp` on a cold start; capability tokens are on by default (a breaking change with a migration path); the token claims are backed by a non-root run, a memory-read probe and a live enforce proof; the v1.0 live items this host can run are re-verified; and the product spec no longer describes the removed Anda bridge. Release line 0.5.x.
 
 **Target features:**
 
-- Scripted-provider end-to-end harness and the Omp enforcement spike; OMP-05 recorded complete on that evidence (owner decision D2)
-- Quality ratchet: dependency audit and Dependabot, coverage floors, de-flaked timing tests, property tests and a scheduled mutation run
-- Crash-safety pack: orphan temp-file sweep, audit reconciliation, durable record deletion, real-SIGKILL tests, TD-01 and TD-04
-- Zero-config onboarding (`realm init`, `doctor --fix`, roots in `config.json`, an allowlisted daemon environment) and fail-closed as the default policy mode (D4)
-- Omp tools backed by the sandbox, with the built-in `write`, `edit` and `bash` removed or blocked in fail-closed mode (D3)
-- Observability and a tamper-evident audit log: structured logs with correlation ids, local metrics, a hash chain with `realm audit verify`, and a distinct code for gateway or driver loss (TD-05)
-- Per-project sandboxes: one session per project workspace
-- Resume and checkpoint: re-adoption of a surviving sandbox, a session-owned scratch volume, workspace snapshots and restore
-- Release pipeline hardening: job split, build provenance attestation, rollback workflow, changelog filter (D6)
+- Cold attach (Phase 33): `realm mcp` answers the MCP handshake before `ensure` and `up` complete, reports the realm as not active and refuses tool calls until the session is ready; closes GAP-31-04 and re-proves claude, opencode and codex cold
+- Capability tokens enforce by default (Phase 34): `capabilityTokens.mode` defaults to `enforce`, with an opt-out, doctor guidance, a clear refusal message and every in-repo client attaching
+- Capability token evidence (Phase 35): a non-root run on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe, and a live enforce proof with claude through the daemon
+- Live re-verification of the v1.0 open items (Phase 36): each item this host can run is re-verified with dated evidence or carried with a named reason; the Anda items are closed as dropped (D-27-01)
+- Spec update (Phase 37): `docs/specs/realm-spec.xml` drops the Anda bridge, as an owner-directed edit of 2026-11-18
 
-The owner decisions D1 to D6 (2026-10-29) are recorded in `.planning/MILESTONE-CONTEXT.md`. The scope source is `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/` (`IMPROVEMENT-PROPOSALS.md`), whose defaults for D1 to D6 those answers supersede. The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (12 to 20) in `.planning/ROADMAP.md`.
+The owner decisions of 2026-11-18 are recorded in `.planning/MILESTONE-CONTEXT.md`; the decisions D1 to D6 of v3.0 (2026-10-29) are archived in `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (COLD, ENF, EVID, V1LIVE, SPEC) are in `.planning/REQUIREMENTS.md` and the phases (33 to 37) in `.planning/ROADMAP.md`.
 
 **Carried, not in this milestone** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted limitation, Phase 27 disposition of 2026-11-17; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dropped by owner decision D-27-01, 2026-11-17), PRD-DRV-01 (open: its amendment awaits the owner's confirmation, except as far as Phase 18 needs the driver's workspace handling) and UI-01 (an accepted limitation). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
 
@@ -148,4 +144,4 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-10-29 after starting milestone v3.0*
+*Last updated: 2026-11-18 after starting milestone v5.0*

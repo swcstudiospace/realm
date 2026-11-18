@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v4.0",
+  "milestone": "v5.0",
   "phases": [
     {
       "number": "1",
@@ -197,6 +197,31 @@
       "number": "32",
       "name": "Capability tokens for stdio hosts",
       "status": "complete"
+    },
+    {
+      "number": "33",
+      "name": "Cold attach",
+      "status": "pending"
+    },
+    {
+      "number": "34",
+      "name": "Capability tokens enforce by default",
+      "status": "pending"
+    },
+    {
+      "number": "35",
+      "name": "Capability token evidence",
+      "status": "pending"
+    },
+    {
+      "number": "36",
+      "name": "Live re-verification of the v1.0 open items",
+      "status": "pending"
+    },
+    {
+      "number": "37",
+      "name": "Spec update",
+      "status": "pending"
     }
   ],
   "next": {
@@ -204,5 +229,5 @@
     "label": "Show progress",
     "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-18T02:47:31.058Z"
+  "updated_at": "2026-11-18T04:10:00.000Z"
 }

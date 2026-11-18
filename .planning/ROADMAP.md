@@ -6,6 +6,8 @@ Realm moves from frozen contracts and documentation gates to a verified sandbox 
 
 Milestone v3.0, Containment by Default, makes the sandbox the place where a model's file mutations and commands run by default, and makes the sandbox and its files survive crashes and be observable. It has nine phases, 12 to 20, in three lanes that share no mutable state and may run in parallel; inside a lane the order is strict. The Omp lane (12, 15, 16) proves by a scripted-provider harness what Omp's extension API can enforce, adds zero-config onboarding with fail-closed as the default policy mode, and registers Realm's tools in Omp so that its built-in `write`, `edit` and `bash` are replaced or blocked in fail-closed mode. The runtime lane (14, 17, 18, 19) adds crash safety, a tamper-evident audit log with structured logs and metrics, one sandbox per project, and resume and checkpoint. The pipeline lane (13, 20) adds the quality and supply-chain ratchet, then splits and hardens the release job. Live runs on the shared realm stack are serialized, because the startup reap is account-wide.
 
+Milestone v5.0, Cold attach, enforced capability tokens and evidence, makes `realm mcp` answer the MCP handshake before the sandbox is up so that hosts with a 30 second connect timeout connect on a cold start (Phase 33), turns capability tokens on by default as a breaking change with a migration path (Phase 34), backs the token claims with a non-root run, a memory-read probe and a live enforce proof (Phase 35), re-verifies the v1.0 live items this host can run (Phase 36), and removes the Anda bridge from the product spec by owner direction (Phase 37). It has five phases, 33 to 37, on release line 0.5.x; 34 depends on 33 and 35 on 34, while 36 and 37 are independent.
+
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
 ## Milestones
@@ -14,6 +16,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
 - 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
 - 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
+- 🚧 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (in progress, release line 0.5.x)
 
 ## Phases
 
@@ -210,6 +213,16 @@ Plans:
 - [x] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build. (completed 2026-11-18)
 - [x] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded. (completed 2026-11-18)
 - [x] **Phase 32: Capability tokens for stdio hosts** - Per-session, per-host HMAC capability tokens minted by the daemon and carried by stdio hosts, verified before dispatch and fail-closed together with policy, with per-host profiles, audit attribution, key rotation and a doctor check, and an honest record of what they do not stop (owner override of the Phase 30 outcome, 2026-11-17). (completed 2026-11-18)
+
+### 🚧 v5.0 Cold attach, enforced capability tokens and evidence (In progress, release line 0.5.x)
+
+**Milestone Goal:** `realm mcp` connects on a cold start, capability tokens are enforced by default with a migration path, the token claims have live and non-root evidence, the v1.0 live items this host can run are re-verified, and the product spec no longer describes the Anda bridge.
+
+- [ ] **Phase 33: Cold attach** - `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active until the session is ready, so hosts with a 30 s connect timeout connect on a cold start; tool calls fail closed until ready; closes GAP-31-04 and re-proves claude, opencode and codex cold.
+- [ ] **Phase 34: Capability tokens enforce by default** - `capabilityTokens.mode` defaults to `enforce` (a breaking change: stale or unlabelled clients are refused), with a documented opt-out, doctor guidance, a clear refusal message, every in-repo client attaching, and docs and tests updated.
+- [ ] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid.
+- [ ] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01.
+- [ ] **Phase 37: Spec update** - `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state, as an owner-directed edit of 2026-11-18 recorded in the pull request; all other spec content is kept.
 
 ## Phase Details
 
@@ -615,6 +628,11 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 30. Capability token spike | 2/2 | Complete    | 2026-11-18 |
 | 31. Production-stack boot rehearsals for wave 1 hosts | 2/2 | Complete    | 2026-11-18 |
 | 32. Capability tokens for stdio hosts | 3/3 | Complete    | 2026-11-18 |
+| 33. Cold attach | 0/0 | Not started | - |
+| 34. Capability tokens enforce by default | 0/0 | Not started | - |
+| 35. Capability token evidence | 0/0 | Not started | - |
+| 36. Live re-verification of the v1.0 open items | 0/0 | Not started | - |
+| 37. Spec update | 0/0 | Not started | - |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -758,3 +776,76 @@ Plans:
 - [x] 32-01-PLAN.md: token, keyring and rotation, mapping and profiles, policy key, redaction (wave 1)
 - [x] 32-02-PLAN.md: control frame, gate, audit attribution, client, stdio and Omp hosts, seeded wire matrix (wave 2)
 - [x] 32-03-PLAN.md: realm host token, doctor item, recipe guard, docs and decision record (wave 3)
+
+### Phase 33: Cold attach
+
+**Goal:** `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active, so a host with a 30 s connect timeout connects on a cold start; tool calls fail closed until the session is ready and then work without a reconnect (closes GAP-31-04).
+**Depends on:** Phase 32
+**Requirements**: COLD-01, COLD-02, COLD-03, COLD-04
+**Success Criteria** (what must be TRUE):
+  1. A `realm mcp` started against a cold stack answers `initialize`, `server/discover` and `tools/list` while `up` is still running, in well under the host's 30 s connect timeout, and the reported status is not active (existing vocabulary).
+  2. A tool call made before the session is ready is refused with the existing not-active refusal and does not touch the sandbox; the same connection serves tool calls once the session is ready, with no reconnect.
+  3. The warm path, the status labels and the audit lines are unchanged, shown by the existing contract and smoke tests plus new tests for the not-active window and the transition.
+  4. The claude, opencode and codex production tiers pass from a cold start on the live stack with the warm-up removed from the test harness, and `GAP-31-04` is closed with that evidence.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 33 to break down)
+
+### Phase 34: Capability tokens enforce by default
+
+**Goal:** The default of `capabilityTokens.mode` becomes `enforce` as a recorded breaking change: stale or unlabelled clients are refused with a clear message, a documented policy value opts out, doctor says what to do, and every client shipped in the repository attaches and works.
+**Depends on:** Phase 33
+**Requirements**: ENF-01, ENF-02, ENF-03, ENF-04
+**Success Criteria** (what must be TRUE):
+  1. A policy file with no `capabilityTokens` key, and a missing policy file, load with `mode` `enforce`; the schema, the defaults, `docs/policy-reference.md` and the README agree, and the tests that relied on `off` are updated.
+  2. The stdio hosts, Omp, ACP and `realm mcp` each attach and complete a tool call under the default, with no policy edit.
+  3. A stale or unlabelled client is refused with a message that names the cause and the fix; `"mode": "off"` restores the old behaviour; `realm doctor` shows the guidance.
+  4. The change ships under commits whose subjects carry `!`, and the migration notes and release note text are in the docs.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 34 to break down)
+
+### Phase 35: Capability token evidence
+
+**Goal:** The capability token claims are backed by evidence: the token tests pass end to end as a non-root user on a `ptrace_scope` 1 host, the memory-read probe has a recorded result, and enforce is proved live on the production stack with claude through the daemon.
+**Depends on:** Phase 34
+**Requirements**: EVID-01, EVID-02, EVID-03
+**Success Criteria** (what must be TRUE):
+  1. The token test suites run end to end as a non-root user on a host whose `ptrace_scope` is 1, and the pass or fail result with the host facts is recorded.
+  2. The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process, and its result (read succeeded or refused) is recorded in the limits either way.
+  3. A live run on the production stack attaches claude through the daemon under enforce, a tool call succeeds, and the audit lines carry the host and the kid, verified by `realm audit verify` and a read of the lines.
+  4. Each piece of live evidence is dated and kept outside the repository, and the phase record cites it.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 35 to break down)
+
+### Phase 36: Live re-verification of the v1.0 open items
+
+**Goal:** Each v1.0 live item that this host can run is re-verified with dated evidence outside the repository, or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01.
+**Depends on:** Phase 32
+**Requirements**: V1LIVE-01, V1LIVE-02
+**Success Criteria** (what must be TRUE):
+  1. The doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, and Omp responsiveness each have a recorded status: re-verified with a dated run, or carried with a named reason.
+  2. No item of the v1.0 open list is left without a status; the Anda live handshake and licence items read dropped by D-27-01.
+  3. The live evidence is kept outside the repository and the phase verification cites it by date and command.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 36 to break down)
+
+### Phase 37: Spec update
+
+**Goal:** `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state; this is an owner-directed edit of the spec (instruction of 2026-11-18; reason: the bridge was removed in v4.0 under D-27-01), and all other spec content is kept.
+**Depends on:** Phase 32
+**Requirements**: SPEC-01
+**Success Criteria** (what must be TRUE):
+  1. The spec has no statement that describes the Anda bridge, requires `andaUrl`, or requires the degraded state, and the references to them in the spec's other sections are removed or retired.
+  2. A diff of the spec shows only those removals and retirements; every other statement is unchanged.
+  3. The pull request body records the owner's instruction of 2026-11-18 and the reason.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 37 to break down)
