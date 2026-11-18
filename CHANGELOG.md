@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-11-18
+
+### Maintenance
+- test(capability): scripted provider and live enforce proof harness, EVID-03 pins (35-03 code) (#178) (995170a)
+
 ## [0.5.6] - 2026-11-18
 
 ### Documentation
