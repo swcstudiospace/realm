@@ -696,3 +696,34 @@ Status: decided 2026-11-17 by the owner, recorded before the code change that Ph
 **What it does not change.** D32-1 and its accepted residuals (R-32-01 and the others): a process of the same user that can read the key file or run the attach step is not stopped, whatever the memory result is. The attach is unauthenticated, so the lines attribute a call to the host label the client named. An enrollment secret for the attach stays deferred.
 
 **Where it is recorded.** `docs/integration/capability-token-evidence.md`, `docs/integration/mcp.md` Q10 (the evidence limits), and section 10 of `docs/integration/capability-token-spike.md`.
+
+## Evidence debt (Phase 42, 2026-11-18)
+
+**D42-1 (2026-11-18). The breaking-change convention is checked by a script; the ENF-04 partial of Phase 34 is closed as a process gap.** Engineering record, under the owner's decision D-v6-6. The guard is `scripts/check/breaking-change-guard.mjs` (`npm run check:breaking`), with its tests in `scripts/check/breaking-change-guard.test.mjs`. Phase 42 changes no source file and no policy default.
+
+**What it checks (From code).** A pull request is breaking when at least one of four signals holds: `commit-marker` (a non-merge commit subject with `!` after the type and scope), `commit-footer` (a commit body line starting `BREAKING CHANGE: ` or `BREAKING-CHANGE: ` and a value), `body-footer` (the same line in the pull request body) and `declared` (the ticked Breaking change line of the pull request template). With no signal the result is `ok` and nothing else is checked. With a signal, the landing decides the rule: `merge` needs a marked commit and a marker on every footer commit (`commit-unmarked`); `squash` needs the marker in the pull request title (`title-unmarked`); `unknown`, the default, needs both. A title that is needed and not supplied is `title-not-supplied`, and a range that cannot be read is `range-unavailable`; these two are unproven findings, the others are violations. Report-only is the default and exits 0 whatever the findings. With `--enforce` (or `REALM_BREAKING_GUARD=enforce`) a violation or an unproven finding exits 1, and a usage or input error exits 2 in both modes. The header pattern is the changelog generator's, copied, and a test builds a repository, runs `generateChangelog` and asserts that the guard's marker decision for each subject equals whether the generator kept the commit.
+
+**What it proves, and what it cannot.** It proves that, for a pull request that is breaking by a marked commit, a footer or the template declaration, the title and commit subjects it is given carry the marker in the way the landing needs. It cannot do five things.
+- It cannot detect a breaking change nobody marked or declared; it does not read intent from a diff.
+- It checks the inputs of the merge, not the merge: the merge method is the ship flow's, GitHub can pre-fill a squash title from the commit subject and the committer can edit it, so the commit that reaches `main` is not checked and the ship flow must squash with the pull request title.
+- Report-only is not enforcement: where nothing runs it with `--enforce` it fails nothing, and `main` has no branch protection, so even a red check is read by the ship flow and not enforced by GitHub.
+- The history stays as it was: the published 0.5.x notes and `CHANGELOG.md` are not rewritten.
+- A test that was skipped is not-run, never a pass.
+
+**The replay (Observed, 2026-11-18).** The guard was run with `--enforce` on the recorded history of PR 162 (the flip, landed as a merge commit) and PR 168 (squashed), reading local git only. The range `5baf9ae..df6ecec` holds two commits: `2637d9a`, the flip, whose subject carries the marker and whose body has a `BREAKING CHANGE:` footer, and `df6ecec`, a test-only commit with no marker. The range `ad10c08..e4f7bea` is the one squash commit of PR 168.
+
+| Case | Landing | Title | Outcome | Exit | Finding |
+| --- | --- | --- | --- | --- | --- |
+| PR 162 range | merge | marked | ok, signals `commit-marker (1)`, `commit-footer (1)` | 0 | none |
+| PR 162 range | squash | unmarked | violations | 1 | `title-unmarked` |
+| PR 162 range | merge | unmarked | ok | 0 | none |
+| PR 168 squash commit | squash | the real title, no marker | ok, signals none | 0 | none |
+| PR 168 squash commit with the template line ticked | squash | the real title | violations, signal `declared` | 1 | `title-unmarked` |
+| PR 168 squash commit with the template line ticked | merge | the real title | violations, signal `declared` | 1 | `commit-unmarked` |
+| PR 168 squash commit with the template line ticked | unknown | the real title | violations, signal `declared` | 1 | `commit-unmarked`, `title-unmarked` |
+
+PR 168 passes with no signal. That is the observed limit: its three commits carried no marker and its title carried none, and the guard cannot see a breaking change nobody marked or declared. The ticked variant shows what the template line adds: with the declaration the same range fails under every landing. The flip commit counts as both a marked commit and a footer commit, so its range reports `commit-footer (1)` next to `commit-marker (1)`; the outcomes are as expected.
+
+**Wiring and CI state.** Wired: `npm run check:breaking`, the text in `AGENTS.md` and `CONTRIBUTING.md`, the Breaking change line of the pull request template, and the tests, which `npm run test:scripts` runs in CI on Node 22.x and 24.x. It is not part of `check:gates` or `check:docs`: CI checks out one commit with no pull request context (From code, `.github/workflows/ci.yml`), so a guard there would either always report `range-unavailable` and exit 0, or fail every run. Enforcement in CI needs history (`fetch-depth: 0`) and a run when a title is edited (the `edited` activity type), both under `.github/workflows/**`, which a person reviews. The exact change is proposed in plan 42-02 of Phase 42 (options A, a new workflow file; B, a step and the activity type in `ci.yml`; C, none) and is not applied. The owner's answer is not recorded here yet. Until it is, CI does not run the guard, and the enforcing path is the ship flow running `node scripts/check/breaking-change-guard.mjs --enforce --base BASE --head HEAD --title TITLE --merge-method METHOD` before the merge, a user configuration outside this repository.
+
+**ENF-04.** The Phase 34 partial is closed for pull requests opened after the guard, as a process gap: a marked or declared breaking change cannot reach the merge with its marker missing from the title or from every commit without a report, and an enforce run fails on it. It is a historical fact for PR 168: the 34-03 changes are not individually flagged in the 0.5.x release notes, no follow-up commit or note is added, and those notes are not rewritten (Inference: a follow-up commit would only add a misleading entry to a later release).
