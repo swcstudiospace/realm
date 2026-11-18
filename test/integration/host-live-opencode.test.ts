@@ -7,7 +7,7 @@
 //   C  `opencode mcp list` prints the realm row and launches `realm mcp --host opencode` (E-O2)
 //   D  an opencode.jsonc beside it (comment, trailing comma, a server `other`): both listed, its bytes untouched by install and uninstall (E-O3)
 //   E  the V2 shape (second config): install adds mcp.realm beside mcp.servers and both are listed (E-O6)
-//   F  uninstall removes the entry and the file it created
+//   F  after the host ran, uninstall removes only the realm entry: the host-added $schema and the host-created .gitignore stay; a run without the host in between removes the file
 // A V2 build (a dist-tag `next` or `dev` binary named by REALM_OPENCODE_BIN) is a valid run of the same file and answers OQ-24-02.
 //
 // Production tier (the validator gate plus the production prerequisites): `opencode mcp list` is OpenCode's own health check, a real MCP
@@ -76,7 +76,7 @@ function mentions(text: string, server: string): boolean {
 }
 
 void test(
-  "opencode validator: `opencode mcp list` parses and launches the recipe's entry, an opencode.jsonc beside it is untouched, and uninstall removes only what install created",
+  "opencode validator: `opencode mcp list` parses and launches the recipe's entry, an opencode.jsonc beside it is untouched, and uninstall removes only the realm entry",
   { skip: validator.skip, ...testTimeout(1_200_000) },
   async (t) => {
     t.diagnostic(hostVersionNote("opencode", validator));
@@ -127,13 +127,41 @@ void test(
     const both = await listServers(rig, "opencode mcp list with opencode.jsonc");
     assert.ok(mentions(both.text, "realm") && mentions(both.text, "other"), `opencode mcp list must list realm and other: ${describeRun(both.result)}`);
 
-    // F: uninstall removes the entry and the file it created; the jsonc stays as it was.
+    // F: the host ran (`opencode mcp list` writes {"$schema": ...} into opencode.json and creates a .gitignore beside it; observed with
+    // 1.19.5). Uninstall removes only the realm entry: the host-added $schema key, the file it lives in and the host-created .gitignore
+    // stay as the host left them, and the jsonc stays as it was. The file is removed only when the host never touched it (the next test).
+    const gitignore = join(dir, ".gitignore");
+    const gitignoreHash = fileSha256(gitignore);
+    assert.ok(gitignoreHash !== null, "opencode mcp list creates a .gitignore beside opencode.json");
+    const hostWrote = jsonObjectAt(file);
+    assert.ok("$schema" in hostWrote, `opencode mcp list adds $schema to opencode.json: keys ${Object.keys(hostWrote).join(", ")}`);
     const removed = cliJson(await rig.realm(["uninstall", "opencode"]), "realm host uninstall opencode");
     assert.equal(removed["status"], "removed", JSON.stringify(removed));
-    assert.equal(existsSync(file), false, "uninstall removes the file install created");
+    assert.equal(existsSync(file), true, "uninstall leaves the file the host also wrote to");
+    const left = jsonObjectAt(file);
+    assert.equal("mcp" in left, false, "uninstall removed the realm entry and the mcp section it alone held");
+    assert.deepEqual(left, { $schema: hostWrote["$schema"] }, "uninstall leaves the host-added keys untouched");
+    assert.equal(fileSha256(gitignore), gitignoreHash, "uninstall leaves the host-created .gitignore untouched");
     assert.equal(fileSha256(jsonc), jsoncHash, "uninstall must not touch opencode.jsonc");
     assert.notEqual((await hostStatusOf(rig, "opencode"))["status"], "installed");
 
+    assert.equal(fileSha256(REAL_OPENCODE_JSON), realBefore, "the operator's real opencode.json must be unchanged");
+  },
+);
+
+void test(
+  "opencode validator: without the host running between install and uninstall, uninstall removes the file install created",
+  { skip: validator.skip, ...testTimeout(600_000) },
+  async (t) => {
+    const realBefore = fileSha256(REAL_OPENCODE_JSON);
+    const rig = rigFor(t);
+    const file = join(rig.path("config", "opencode"), "opencode.json");
+    assert.equal(cliJson(await rig.realm(["install", "opencode"]), "realm host install opencode")["status"], "installed");
+    assert.equal(existsSync(file), true, "install created the file");
+    const removed = cliJson(await rig.realm(["uninstall", "opencode"]), "realm host uninstall opencode");
+    assert.equal(removed["status"], "removed", JSON.stringify(removed));
+    assert.equal(existsSync(file), false, "no host touched the file, so uninstall removes the file install created");
+    assert.notEqual((await hostStatusOf(rig, "opencode"))["status"], "installed");
     assert.equal(fileSha256(REAL_OPENCODE_JSON), realBefore, "the operator's real opencode.json must be unchanged");
   },
 );

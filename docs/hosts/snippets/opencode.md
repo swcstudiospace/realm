@@ -87,6 +87,10 @@ is not seen by Realm. If the entry is deleted or edited by hand, `realm host sta
 `realm host uninstall opencode` removes only what Realm still owns (a clean no-op when nothing remains). No OpenCode
 remover was exercised.
 
+### What OpenCode itself writes (observed 2026-11-17, opencode 1.19.5)
+
+`opencode mcp list` is not read-only. Run against the config directory, it writes `{"$schema": "https://opencode.ai/config.json"}` into `opencode.json` (adding the key beside the `mcp` section the recipe wrote, or creating the file when absent) and creates a `.gitignore` (63 bytes) beside it. Realm owns only its `mcp.realm` entry, so after the host has run, `realm host uninstall opencode` removes the realm entry (and the `mcp` section when the entry was all it held) and leaves the file holding only `$schema` (51 bytes) and the host-created `.gitignore` as the host left them. The file is removed only when the host never touched it, for example when uninstall follows install with no OpenCode command in between. Also expected: with the stub `realm` of the validator tier, which exits at once, `opencode mcp list` prints `realm failed: MCP error -32000: Connection closed`; the validator test checks the row and the launched argv, not a connected state.
+
 ## Project-level configuration and shadowing
 
 OpenCode loads a project `opencode.json` (or `.jsonc`) and `.opencode/` from the project, and per its documentation a
