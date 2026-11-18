@@ -4,6 +4,13 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-11-18
+
+### Documentation
+- docs(milestone): complete and archive v5.0 (phases 33 to 37), audit, bookkeeping, AGENTS.md status (#185) (1f4d1e5)
+- docs(phase-36): OI-13 accepted (Q11 stdin trust boundary); OI-11 loaded-host result (#184) (1528fb6)
+- docs(phase-35): close phase 35, capability token evidence (#183) (bb4d021)
+
 ## [0.5.8] - 2026-11-18
 
 ### Documentation
