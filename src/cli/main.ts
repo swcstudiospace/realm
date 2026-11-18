@@ -59,7 +59,7 @@ export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "a
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint|host> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|status|down|metrics [--workspace <absolute path>]; realm mcp|acp [--workspace <absolute path>] [--host <id>] [--reattach]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>; realm host <list|detect|status|install|uninstall> [<host>] [--dry-run] [--config-home <absolute path>])";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint|host> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|status|down|metrics [--workspace <absolute path>]; realm mcp|acp [--workspace <absolute path>] [--host <id>] [--reattach]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>; realm host <list|detect|status|install|uninstall> [<host>] [--dry-run] [--config-home <absolute path>]; realm host token <status|rotate> [--revoke-previous])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
 

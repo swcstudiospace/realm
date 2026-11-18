@@ -21,8 +21,8 @@ import { HOST_IDS, type HostId } from "../../src/host/types.js";
 import { assertProperty } from "../support/property.js";
 
 // The seeded refusal matrix (CAPT-02, D-32-13 item 1). Rows are ported from the Phase 30 prototype's E1
-// (30-01-SUMMARY, scripts/spike/capability-token/run.mjs), with its host-binding rows replaced: a payload with a
-// host outside HOST_IDS is bad-payload, and there is no wrong-host stage.
+// (docs/integration/capability-token-spike.md, section 5, where the experiment results are recorded inline), with its
+// host-binding rows replaced: a payload with a host outside HOST_IDS is bad-payload, and there is no wrong-host stage.
 
 const NOW = 1_700_000_000;
 const KEY = randomBytes(KEY_BYTES);

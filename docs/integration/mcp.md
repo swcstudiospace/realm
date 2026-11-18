@@ -161,6 +161,56 @@ Host dependence. What a host does with the hints (auto-approve, prompt, use in a
 
 Checks. `test/mcp/annotations.test.ts` (the pins against the frozen contract, the behaviour and 93 mutants), `test/mcp/server.test.ts` (both eras on the wire and the hostile-argument test), `scripts/check/mcp-smoke.test.mjs` (90 seeded faults of the gate), `test/docs/tool-annotations-doc.test.ts` (this table equals the pins) and `npm run check:mcp`, which checks the title and annotations of the built server in both eras and, when no daemon can start, accepts only the fail-closed attach refusal; in that case the annotation checks are proven by the script tests alone. The research record's observation "no tool annotations" (`docs/integration/anda-replacement-research.md`) is closed by Phase 29.
 
+### Q10. Capability tokens
+
+With capability tokens on, a process of the same user that can read the token or the key file is not stopped. For the same reason a model with a native shell in its host is such a process (the Bash tool of Claude Code is one), so for that model the token changes nothing. The token is a signed label that is verified on every call, not an authentication of the host: the daemon cannot tell the real host from a process that says it is that host, so a same-user process can attach as any host and read the key file to mint any token. The default is off.
+
+**What the token gives.** Three things, each with its scope.
+
+- Per-host least privilege. A host whose profile is read-only has `write`, `exec` and `retry` refused before the dispatcher runs, for every caller that reaches the daemon with that host's token. Without the token every host has the same six capabilities and policy cannot tell hosts apart.
+- Verified attribution. Every call made with a token records the verified `host` and the key id (`kid`) on its audit lines, and the audit chain covers both fields. Two hosts on one workspace share one session and one audit file; the token is what tells a read from one and a write from the other.
+- Resistance to a caller that can only speak through the host's MCP tools, such as a prompt-injected model with no shell. The token lives only in the memory of the `realm mcp` process that attached; it is in no recipe, host config, environment variable, argument vector or file, so such a caller cannot read it and cannot obtain the profile of a host it is not.
+
+It gives no defence against a same-user reader of the token, the process environment, process memory or `keys.json`; no identity of the model or the prompt (a token names a host install); no protection of the sandbox (the workload never receives the token, the key or the socket, and containment stays with the sandbox and the dispatcher); and nothing for an in-process host.
+
+**Delivery decision.** The daemon mints the token when the host process attaches (the `capability-attach` control request), and the host process keeps it in memory only. Two other channels were rejected. D1, writing the token into the host recipe as an environment member at install time, cannot be per session (the session id derives from a workspace path and a host config names none), puts a standing secret in a file the host's own tools and any same-user process can read, and would add an `env` member to the manifest, change every recipe writer and receipt, and need a host config format that takes an environment block (not checked per host). D2, a 0600 token file under the state directory read at start, leaves a standing secret at rest that a same-user process reads (measured in the spike, E3 and E4). The recipes stay unchanged: the 18 default manifests and the 15 install recipes carry no token, and `test/host/recipes-bare.test.ts` fails if one ever does. An existing host works the day the daemon enforces, with no install step.
+
+**The policy key.** `capabilityTokens` in the policy file has three members and the default is off: with `off` no token is minted or checked, no audit line changes, and every existing install behaves as before. `enforce` turns the feature on for every host and every session of the daemon (the policy is one document per daemon, so there is no per-workspace opt-in). `ttlSeconds` is the life of one token; the client renews a token 120 seconds before it expires.
+
+| Member | Values | Default |
+| --- | --- | --- |
+| `mode` | `off`, `enforce` | `off` |
+| `ttlSeconds` | `60` to `86400` | `3600` |
+| `profiles` | an object from host id to a list of capabilities | `{}` |
+| `profiles` keys | `omp`, `claude`, `opencode`, `kilo`, `codex`, `copilot`, `antigravity`, `cursor`, `windsurf`, `augment`, `trae`, `qwen`, `hermes`, `codebuddy`, `cline`, `kimi`, `kimi-code`, `zcode`, `pi` | none |
+| `profiles` values | `daemon.attach`, `fs.read`, `fs.write`, `fs.list`, `exec.argv`, `exec.shell` | none |
+
+**Token AND policy.** A call is admitted only if the token verifies for this session and grants the capability the call needs, and then the unchanged dispatcher runs its own gates. The token can only narrow what the policy grants: a token that carries `exec.shell` under `shellEnabled: false` still gets `SHELL_NOT_ALLOWED` for a shell-form `exec`, and a token without `fs.write` is refused `write` under a policy that allows it. Every token refusal is `POLICY_DENIED` with no reason on the wire; the class of the refusal goes to the daemon log only.
+
+| Tool call | Capability needed |
+| --- | --- |
+| `read` | `fs.read` |
+| `list` | `fs.list` |
+| `write` | `fs.write` |
+| `exec`, argv form | `exec.argv` |
+| `exec`, shell form (`shell` is `true`) | `exec.shell` |
+| `retry` | `daemon.attach` |
+| `status` | none (a valid token for the session is enough) |
+
+**Profiles.** A host with no entry in `profiles` gets all six capabilities. A host whose entry is the empty list gets a token that can only call `status`. A capability listed for a host that the policy cannot grant stays in the token, and the policy gates still apply after it. `retry` maps to `daemon.attach` because it can re-create the sandbox, so no read-only profile holds it.
+
+**Unlabelled hosts.** In `enforce`, a stdio host started without the host flag has no host to attach as, and every call it makes is refused with `POLICY_DENIED`. The operator adds the host flag (`realm mcp --host ID`, or `realm acp --host ID`). With `off` nothing changes. A stale client that sends no token to a daemon in `enforce` is refused, not admitted; a client that meets an older daemon that does not know `capability-attach` sends no token, which is right for a daemon that enforces nothing.
+
+**Audit.** Admission and result lines of a tokened call carry `host` and `kid`. An attach writes one line (`capability.attach`, outcome `ok`, with `host` and `kid`, and no phase, so the reconciler ignores it); this is the detection trail for a process that attaches as a host it is not. A refused call in `enforce` writes one line with outcome `POLICY_DENIED`, carrying `host` and `kid` only when the token verified as far as its signature, so a recorded host is always authentic. Both kinds of line share one bound of a burst of 60 and a refill of one per second per daemon; a line over the bound is not written and a log line counts the drops, the refusal itself is never bounded, and an attach over the bound is refused (fail closed). Lines of a call made without a token (mode `off`) are unchanged.
+
+**Rotation and revocation.** `realm host token rotate` adds a new active key. The previous key keeps verifying until no token it signed can be alive (86400 plus 60 seconds after it was retired) and is then pruned, so a planned rotation disturbs no connected host, and a running daemon notices the changed key file on its next request. `realm host token rotate --revoke-previous` removes every non-active key at once: tokens they signed fail immediately, and the affected hosts' calls are refused until each `realm mcp` process re-attaches (a host reconnect or restart; the client does not guess a revocation, because it cannot tell an expired token from a real denial without a new error code). This is the emergency path. `realm host token status` prints the mode, the active key id, the retired key ids with their ages in seconds and the key file mode, never a key or a token; `realm doctor` has a `capability-tokens` item for the same state. The key lives in `keys.json` under `STATE_DIR/capability` (directory mode 0700, file mode 0600, owned by the current user, no symlink); it is outside every default sandbox mount, and the doctor item fails if the configured sandbox state root contains it. A same-user reader of that file mints any token.
+
+**Omp.** Omp loads Realm in its own process and attaches with the host id `omp`, so it keeps working when enforcement is on and its calls are attributed. The token protects nothing there beyond the profile: the one process holds everything.
+
+**Owner override.** The Phase 30 spike ran its frozen decision rule. Criterion M1 was not demonstrated: a same-user process reads a token at rest and from the process environment (experiments E3 and E4), and no experiment found an attacker that is admitted without a token and refused with one, other than attackers the 0600 control socket already stops (E5). The rule's outcome is DROP and it stands as measured. On 2026-11-17 the owner overrode that outcome and directed a build, for the value that does not depend on M1: per-host least privilege and audit attribution. The override is recorded as D32-1 in `docs/integration/runtime-decision.md` and in section 9 of `docs/integration/capability-token-spike.md`.
+
+**Evidence limits.** Observed in this phase: the refusal matrix over a real socket (every token defect is `POLICY_DENIED`, with no dispatcher admission and no effect on the workspace) and the no-leak scan (the token and the key text appear in no log, audit file, metrics snapshot, doctor or CLI output, environment variable, argument vector or file). Measured in the spike and not re-measured here: token sizes (194, 209 and 264 bytes), mint and verify cost (about 21 and 24 microseconds), and the same-user reads E3 and E4. The claim that a process that is not a descendant of the `realm mcp` process cannot read the token from its memory under Yama `ptrace_scope` 1 or higher is expected, not proven here: the probe needs a non-root user and was not run as part of this change. [INFERENCE]
+
 ## Blocked module
 
 MCP transport code (Phase 5). Nothing else is blocked by this note.

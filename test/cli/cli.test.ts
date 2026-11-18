@@ -473,6 +473,7 @@ void test("HOST-07: the usage text names realm host and its subcommands, and hos
   const result = await runCli([], { env: ENV });
   assert.equal(result.exitCode, 2);
   assert.ok(result.stderr.includes("realm host <list|detect|status|install|uninstall>"), result.stderr);
+  assert.ok(result.stderr.includes("realm host token <status|rotate> [--revoke-previous]"), result.stderr);
 });
 
 void test("realm up with Podman missing reports PODMAN_MISSING and exits promptly with no spawn (CLI-02)", async () => {
