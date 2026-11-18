@@ -33,6 +33,7 @@ covered_files:
   - "test/integration/production-live-helpers.test.ts"
   - "test/docs/capability-token-evidence.test.ts"
   - "test/docs/capability-token-doc.test.ts"
+covered_digest: "v3:sha256:353f783cbda0c15354784e862ed67c3534bd9a925e79a724567b5108d288a4ec"
 ---
 
 # Phase 35 Verification: capability token evidence
