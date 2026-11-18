@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   BASELINE_MIN_PROBES,
   type LatencySummary,
+  latencyProblems,
   MAX_LATENCY_MS,
   MIN_PROBES,
   MIN_WINDOW_MS,
@@ -127,4 +128,43 @@ void test("V1LIVE-01 samplesCsv has a header and one line per sample, and summar
   assert.match(text, /probes unanswered: 1\n/);
   assert.match(text, /maximum latency: 12 ms\n/);
   assert.match(text, /load before: 12\.00 14\.60 11\.80 on 8 cpus\n/);
+});
+
+// The exact output strings of the verdict, pinned so that sharing the latency conditions with the decision rule (latencyProblems) is
+// proven behavior-neutral: the strings, their order and their count are what the cold-attach test asserts on.
+void test("V1LIVE-01 responsivenessProblems pins its exact strings, one condition at a time", () => {
+  assert.deepEqual(responsivenessProblems({ ...PASSING, sent: 39, answered: 39 }), ["only 39 probes were sent; at least 40 are needed"]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, windowMs: 9_999 }), ["the attach window was too short to be a measurement: 9999 ms, at least 10000 ms are needed"]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, answered: 47, unanswered: 3 }), ["3 of 50 probes were never answered"]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, maxMs: 1001 }), ["the maximum latency was 1001 ms, above 1000 ms"]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, p95Ms: 501 }), ["the 95th percentile latency was 501 ms, above 500 ms"]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, sent: 30, answered: 30 }, { minProbes: BASELINE_MIN_PROBES, minWindowMs: 9_750 }), []);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, windowMs: 9_000 }, { minWindowMs: 9_750 }), ["the attach window was too short to be a measurement: 9000 ms, at least 9750 ms are needed"]);
+});
+
+void test("V1LIVE-01 responsivenessProblems pins its combination: shortness first, then unanswered, maximum and 95th percentile", () => {
+  assert.deepEqual(responsivenessProblems({ sent: 3, answered: 0, unanswered: 3, maxMs: 2000, medianMs: 0, p95Ms: 900, longestGapMs: 0, windowMs: 1 }), [
+    "only 3 probes were sent; at least 40 are needed",
+    "the attach window was too short to be a measurement: 1 ms, at least 10000 ms are needed",
+    "3 of 3 probes were never answered",
+    "the maximum latency was 2000 ms, above 1000 ms",
+    "the 95th percentile latency was 900 ms, above 500 ms",
+  ]);
+  assert.deepEqual(responsivenessProblems({ ...PASSING, answered: 49, unanswered: 1, maxMs: 9_868, p95Ms: 8_910 }), [
+    "1 of 50 probes were never answered",
+    "the maximum latency was 9868 ms, above 1000 ms",
+    "the 95th percentile latency was 8910 ms, above 500 ms",
+  ]);
+  assert.deepEqual(responsivenessProblems({ sent: 0, answered: 0, unanswered: 0, maxMs: 0, medianMs: 0, p95Ms: 0, longestGapMs: 0, windowMs: 0 }), ["no probe was sent, so nothing was measured"]);
+});
+
+void test("V1LIVE-01 latencyProblems is the latency half of the verdict and has no shortness condition", () => {
+  assert.deepEqual(latencyProblems({ ...PASSING, sent: 3, windowMs: 1 }), []);
+  assert.deepEqual(latencyProblems({ ...PASSING, answered: 49, unanswered: 1, maxMs: 1001, p95Ms: 501 }), [
+    "1 of 50 probes were never answered",
+    "the maximum latency was 1001 ms, above 1000 ms",
+    "the 95th percentile latency was 501 ms, above 500 ms",
+  ]);
+  assert.deepEqual(latencyProblems({ ...PASSING, maxMs: 1500 }, { maxLatencyMs: 2000 }), []);
+  assert.deepEqual(latencyProblems({ sent: 0, answered: 0, unanswered: 0, maxMs: 0, medianMs: 0, p95Ms: 0, longestGapMs: 0, windowMs: 0 }), []);
 });

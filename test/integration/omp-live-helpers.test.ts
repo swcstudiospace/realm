@@ -1061,6 +1061,27 @@ void test("frames, nonJsonLines, status, notices and tool accessors follow the f
   await session.waitFor((s) => s.status() === undefined, BOUND_MS, "the status to clear");
 });
 
+void test("frameArrivalsMs has one non-negative, non-decreasing entry per frame, in frame order, and a line that is not a JSON object adds none", async () => {
+  const omp = new FakeOmp();
+  const session = omp.session();
+  assert.deepEqual(session.frameArrivalsMs, []);
+  omp.emit({ type: "ready" });
+  omp.emitRaw("Still starting after 13s\n");
+  await session.ready(BOUND_MS);
+  assert.equal(session.frameArrivalsMs.length, 1, "the non-JSON line has no entry");
+  omp.emit({ type: "extension_ui_request", id: "u1", method: "setStatus", statusKey: "realm", statusText: "connecting" });
+  omp.emitRaw("not json at all\n[1,2]\n");
+  omp.emit({ type: "response", id: "p1" });
+  await session.waitFor((s) => s.frames.length === 3, BOUND_MS, "three frames");
+  assert.equal(session.frames.length, session.frameArrivalsMs.length, "parallel to frames");
+  assert.deepEqual(session.frames.map((frame) => frame["type"]), ["ready", "extension_ui_request", "response"], "in the order of frames");
+  assert.deepEqual(session.nonJsonLines, ["Still starting after 13s", "not json at all", "[1,2]"]);
+  for (const arrival of session.frameArrivalsMs) {
+    assert.ok(Number.isFinite(arrival) && arrival >= 0, `a non-negative number: ${String(arrival)}`);
+  }
+  assert.deepEqual([...session.frameArrivalsMs], [...session.frameArrivalsMs].sort((a, b) => a - b), "non-decreasing");
+});
+
 void test("a frame split across chunks, and a final frame with no newline, are parsed", async () => {
   const omp = new FakeOmp();
   const session = omp.session();
