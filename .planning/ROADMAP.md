@@ -16,7 +16,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v2.0 Host Adapters, Live Verification and Production Isolation** — Phases 8 to 11 (shipped as releases 0.2.0 and 0.2.1 on 2026-10-29; archived in `milestones/`)
 - 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
 - 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
-- 🚧 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (in progress, release line 0.5.x)
+- 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
 
 ## Phases
 
@@ -214,7 +214,7 @@ Plans:
 - [x] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded. (completed 2026-11-18)
 - [x] **Phase 32: Capability tokens for stdio hosts** - Per-session, per-host HMAC capability tokens minted by the daemon and carried by stdio hosts, verified before dispatch and fail-closed together with policy, with per-host profiles, audit attribution, key rotation and a doctor check, and an honest record of what they do not stop (owner override of the Phase 30 outcome, 2026-11-17). (completed 2026-11-18)
 
-### 🚧 v5.0 Cold attach, enforced capability tokens and evidence (In progress, release line 0.5.x)
+### ✅ v5.0 Cold attach, enforced capability tokens and evidence (Shipped 2026-11-18)
 
 **Milestone Goal:** `realm mcp` connects on a cold start, capability tokens are enforced by default with a migration path, the token claims have live and non-root evidence, the v1.0 live items this host can run are re-verified, and the product spec no longer describes the Anda bridge.
 

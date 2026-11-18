@@ -221,7 +221,7 @@ All v3.0 requirements are hypotheses until shipped and verified.
   Status: Complete (2026-10-30). Basis (owner decision D2): a scripted OpenAI-compatible provider drove Omp 18.12.6's own `write` tool through the Realm plugin. Advisory with the realm down showed the unavailable notice and wrote the file; fail-closed with the realm down blocked the write with `REALM_NOT_ACTIVE` and that error was in the provider's next request; an active realm let the write land. Not an LLM-driven run. Paths that do not load the plugin are outside this closure.
   Note: closed in this milestone by HARN-04 (owner decision D2).
 - [x] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4) (Complete: the owner confirmed the amendment on 2026-11-17, after the Phase 27 disposition recorded it as open; code and tests match it)
-- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked) (Accepted limitation, Phase 27 disposition, 2026-11-17)
+- [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked) (Accepted limitation, Phase 27 disposition, 2026-11-17; v5.0, Phase 36, 2026-11-18: the one Omp cold-attach run was on a loaded host and failed its thresholds, with about 11 s unanswered, so no pass is claimed; carried with finding F-3 into a v5.1 candidate phase, and the status stays the owner's call)
 
 ## Standing requirements (completed earlier, still binding)
 
@@ -263,13 +263,13 @@ These requirements were completed in v1.0 and v2.0 and bind every phase of v3.0.
 - UI-01 — accepted limitation, the owner's status call (Phase 27)
 - TD-06 (a smoke mode for `check:mcp` on a runner without Podman 5.x) — not part of the eight approved proposals
 - TD-10 repository settings (secret scanning, push protection, branch protection or rulesets, `sha_pinning_required`) — the owner's, and they cannot be changed from the repository; only the release job split and the attestation are in this milestone (REL-01, REL-02)
-- Any change to the product spec (`docs/specs/realm-spec.xml`) — read-only
+- Any change to the product spec (`docs/specs/realm-spec.xml`) — read-only, except the owner-directed Anda edit of SPEC-01 (v5.0, 2026-11-18)
 
 ## Traceability
 
 v3.0 requirements: 52 total, 52 mapped
 
-v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Planned
+v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Complete (ENF-04 with a recorded partial). Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
