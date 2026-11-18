@@ -719,10 +719,11 @@ Plans:
 **Goal:** A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
 **Depends on:** Phase 29
 **Requirements**: CAPT-01
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 30 to break down)
+- [ ] 30-01-PLAN.md: criteria, prototype and experiments (wave 1)
+- [ ] 30-02-PLAN.md: results, decision and owner checkpoint (wave 2)
 
 ### Phase 31: Production-stack boot rehearsals for wave 1 hosts
 

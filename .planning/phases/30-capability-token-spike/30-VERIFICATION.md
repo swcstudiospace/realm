@@ -19,6 +19,7 @@ covered_files:
   - "scripts/spike/capability-token/token.mjs"
   - "scripts/spike/capability-token/gate.mjs"
   - "scripts/spike/capability-token/run.mjs"
+covered_digest: "v3:sha256:19399ba19ba7d9ca3b92f4f1f16edfa9b79cf0c162d5d7f4c81261773d087f97"
 ---
 
 # Phase 30 Verification: Capability token spike
