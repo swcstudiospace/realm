@@ -35,6 +35,7 @@
 //   Capture, signalGroup, shellQuote, the two grace constants   the runner pieces test/support/host-live-session.ts reuses
 //   createHostRig                                      one isolated root with the stub, a state directory and the realm CLI
 //   runHostProduction                                  the shared production-tier scenario of claude, codex and opencode
+//   bootPhaseCountsOf                                  the per-phase boot report counts of one host in `realm metrics` output
 //   fileSha256, stripAnsi, cliJson, refusalReasonOf, ownedTableOf, processAlive   small helpers of the live files
 
 import assert from "node:assert/strict";
@@ -854,11 +855,15 @@ export function createHostRig(options: HostRigOptions, source: EnvironmentLike):
 const REAL_HOST_TIMEOUT_MS = PRODUCTION_TIMEOUT_MS;
 const REALM_COMMAND_TIMEOUT_MS = 60_000;
 const DOWN_TIMEOUT_MS = 120_000;
-const WARM_UP_TIMEOUT_MS = 240_000;
 const POLL_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
-// A host that exits on its own: the warm session is already up, so `realm status` should answer active at once.
-const EXIT_STATUS_TIMEOUT_MS = 60_000;
+// The host command of the default drive must return below this bound: it is below OpenCode's 30 s connect timeout, so a host whose
+// own health check fits the shortest known connect timeout passes, and one that waits for the sandbox does not (33-CONTEXT D-33-07).
+const COLD_CONNECT_BOUND_MS = 25_000;
+// The bound for the realm to answer active after the host command has left. The host attaches cold: the daemon and the sandbox are
+// created by the host's own `realm mcp`, and the bring-up continues in the daemon after the host has gone (a cold sandbox creation took
+// about 35 to 60 s, measured 2026-11-18).
+const COLD_READY_TIMEOUT_MS = 240_000;
 
 // The session drive: the host command is the host binary run with `args` against `provider`, a loopback provider that refuses every
 // request. The session is ended once the boot is observed, or judged from the wire and `realm status` when the host exits on its own.
@@ -887,25 +892,31 @@ function realmLines(listing: string): string[] {
     .filter((line) => /(^|[^\w-])realm([^\w-]|$)/.test(line));
 }
 
-// The number of boot reports the daemon recorded for `host` in `realm metrics` output, summed over the `attached` rows.
-function attachedBootsOf(stdout: string, host: string): number {
+// The boot reports the daemon recorded for `host` in `realm metrics` output, summed per phase over the hostBoot rows. A missing or
+// unparsable hostBoot member, a row of another host and a row whose count is not a number contribute nothing.
+export function bootPhaseCountsOf(stdout: string, host: string): Readonly<Record<string, number>> {
+  const counts: Record<string, number> = {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return 0;
+    return counts;
   }
   const rows = isRecord(parsed) ? parsed["hostBoot"] : undefined;
   if (!Array.isArray(rows)) {
-    return 0;
+    return counts;
   }
-  let count = 0;
   for (const row of rows as unknown[]) {
-    if (isRecord(row) && row["hostId"] === host && row["phase"] === "attached" && typeof row["count"] === "number") {
-      count += row["count"];
+    if (isRecord(row) && row["hostId"] === host && typeof row["phase"] === "string" && typeof row["count"] === "number") {
+      counts[row["phase"]] = (counts[row["phase"]] ?? 0) + row["count"];
     }
   }
-  return count;
+  return counts;
+}
+
+// The number of `attached` boot reports for `host`: the evidence of a host that was still alive when the session became ready.
+function attachedBootsOf(stdout: string, host: string): number {
+  return bootPhaseCountsOf(stdout, host)["attached"] ?? 0;
 }
 
 function presenceEntries(stateDir: string, host: string): string[] {
@@ -1045,23 +1056,11 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${host} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
   };
 
-  // Warm the session first: `realm mcp --host ID` ensures the daemon and runs `up` before it answers initialize, and a cold sandbox
-  // creation (about 35 to 60 s measured 2026-11-18) outlasts the hosts' MCP connect timeouts (OpenCode 30 s; Claude's `mcp list`
-  // probe gave up as well). `realm up` is idempotent, so the host attach below hits a warm session. The cold-attach gap itself is
-  // GAP-31-04; the wave 1 boot matrix says the production tier requires a warm session. The warm-up runs through the production
-  // helper (`realmCli`) with the scenario environment (HOME, XDG_RUNTIME_DIR, the scenario's config home, the driver socket) and
-  // exactly the production PATH, with no recorder or host directory on it: `realm up` runs `podman --version` and the openshell
-  // calls and needs nothing else from PATH.
-  const warmScenario: ScenarioEnvironment = { ...scenario, cliEnvironment: { ...scenario.cliEnvironment, ...(productionPath === undefined ? {} : { PATH: productionPath }) } };
-  const warmed = await realmCli(inputs, warmScenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
-  assert.equal(
-    warmed.exitCode,
-    0,
-    `realm up --workspace for the project before the host attach (PATH ${JSON.stringify(warmScenario.cliEnvironment["PATH"] ?? "unset")}): ${describeResult(warmed)}`,
-  );
-
-  // The host command, from a directory under the pinned workspace root. The recorder's wire summary is what the tool listing is
-  // asserted from; the daemon's view (status active, an attached boot report) is asserted beside it.
+  // The host attaches cold: nothing has started the daemon or the sandbox for this run's new project directory, so the host's own
+  // `realm mcp` creates both. The host command is run from a directory under the pinned workspace root with the production PATH
+  // ahead of the host binary's directory (set above: the host spawns `realm mcp`, which runs `podman --version`, and the production
+  // Podman 5 must come first). The recorder's wire summary is what the tool listing is asserted from; the daemon's view (status
+  // active once the bring-up completes, and no failed or refused boot report) is asserted beside it.
   const { drive } = options;
   const wireText = (): string => {
     const summary = wireSummary(readWireLog(wireLog));
@@ -1079,6 +1078,9 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     assert.match(joined, /\bconnected\b/i, `${host} must report realm connected: ${describeRun(listed)}`);
     assert.doesNotMatch(joined, /\bfailed\b/i, `${host} must not report realm failed: ${describeRun(listed)}`);
     t.diagnostic(`${host} mcp list reported: ${JSON.stringify(joined.trim())}`);
+    const connectMs = Date.now() - startedAt;
+    t.diagnostic(`${host} mcp list returned after ${String(connectMs)} ms (the cold connect bound is ${String(COLD_CONNECT_BOUND_MS)} ms)`);
+    assert.ok(connectMs < COLD_CONNECT_BOUND_MS, `${host} mcp list must return below ${String(COLD_CONNECT_BOUND_MS)} ms on a cold attach; it took ${String(connectMs)} ms`);
   } else {
     // A session may or may not outlive its handshake. While it runs, poll for the boot evidence (the recorder shows the tool listing,
     // `realm status` answers active and the daemon counts an attached boot report) and end the process group once it holds. A host that
@@ -1098,8 +1100,9 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     };
     const session = await runHostUntil(options.bin, drive.args, env, projectDir, { ready: bootSeen, timeoutMs: scaledMs(REAL_HOST_TIMEOUT_MS), pollMs: POLL_INTERVAL_MS });
     if (session.endedBy === "exit") {
-      // The host ended on its own. That is a boot only when the wire shows the handshake and the six tools and the warm session answers
-      // active; the attached boot report is asserted only for a host that was still alive.
+      // The host ended on its own. That is a boot only when the wire shows the handshake and the six tools and the realm then answers
+      // active (the bring-up continues in the daemon after the host has gone); the attached boot report is asserted only for a host
+      // that was still alive.
       const exited = wireSummary(readWireLog(wireLog));
       const handshook = exited.hostMethods.includes("initialize") || exited.hostMethods.includes("server/discover");
       const sixTools = exited.answered && [...exited.toolNames].join(",") === [...REALM_TOOL_NAMES].join(",");
@@ -1110,7 +1113,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
           const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
           return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
         },
-        { timeoutMs: scaledMs(EXIT_STATUS_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+        { timeoutMs: scaledMs(COLD_READY_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
       );
       assert.ok(stillActive.ok, `${host} session ended by exit and realm status never answered active; wire: ${wireText()}; ${stillActive.detail}; ${describeRun(session)}`);
       t.diagnostic(`${host} session ended by exit after the handshake and the six tools; realm status answered active (the attached boot report is asserted only while the host is alive)`);
@@ -1141,19 +1144,18 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
         const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
         return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
       },
-      { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+      { timeoutMs: scaledMs(COLD_READY_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
     );
     assert.ok(active.ok, `realm status must answer active for the project the host opened: ${active.detail}`);
 
-    const booted = await pollUntil(
-      async () => {
-        const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
-        const count = metrics.exitCode === 0 ? attachedBootsOf(metrics.stdout, host) : 0;
-        return count >= 1 ? { done: true } : { done: false, detail: `attached boot reports for ${host}: ${String(count)}; ${describeResult(metrics)}` };
-      },
-      { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
-    );
-    assert.ok(booted.ok, `realm metrics must count at least one attached boot report for ${host}: ${booted.detail}`);
+    // A host that leaves before the realm is ready produces no attached report, so nothing is required about attached or closed: the
+    // per-phase counts are recorded, and a failed or refused boot report for the host fails the run (D-33-07).
+    const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
+    assert.equal(metrics.exitCode, 0, `realm metrics --workspace for the project: ${describeResult(metrics)}`);
+    const phases = bootPhaseCountsOf(metrics.stdout, host);
+    t.diagnostic(`${host} boot reports by phase: ${JSON.stringify(phases)}`);
+    assert.equal(phases["failed"] ?? 0, 0, `the daemon must record no failed boot report for ${host}: ${JSON.stringify(phases)}`);
+    assert.equal(phases["refused"] ?? 0, 0, `the daemon must record no refused boot report for ${host}: ${JSON.stringify(phases)}`);
   } else {
     // The provider saw no credential and no foreign peer. Counts, flags and addresses only: never a header value.
     const requests = drive.provider.requests();
