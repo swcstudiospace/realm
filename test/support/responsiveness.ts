@@ -5,7 +5,7 @@
 //
 // Exports: PROBE_INTERVAL_MS, MAX_LATENCY_MS, P95_LATENCY_MS, MIN_PROBES, MIN_WINDOW_MS, BASELINE_WINDOW_MS, BASELINE_MIN_PROBES,
 // QUIET_LOAD_PER_CPU, ProbeSample, LatencySummary, ResponsivenessBounds, HostLoad, summariseLatencies, quietHost,
-// responsivenessProblems, samplesCsv, summaryText.
+// latencyProblems, responsivenessProblems, samplesCsv, summaryText.
 
 export const PROBE_INTERVAL_MS = 250;
 export const MAX_LATENCY_MS = 1000;
@@ -98,6 +98,23 @@ export interface ResponsivenessBounds {
 
 const DEFAULT_BOUNDS: ResponsivenessBounds = { minProbes: MIN_PROBES, minWindowMs: MIN_WINDOW_MS, maxLatencyMs: MAX_LATENCY_MS, p95LatencyMs: P95_LATENCY_MS };
 
+// The latency sentences of a verdict: unanswered probes, the maximum and the 95th percentile. Empty when none applies. The verdict
+// (responsivenessProblems) and the decision rule of test/support/responsiveness-decision.ts share this one definition.
+export function latencyProblems(summary: LatencySummary, bounds: Partial<ResponsivenessBounds> = {}): string[] {
+  const limit: ResponsivenessBounds = { ...DEFAULT_BOUNDS, ...bounds };
+  const problems: string[] = [];
+  if (summary.unanswered > 0) {
+    problems.push(`${String(summary.unanswered)} of ${String(summary.sent)} probes were never answered`);
+  }
+  if (summary.maxMs > limit.maxLatencyMs) {
+    problems.push(`the maximum latency was ${String(summary.maxMs)} ms, above ${String(limit.maxLatencyMs)} ms`);
+  }
+  if (summary.p95Ms > limit.p95LatencyMs) {
+    problems.push(`the 95th percentile latency was ${String(summary.p95Ms)} ms, above ${String(limit.p95LatencyMs)} ms`);
+  }
+  return problems;
+}
+
 // The sentences that explain why a measurement does not pass; empty when it passes. `bounds` overrides the defaults per field (the
 // baseline uses BASELINE_MIN_PROBES).
 export function responsivenessProblems(summary: LatencySummary, bounds: Partial<ResponsivenessBounds> = {}): string[] {
@@ -112,15 +129,7 @@ export function responsivenessProblems(summary: LatencySummary, bounds: Partial<
   if (summary.windowMs < limit.minWindowMs) {
     problems.push(`the attach window was too short to be a measurement: ${String(summary.windowMs)} ms, at least ${String(limit.minWindowMs)} ms are needed`);
   }
-  if (summary.unanswered > 0) {
-    problems.push(`${String(summary.unanswered)} of ${String(summary.sent)} probes were never answered`);
-  }
-  if (summary.maxMs > limit.maxLatencyMs) {
-    problems.push(`the maximum latency was ${String(summary.maxMs)} ms, above ${String(limit.maxLatencyMs)} ms`);
-  }
-  if (summary.p95Ms > limit.p95LatencyMs) {
-    problems.push(`the 95th percentile latency was ${String(summary.p95Ms)} ms, above ${String(limit.p95LatencyMs)} ms`);
-  }
+  problems.push(...latencyProblems(summary, bounds));
   return problems;
 }
 

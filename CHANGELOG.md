@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-18
+
+### Added
+- feat(scripts): breaking-change guard for the ! marker convention (42-01, report-only) (#187) (cb6e38e)
+
 ## [0.6.0] - 2026-11-18
 
 ### Added
