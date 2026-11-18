@@ -5,7 +5,7 @@
 // opencode command runs.
 //   A  dry run names opencode.json         B  install writes {"mcp": {"realm": {...}}}; status installed, launch on-path
 //   C  `opencode mcp list` prints the realm row and launches `realm mcp --host opencode` (E-O2)
-//   D  an opencode.jsonc beside it (comment, trailing comma, a server `other`): both listed, its bytes untouched by install and uninstall (E-O3)
+//   D  an opencode.jsonc beside it (comment, trailing comma, a server `other`): both listed, install leaves its bytes untouched; the host may add $schema, and uninstall leaves what the host left (E-O3)
 //   E  the V2 shape (second config): install adds mcp.realm beside mcp.servers and both are listed (E-O6)
 //   F  after the host ran, uninstall removes only the realm entry: the host-added $schema and the host-created .gitignore stay; a run without the host in between removes the file
 // A V2 build (a dist-tag `next` or `dev` binary named by REALM_OPENCODE_BIN) is a valid run of the same file and answers OQ-24-02.
@@ -17,7 +17,7 @@
 // ~/.config/opencode/opencode.json is hashed before and after every test and must not change.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -116,8 +116,8 @@ void test(
       assert.deepEqual(call, MCP_ARGV, "the host launched exactly realm mcp --host opencode");
     }
 
-    // D: an opencode.jsonc beside it (a comment, a trailing comma, a server `other`). Both servers are listed, and the file's bytes are
-    // unchanged by install and by uninstall (E-O3 re-proved with the recipe's own file).
+    // D: an opencode.jsonc beside it (a comment, a trailing comma, a server `other`). Both servers are listed. Install, with no host run in
+    // between, leaves the file's bytes unchanged (E-O3 re-proved with the recipe's own file); the host's own run may rewrite it (below).
     const jsonc = join(dir, "opencode.jsonc");
     writeFileSync(jsonc, '{\n  // a server the recipe does not own\n  "mcp": {\n    "other": { "type": "local", "command": ["other-cmd"], },\n  },\n}\n');
     const jsoncHash = fileSha256(jsonc);
@@ -126,10 +126,16 @@ void test(
     assert.equal(fileSha256(jsonc), jsoncHash, "install must not touch opencode.jsonc");
     const both = await listServers(rig, "opencode mcp list with opencode.jsonc");
     assert.ok(mentions(both.text, "realm") && mentions(both.text, "other"), `opencode mcp list must list realm and other: ${describeRun(both.result)}`);
+    // The real `opencode mcp list` also rewrites an existing opencode.jsonc (it adds $schema; observed 2026-11-18). What the host left is
+    // the baseline from here on: the Realm engine never touches the jsonc, so uninstall must leave exactly these bytes.
+    const jsoncAfterHost = fileSha256(jsonc);
+    const jsoncText = readFileSync(jsonc, "utf8");
+    assert.ok(jsoncText.includes('"other"'), "the host left the other server in opencode.jsonc");
+    assert.equal(jsoncText.includes('"realm"'), false, "no realm key was added to opencode.jsonc");
 
     // F: the host ran (`opencode mcp list` writes {"$schema": ...} into opencode.json and creates a .gitignore beside it; observed with
     // 1.19.5). Uninstall removes only the realm entry: the host-added $schema key, the file it lives in and the host-created .gitignore
-    // stay as the host left them, and the jsonc stays as it was. The file is removed only when the host never touched it (the next test).
+    // stay as the host left them, and the jsonc stays as the host left it. The file is removed only when the host never touched it (the next test).
     const gitignore = join(dir, ".gitignore");
     const gitignoreHash = fileSha256(gitignore);
     assert.ok(gitignoreHash !== null, "opencode mcp list creates a .gitignore beside opencode.json");
@@ -142,7 +148,10 @@ void test(
     assert.equal("mcp" in left, false, "uninstall removed the realm entry and the mcp section it alone held");
     assert.deepEqual(left, { $schema: hostWrote["$schema"] }, "uninstall leaves the host-added keys untouched");
     assert.equal(fileSha256(gitignore), gitignoreHash, "uninstall leaves the host-created .gitignore untouched");
-    assert.equal(fileSha256(jsonc), jsoncHash, "uninstall must not touch opencode.jsonc");
+    assert.equal(fileSha256(jsonc), jsoncAfterHost, "uninstall must leave opencode.jsonc exactly as the host left it");
+    const jsoncLeft = readFileSync(jsonc, "utf8");
+    assert.ok(jsoncLeft.includes('"other"'), "the other server entry remains in opencode.jsonc after uninstall");
+    assert.equal(jsoncLeft.includes('"realm"'), false, "no realm key is in opencode.jsonc after uninstall");
     assert.notEqual((await hostStatusOf(rig, "opencode"))["status"], "installed");
 
     assert.equal(fileSha256(REAL_OPENCODE_JSON), realBefore, "the operator's real opencode.json must be unchanged");
