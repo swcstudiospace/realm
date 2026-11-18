@@ -202,7 +202,7 @@ Plans:
 - [x] **Phase 27: Anda disposition and v4.0 requirement closure** - Every open Anda item is closed by a recorded owner decision: ANDA-01 to ANDA-04, the Phase 3 Anda items and OQ-P3-11 are dispositioned as removed, the v2.0 carry list is reconciled, and the replacement research is the published rationale. (completed 2026-11-17)
 - [x] **Phase 28: Remove the Anda bridge** - The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note. (completed 2026-11-17)
 - [x] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves. (completed 2026-11-17)
-- [ ] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
+- [x] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build. (completed 2026-11-18)
 - [ ] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
 - [ ] **Phase 32: Capability tokens for stdio hosts** - Per-session, per-host HMAC capability tokens minted by the daemon and carried by stdio hosts, verified before dispatch and fail-closed together with policy, with per-host profiles, audit attribution, key rotation and a doctor check, and an honest record of what they do not stop (owner override of the Phase 30 outcome, 2026-11-17).
 
@@ -719,11 +719,11 @@ Plans:
 **Goal:** A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
 **Depends on:** Phase 29
 **Requirements**: CAPT-01
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 30-01-PLAN.md: criteria, prototype and experiments (wave 1)
-- [ ] 30-02-PLAN.md: results, decision and owner checkpoint (wave 2)
+- [x] 30-01-PLAN.md: criteria, prototype and experiments (wave 1)
+- [x] 30-02-PLAN.md: results, decision and owner checkpoint (wave 2)
 
 ### Phase 31: Production-stack boot rehearsals for wave 1 hosts
 

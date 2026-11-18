@@ -182,7 +182,7 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **ANDAX-05**: The removal is a documented breaking change: release note text, config migration note (an unknown `andaUrl` key is refused with a clear message or ignored with a warning, as decided in the phase context)
 - [x] **MCPA-01**: Every Realm MCP tool advertises tool annotations (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) in both protocol eras `realm mcp` serves
 - [x] **MCPA-02**: A test pins the annotations per tool against the tool contract, and a mutation of an annotation fails a test
-- [ ] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
+- [x] **CAPT-01**: A spike answers whether a per-session capability token is worth building (threat model, same-user limits, cost) and records a build or drop decision with evidence
 - [ ] **CAPT-02**: A per-session, per-host HMAC capability token can be minted and verified in a fixed order with deterministic refusal classes, with a tool-to-capability mapping and per-host profiles, proven by a seeded refusal matrix
 - [ ] **CAPT-03**: A keyring at rest (mode and ownership checked, atomic) supports rotation by key id with a grace period and an emergency revoke
 - [ ] **CAPT-04**: The policy has a capabilityTokens key (mode off or enforce, ttlSeconds, per-host profiles) with schema, defaults, type and reference docs; the default leaves behaviour unchanged
@@ -363,7 +363,7 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ANDAX-05 | Phase 28 | Complete |
 | MCPA-01 | Phase 29 | Complete |
 | MCPA-02 | Phase 29 | Complete |
-| CAPT-01 | Phase 30 | Planned |
+| CAPT-01 | Phase 30 | Complete (spike recorded; criteria outcome DROP, owner override BUILD in Phase 32) |
 | CAPT-02 | Phase 32 | Planned |
 | CAPT-03 | Phase 32 | Planned |
 | CAPT-04 | Phase 32 | Planned |
