@@ -363,6 +363,7 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
 | `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. |
+| `WATCHDOG_MARGIN_MS` | `500` (`src/runtime/exec-watchdog.ts`) | Added to the 28 s runner deadline to give the in-sandbox exec watchdog its own deadline (28.5 s), so the watchdog never ends a call before the client's bound does. Not a policy key. |
 | `TEARDOWN_TIMEOUT_MS` | `30_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
 | `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts`) | Libpod stop timeout grace period (`CONTAINER_STOP_GRACE_MS`, `src/runtime/session-execution.ts`). |

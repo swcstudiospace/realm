@@ -1003,7 +1003,9 @@ void test("TOOL-03: exec spawns the pinned exec argv with output capture on and 
   assert.deepEqual(outcome, { exitCode: 0, stdout: "hello", stderr: "warn", truncated: false });
   const [call] = f.openshell.calls();
   assert.deepEqual(call?.argv, buildExecArgv(SESSION, watchdogWorkload(WORKLOAD, 1500)));
-  assert.deepEqual(call.argv.slice(call.argv.indexOf("--") + 1), ["/usr/bin/timeout", "--kill-after=1.5", "--", "2", "/usr/bin/agent", "--serve"]);
+  const exec = call.argv.slice(call.argv.indexOf("--") + 1);
+  assert.deepEqual([exec[0], exec[1], exec[3], exec[4]], ["/usr/bin/bash", "-c", "realm-exec-wd", "2"]);
+  assert.deepEqual(exec.slice(5), ["/usr/bin/agent", "--serve"]);
   assert.equal(call.captureOutput, true);
   assert.equal(call.timeoutMs, 1500);
   assert.equal(f.store.list().length, 0, "exec creates no container");
@@ -1060,7 +1062,8 @@ function clockedExec(elapsedMs: number, settle: "resolve" | "timed-out" | "faile
 void test("EXEC-02: the shell-form workload is wrapped, with its shell elements verbatim after the duration", async () => {
   const exec = clockedExec(10, "resolve");
   await runSandboxExec(exec.runner, SESSION, ["/bin/sh", "-c", "echo hi; sleep 1"], 28000, exec.now);
-  assert.deepEqual(exec.runs, [[...buildExecArgv(SESSION, ["/usr/bin/timeout", "--kill-after=1.5", "--", "28.5", "/bin/sh", "-c", "echo hi; sleep 1"])]]);
+  assert.deepEqual(exec.runs, [[...buildExecArgv(SESSION, watchdogWorkload(["/bin/sh", "-c", "echo hi; sleep 1"], 28000))]]);
+  assert.deepEqual(exec.runs[0]?.slice(-5), ["realm-exec-wd", "28.5", "/bin/sh", "-c", "echo hi; sleep 1"]);
 });
 
 void test("EXEC-03, D-39-04: a run that resolves at the deadline is TOOL_TIMEOUT whatever its exit code", async () => {

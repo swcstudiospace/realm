@@ -331,8 +331,8 @@ void test("EXEC-03: the audit lines of an argv exec name the caller's argv and c
   expectDone(await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } }), "exec");
   const text = h.auditText();
   assert.ok(text.includes("/usr/bin/agent") && text.includes("--serve"), "the audit lines carry the caller's argv");
-  assert.doesNotMatch(text, /\/usr\/bin\/timeout|--kill-after/);
-  assert.deepEqual(h.runs[0]?.argv.slice(-6), ["/usr/bin/timeout", "--kill-after=1.5", "--", "28.5", ...WORKLOAD]);
+  assert.doesNotMatch(text, /realm-exec-wd|\/usr\/bin\/bash|wait -n/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-4), ["realm-exec-wd", "28.5", ...WORKLOAD]);
 });
 
 void test("EXEC-03: the audit line of a shell exec carries the script's size and hash and no wrapper text, and the run ends with the shell and the script", async (t) => {
@@ -341,8 +341,8 @@ void test("EXEC-03: the audit line of a shell exec carries the script's size and
   const text = h.auditText();
   assert.match(text, /"scriptBytes":7/);
   assert.match(text, /"sha256":"[0-9a-f]{64}"/);
-  assert.doesNotMatch(text, /\/usr\/bin\/timeout|--kill-after|echo hi/);
-  assert.deepEqual(h.runs[0]?.argv.slice(-7), ["/usr/bin/timeout", "--kill-after=1.5", "--", "28.5", "/bin/sh", "-c", "echo hi"]);
+  assert.doesNotMatch(text, /realm-exec-wd|\/usr\/bin\/bash|wait -n|echo hi/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-5), ["realm-exec-wd", "28.5", "/bin/sh", "-c", "echo hi"]);
 });
 
 void test("EXEC-03: a runner that rejects as timed out still gives the retryable TOOL_TIMEOUT refusal with no cause code, audited admission then result", async (t) => {

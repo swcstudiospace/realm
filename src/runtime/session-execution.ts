@@ -748,10 +748,11 @@ export function productionOpenShellRunner(source: EnvironmentLike): OpenShellRun
 // TOOL_TIMEOUT; neither error carries child text.
 // At timeoutMs the runner kills the local OpenShell client and its process group (D-91). That does not reach the
 // workload inside the sandbox: OpenShell does not signal it when a client goes away or its own timeout expires
-// (39-CONTEXT E-39-04). The workload therefore runs under the in-sandbox watchdog of exec-watchdog.ts, which ends
-// its process group shortly after the reply (the deadline plus 0.5 s, SIGKILL 1.5 s later). The exit code of a
-// call that resolves before timeoutMs is the command's own. A run that resolves at or after timeoutMs (the client
-// timer fired late and the watchdog's exit 124 or 137 arrived first) is TOOL_TIMEOUT whatever its exit code.
+// (39-CONTEXT E-39-04), and inside the sandbox a signal to a process group is denied. The workload therefore runs
+// under the in-sandbox watchdog of exec-watchdog.ts, a bash wrapper that finds the exec's processes in /proc and
+// kills each by pid half a second after the runner deadline. The exit code of a call that resolves before timeoutMs
+// is the command's own. A run that resolves at or after timeoutMs (the client timer fired late and the wrapper's
+// exit 124 arrived first) is TOOL_TIMEOUT whatever its exit code.
 // `now` is a monotonic clock in milliseconds.
 export async function runSandboxExec(
   runner: OpenShellRunner,
