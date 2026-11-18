@@ -12,10 +12,18 @@
 //      rule" ("A `down` that leaves no live or admitting session stops the daemon") and src/daemon/daemon.ts releaseSession
 //      (stopAfterReply) and closeEverything (removeSocketFile). This scenario runs one session, so it asserts the stop: the socket
 //      is gone and no daemon process of this account remains, polled with a bound.
-//   C  A timed-out exec leaves no process behind. Through `realm mcp` (the dispatcher path), an exec of `sleep 47` outlives the
-//      per-call bound and answers TOOL_TIMEOUT (as production live scenario 7). While the call is in flight the sandbox shows the
-//      sleeper (a positive control, so the absence check cannot pass vacuously); after the timeout reply no process whose argv is
-//      `sleep 47` remains in the sandbox (read from /proc through an argv exec), polled with a bound.
+//   C  A timed-out exec is dead, not merely finished (EXEC-01, finding F-3 of the archived v5.0 ledger). Through `realm mcp` (the
+//      dispatcher path), an exec of a shell that runs `sleep 300` and a background `sleep 301` outlives the per-call bound and
+//      answers TOOL_TIMEOUT (retryable, 25 to 40 s, as production live scenario 7). A read-only /proc probe inside the sandbox
+//      (test/support/process-tree-probe.ts) lists the tree by a unique marker, the sleeper argvs, the process group seen in flight
+//      and descendants, with identity by pid and start time. Controls make the check non-vacuous: no member before the exec, and at
+//      least three members of one process group seen in flight. After the reply the tree must be gone within 15 s and stay gone 3 s
+//      later, with at least 200 s of the sleepers' own 300 s left, so the proof does not depend on how long the sleeper runs; a
+//      following exec must then succeed and the session stay active. A build without the in-sandbox watchdog is expected to fail
+//      at the death assertion, naming the survivors (the evidence Plan 39-03 collects).
+//   C2 A process that leaves the exec's process group (setsid) is recorded, not asserted: the group is checked dead, the escapee's
+//      state is written to the evidence (the limit the docs state, D-39-05).
+//   D  An exec keeps its egress identity through the dispatcher: 1.1.1.1:443 allowed and 8.8.8.8:443 denied, as production live 3.
 //
 // Gate. The file skips, naming the first missing prerequisite, unless REALM_LIVE_PRODUCTION=1 and the production prerequisites
 // hold (productionSkipReason): the opt-in, Podman 5.x, the digest-pinned image, the driver config and socket, a rootless Podman
@@ -35,6 +43,7 @@
 // Nothing here prints a secret. Failure messages carry exit codes, catalogue codes, modes and clipped probe output.
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
@@ -44,6 +53,7 @@ import { controlSocketPath } from "../../src/session/paths.js";
 import { createCleanups, writeEvidence, type Cleanups } from "../support/omp-live.js";
 import {
   callTool,
+  canConnect,
   cleanupScenario,
   createScenarioEnvironment,
   describeResult,
@@ -53,7 +63,9 @@ import {
   initializeMcp,
   isDirectory,
   isSocket,
+  nodeConnectArgv,
   onPath,
+  parseNodeProbe,
   pollUntil,
   probePodman,
   productionSkipReason,
@@ -72,8 +84,22 @@ import {
   waitUntilServed,
   type CommandResult,
   type LiveInputs,
+  type McpSession,
+  type NodeProbeResult,
   type ScenarioEnvironment,
+  type ScenarioSpec,
 } from "../support/production-live.js";
+import {
+  controlsHold,
+  describeMembers,
+  isSleeperOf,
+  judgeTree,
+  parseTreeListing,
+  recordedGroups,
+  treeProbeArgv,
+  type TreeListing,
+  type TreeMember,
+} from "../support/process-tree-probe.js";
 
 // The compiled CLI beside the compiled tests: this file runs from dist/test/integration, the CLI from dist/src/cli.
 const CLI_PATH = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
@@ -137,9 +163,13 @@ interface ScenarioRun {
 // Builds the scenario's isolated configuration and registers its teardown on the test. Cleanups run last-in, first-out: the
 // evidence is saved first, then the daemon and the project are brought down (when the scenario brought one up), then the
 // scenario's files are removed. The teardown runs even when the body failed.
-function startScenario(t: TestContext, scenarioName: string, options: { readonly bringsUp: boolean }): ScenarioRun {
+function startScenario(
+  t: TestContext,
+  scenarioName: string,
+  options: { readonly bringsUp: boolean; readonly egressAllow?: ScenarioSpec["egressAllow"] },
+): ScenarioRun {
   const inputs = requireLive();
-  const scenario = createScenarioEnvironment(inputs, { image: inputs.image });
+  const scenario = createScenarioEnvironment(inputs, { image: inputs.image, ...(options.egressAllow === undefined ? {} : { egressAllow: options.egressAllow }) });
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
   if (options.bringsUp) {
@@ -316,141 +346,331 @@ void test(
   },
 );
 
-// ---- Scenario C: a timed-out exec leaves no process behind ---------------------------------------------------------------------
+// ---- Scenarios C, C2 and D: the exec path through the dispatcher --------------------------------------------------------------
 
 // The request bound for the call that must time out: well above the fixed 30 s per-call bound (src/tools/dispatch.ts
 // TOOL_CALL_TIMEOUT_MS), so the answer the test waits for is the tool's own TOOL_TIMEOUT. Production live scenario 7 uses the same.
 const TOOL_TIMEOUT_REQUEST_BOUND_MS = 60_000;
-// Longer than the per-call bound (30 s) and the runner's own deadline (28 s), and different from scenario 7's 45, so the workload is
-// still running when the bound fires and no other scenario's sleeper can match.
-const SLEEP_SECONDS = "47";
-// The bound on seeing the sleeper while the call is in flight, and on its absence after the timeout reply.
-const SLEEPER_SEEN_TIMEOUT_MS = 25_000;
-const SLEEPER_GONE_TIMEOUT_MS = 30_000;
-const SLEEPER_INTERVAL_MS = 1_000;
+// The sleeper of the exec's shell and its background sleeper, far longer than the whole observation window (at most 40 s for the
+// reply plus 15 s for the death), so neither can end by itself while the test watches. SLEEPER_LIFE_MS is the foreground sleeper's
+// run time; the independence margin is how much of it must remain when the death is first seen.
+const SLEEPER_SECONDS = "300";
+const BACKGROUND_SLEEPER_SECONDS = "301";
+const ESCAPEE_SECONDS = "330";
+const SLEEPER_LIFE_MS = 300_000;
+const INDEPENDENCE_MARGIN_MS = 200_000;
+// The reply band of production live 7, the bounds on seeing the tree in flight and on its death, and the settle wait.
+const REPLY_MIN_MS = 25_000;
+const REPLY_MAX_MS = 40_000;
+const CONTROL_TIMEOUT_MS = 25_000;
+const CONTROL_INTERVAL_MS = 1_000;
+const DEATH_BOUND_MS = 15_000;
+const DEATH_INTERVAL_MS = 500;
+const SETTLE_MS = 3_000;
+const MARKER_PREFIX = "realm-kill-proof-";
+// A command that does not exist: scenario C records what the dispatcher answers for it (no assertion).
+const MISSING_COMMAND = "realm-no-such-command";
+const TIMEOUT_BINARY = "/usr/bin/timeout";
+const DISPATCH_REQUEST_BOUND_MS = 60_000;
+// The egress policy of production live 3 (test/integration/production-driver.test.ts): 1.1.1.1:443 allowed, 8.8.8.8:443 not.
+const ALLOWED_IP = "1.1.1.1";
+const DENIED_IP = "8.8.8.8";
+const HOST_PROBE_TIMEOUT_MS = 5_000;
 
-// Runs inside the sandbox through an argv exec: node reads /proc and prints "count <n>" then one "proc <pid> <state>" line for each
-// process whose argv is exactly [<anything>/sleep, <seconds>]. The probe's own argv is node, -e and this script, so it never
-// matches. A zombie has an empty cmdline and never matches either; the state is printed so a defunct leftover would be visible.
-const SLEEPER_SCRIPT =
-  'const fs = require("node:fs");' +
-  "const want = process.argv[1];" +
-  "const found = [];" +
-  'for (const name of fs.readdirSync("/proc")) {' +
-  "  if (!/^[0-9]+$/.test(name)) { continue; }" +
-  "  let raw;" +
-  '  try { raw = fs.readFileSync("/proc/" + name + "/cmdline", "utf8"); } catch (error) { continue; }' +
-  "  const argv = raw.split(String.fromCharCode(0));" +
-  '  if (argv.length > 0 && argv[argv.length - 1] === "") { argv.pop(); }' +
-  '  const base = (argv[0] || "").split("/").pop();' +
-  '  if (base !== "sleep" || argv.length !== 2 || argv[1] !== want) { continue; }' +
-  '  let state = "?";' +
-  '  try { const match = /^State:\\s+(\\S)/m.exec(fs.readFileSync("/proc/" + name + "/status", "utf8")); if (match) { state = match[1]; } } catch (error) { state = "gone"; }' +
-  '  found.push(name + " " + state);' +
-  "}" +
-  'console.log("count " + found.length);' +
-  'for (const entry of found) { console.log("proc " + entry); }';
+type Settled = { readonly settled: "reply"; readonly value: unknown } | { readonly settled: "rejected"; readonly error: unknown };
 
-type SleeperListing = { readonly ok: true; readonly processes: readonly string[] } | { readonly ok: false; readonly detail: string };
+// Attaches the handlers at once, so a rejection of the unawaited call is never unhandled.
+function settle(request: Promise<unknown>): Promise<Settled> {
+  return request.then(
+    (value) => ({ settled: "reply" as const, value }),
+    (error: unknown) => ({ settled: "rejected" as const, error }),
+  );
+}
 
-// The `sleep <seconds>` processes in the sandbox of the scenario's project, read from /proc. A probe that fails or prints nothing
-// parseable is a failed listing, never "no process".
-async function sleepersIn(run: ScenarioRun): Promise<SleeperListing> {
-  const result = await sandboxExec(run.inputs, sessionIdFor(run.inputs.workspaceRoot), ["node", "-e", SLEEPER_SCRIPT, SLEEP_SECONDS]);
+function pause(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+interface ExecScenario {
+  readonly run: ScenarioRun;
+  readonly session: McpSession;
+  // Notes one line in the transcript and the evidence file observations.txt.
+  readonly observe: (text: string) => void;
+}
+
+// Brings the scenario's project up through `realm mcp` and waits until it is served and active.
+async function startExecScenario(t: TestContext, scenarioName: string, options: { readonly egressAllow?: ScenarioSpec["egressAllow"] } = {}): Promise<ExecScenario> {
+  const inputs = requireLive();
+  const run = startScenario(t, scenarioName, { bringsUp: true, ...options });
+  const observations: string[] = [];
+  run.capture("observations.txt", () => observations.join("\n"));
+  const observe = (text: string): void => {
+    observations.push(text);
+    run.note(text);
+  };
+  const session = startMcpSession(inputs, run.scenario);
+  run.cleanups.add(() => {
+    // A child that is still running (a failed step, or no exit after stdin closed) is killed; the cleanup's realm down follows.
+    session.kill();
+  });
+  await initializeMcp(session);
+  await waitUntilServed(session);
+  const active = await waitForActive(inputs, run.scenario, ACTIVE_TIMEOUT_MS);
+  assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+  return { run, session, observe };
+}
+
+// One listing of the exec's tree, read inside the sandbox of the scenario's project through the probe. A probe that fails or prints
+// something unparseable is a failed listing, never "no process".
+async function treeOf(run: ScenarioRun, marker: string, seconds: readonly string[], groups: readonly number[]): Promise<TreeListing> {
+  const result = await sandboxExec(run.inputs, sessionIdFor(run.inputs.workspaceRoot), treeProbeArgv(marker, seconds, groups));
   if (result.exitCode !== 0) {
-    return { ok: false, detail: `the /proc probe failed (${describeResult(result)})` };
+    return { ok: false, detail: `the process-tree probe failed (${describeResult(result)})` };
   }
-  const lines = result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-  const counted = lines.find((line) => line.startsWith("count "));
-  const processes = lines.filter((line) => line.startsWith("proc ")).map((line) => line.slice("proc ".length));
-  if (counted === undefined || counted !== `count ${String(processes.length)}`) {
-    return { ok: false, detail: `the /proc probe printed an unexpected answer (${describeResult(result)})` };
+  return parseTreeListing(result.stdout);
+}
+
+interface TimedOutExec {
+  readonly marker: string;
+  // The last in-flight listing and its process group ids (the group of the marker member).
+  readonly flight: readonly TreeMember[];
+  readonly groups: readonly number[];
+  // The call clock: milliseconds since the call started, at the reply.
+  readonly replyAtMs: number;
+  readonly startedAt: number;
+}
+
+// Steps 4 to 7 of the proof: the negative control, the exec started and not awaited, the positive control seen in flight, then the
+// retryable TOOL_TIMEOUT reply inside the band. `script` runs under /bin/sh with the marker as its $0 (the fourth argv element).
+async function execUntilTimeout(exec: ExecScenario, script: string, seconds: readonly string[], escaped: readonly string[]): Promise<TimedOutExec> {
+  const { run, session, observe } = exec;
+  const marker = `${MARKER_PREFIX}${randomBytes(4).toString("hex")}`;
+  const every = [...seconds, ...escaped];
+  let flight: readonly TreeMember[] = [];
+  run.capture("tree-flight.txt", () => `${describeMembers(flight).split("; ").join("\n")}\n`);
+
+  const before = await treeOf(run, marker, every, []);
+  assert.ok(before.ok, `the process-tree probe must work before the exec: ${before.ok ? "" : before.detail}`);
+  assert.deepEqual(before.members, [], `no member of the tree may exist before the exec (negative control): ${describeMembers(before.members)}`);
+  observe(`negative control: no member for marker ${marker} before the exec`);
+
+  // The exec goes out through the dispatcher and is not awaited yet: while it runs, the whole tree must be visible in the sandbox.
+  const startedAt = performance.now();
+  const call = settle(session.request("tools/call", { name: "exec", arguments: { argv: ["/bin/sh", "-c", script, marker] } }, TOOL_TIMEOUT_REQUEST_BOUND_MS));
+  const seen = await pollUntil(
+    async () => {
+      const listing = await treeOf(run, marker, every, []);
+      if (!listing.ok) {
+        return { done: false, detail: listing.detail };
+      }
+      const missing = controlsHold(listing.members, marker, seconds, escaped);
+      if (missing !== undefined) {
+        return { done: false, detail: missing };
+      }
+      flight = listing.members;
+      observe(`in flight (${String(Math.round(performance.now() - startedAt))} ms): ${describeMembers(flight)}`);
+      return { done: true };
+    },
+    { timeoutMs: CONTROL_TIMEOUT_MS, intervalMs: CONTROL_INTERVAL_MS },
+  );
+  const outcome = await call;
+  const replyAt = performance.now();
+  assert.ok(seen.ok, `the probe must see the whole tree in flight, or the absence check below proves nothing (positive control): ${seen.detail}`);
+  if (outcome.settled === "rejected") {
+    assert.fail(`the exec must answer with a tool error, not fail the request: ${describeValue(outcome.error)}; realm mcp stderr ${session.stderr()}`);
   }
-  return { ok: true, processes };
+  const reply = outcome.value;
+  const elapsedMs = Math.round(replyAt - startedAt);
+  observe(`timeout reply after ${String(elapsedMs)} ms: ${describeValue(field(reply, "structuredContent"))}`);
+  assert.equal(field(reply, "isError"), true, `the exec must return a tool error: ${describeValue(reply)}`);
+  assert.deepEqual(toolErrorOf(reply), { code: "TOOL_TIMEOUT", retryable: true }, `the exec: ${describeValue(field(reply, "structuredContent"))}`);
+  assert.ok(
+    elapsedMs >= REPLY_MIN_MS && elapsedMs <= REPLY_MAX_MS,
+    `TOOL_TIMEOUT must arrive within ${String(REPLY_MIN_MS / 1000)} to ${String(REPLY_MAX_MS / 1000)} s of the call; it took ${String(elapsedMs)} ms`,
+  );
+  return { marker, flight, groups: recordedGroups(flight, marker), replyAtMs: elapsedMs, startedAt };
+}
+
+interface DeathWatch {
+  // The call clock (ms since the call started) at the end of the first listing that found no running member.
+  readonly deadAtMs: number;
+  readonly afterReplyMs: number;
+}
+
+// Step 8: polls at once and then every 500 ms for at most 15 s after the reply, judging each listing (taken with the recorded group
+// ids) against the in-flight one. `ignore` leaves members out of the judgement (scenario C2 leaves out the escapee on purpose).
+async function awaitDeath(
+  exec: ExecScenario,
+  proof: TimedOutExec,
+  seconds: readonly string[],
+  ignore: (member: TreeMember) => boolean,
+): Promise<DeathWatch> {
+  const { run, observe } = exec;
+  const lines: string[] = [];
+  run.capture("tree-after.txt", () => `${lines.join("\n")}\n`);
+  const flight = proof.flight.filter((member) => !ignore(member));
+  let deadAtMs: number | undefined;
+  const death = await pollUntil(
+    async () => {
+      const listing = await treeOf(run, proof.marker, seconds, proof.groups);
+      const sinceCallMs = performance.now() - proof.startedAt;
+      const sinceReplyMs = Math.round(sinceCallMs - proof.replyAtMs);
+      if (!listing.ok) {
+        lines.push(`+${String(sinceReplyMs)} ms: failed listing: ${listing.detail}`);
+        return { done: false, detail: listing.detail };
+      }
+      const verdict = judgeTree(flight, listing.members.filter((member) => !ignore(member)));
+      const line = `+${String(sinceReplyMs)} ms after the reply: ${String(verdict.running.length)} running, ${String(verdict.zombies.length)} zombie(s); running: ${describeMembers(verdict.running)}`;
+      lines.push(line);
+      observe(line);
+      if (verdict.dead) {
+        deadAtMs = Math.round(sinceCallMs);
+        return { done: true };
+      }
+      return {
+        done: false,
+        detail: `${String(verdict.running.length)} member(s) still running: ${describeMembers(verdict.running)}; the same process as in flight: ${describeMembers(verdict.sameProcess)}`,
+      };
+    },
+    { timeoutMs: DEATH_BOUND_MS, intervalMs: DEATH_INTERVAL_MS },
+  );
+  assert.ok(
+    death.ok && deadAtMs !== undefined,
+    `a timed-out exec must be dead within ${String(DEATH_BOUND_MS / 1000)} s of the reply, and was not: ${death.detail}`,
+  );
+  const afterReplyMs = deadAtMs - proof.replyAtMs;
+  observe(`dead ${String(afterReplyMs)} ms after the reply (${String(deadAtMs)} ms on the call clock)`);
+  return { deadAtMs, afterReplyMs };
+}
+
+// A refused or failed request is written, not thrown, so scenario C records what it saw.
+function describeSettled(outcome: Settled): string {
+  return outcome.settled === "reply" ? `reply ${describeValue(field(outcome.value, "structuredContent"))}` : `request failed ${describeValue(outcome.error)}`;
 }
 
 void test(
-  "live closeout C: an exec that times out through the dispatcher leaves no process behind in the sandbox",
+  "live closeout C: an exec that times out through the dispatcher is dead in the sandbox within 15 s of the reply, not merely finished",
   { skip: gate, timeout: EXEC_SCENARIO_TIMEOUT_MS },
   async (t) => {
     const inputs = requireLive();
-    const run = startScenario(t, "C", { bringsUp: true });
-    const observations: string[] = [];
-    run.capture("sandbox-processes.txt", () => observations.join("\n"));
-    const observe = (text: string): void => {
-      observations.push(text);
-      run.note(text);
-    };
+    const exec = await startExecScenario(t, "C");
+    const { run, session, observe } = exec;
 
-    const session = startMcpSession(inputs, run.scenario);
-    run.cleanups.add(() => {
-      // A child that is still running (a failed step, or no exit after stdin closed) is killed; the cleanup's realm down follows.
-      session.kill();
-    });
-    await initializeMcp(session);
-    await waitUntilServed(session);
-    const active = await waitForActive(inputs, run.scenario, ACTIVE_TIMEOUT_MS);
-    assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+    // Tooling: Plan 39-02 wraps every exec in /usr/bin/timeout, so the image must provide it. Runs on every build.
+    const version = await sandboxExec(inputs, sessionIdFor(inputs.workspaceRoot), [TIMEOUT_BINARY, "--version"]);
+    assert.equal(version.exitCode, 0, `the sandbox image must provide ${TIMEOUT_BINARY} (Plan 39-02 relies on it): ${describeResult(version)}`);
+    observe(`${TIMEOUT_BINARY} --version: ${version.stdout.split(/\r?\n/)[0] ?? ""}`);
 
-    const before = await sleepersIn(run);
-    assert.ok(before.ok, `the sandbox probe must work before the exec: ${before.ok ? "" : before.detail}`);
-    assert.deepEqual(before.processes, [], `no sleep ${SLEEP_SECONDS} may run in the sandbox before the exec`);
+    // Observation only (D-39-06): what the dispatcher answers for a command that does not exist. Nothing is asserted.
+    const missing = await settle(session.request("tools/call", { name: "exec", arguments: { argv: [MISSING_COMMAND] } }, DISPATCH_REQUEST_BOUND_MS));
+    observe(`exec ${MISSING_COMMAND} through the dispatcher: ${describeSettled(missing)}`);
 
-    // The exec goes out through the dispatcher and is not awaited yet: while it runs, the sleeper must be visible in the sandbox.
-    const startedAt = performance.now();
-    const call = session
-      .request("tools/call", { name: "exec", arguments: { argv: ["sleep", SLEEP_SECONDS] } }, TOOL_TIMEOUT_REQUEST_BOUND_MS)
-      .then(
-        (value) => ({ settled: "reply" as const, value }),
-        (error: unknown) => ({ settled: "rejected" as const, error }),
-      );
-    const seen = await pollUntil(
-      async () => {
-        const listing = await sleepersIn(run);
-        if (!listing.ok) {
-          return { done: false, detail: listing.detail };
-        }
-        if (listing.processes.length > 0) {
-          observe(`in flight (${String(Math.round(performance.now() - startedAt))} ms): sleep ${SLEEP_SECONDS} running as ${listing.processes.join("; ")}`);
-          return { done: true };
-        }
-        return { done: false, detail: `no sleep ${SLEEP_SECONDS} process in the sandbox yet` };
-      },
-      { timeoutMs: SLEEPER_SEEN_TIMEOUT_MS, intervalMs: SLEEPER_INTERVAL_MS },
+    const script = `sleep ${BACKGROUND_SLEEPER_SECONDS} & sleep ${SLEEPER_SECONDS}; wait`;
+    const proof = await execUntilTimeout(exec, script, [SLEEPER_SECONDS, BACKGROUND_SLEEPER_SECONDS], []);
+    observe(`recorded process group(s) ${proof.groups.join(", ")}`);
+
+    const death = await awaitDeath(exec, proof, [SLEEPER_SECONDS, BACKGROUND_SLEEPER_SECONDS], () => false);
+
+    // Independence: the sleeper still had 200 s or more of its own life when its death was first seen, so it did not end by itself.
+    observe(`the sleeper had ${String(Math.round((SLEEPER_LIFE_MS - death.deadAtMs) / 1000))} s of natural life left at the first listing that found it dead`);
+    assert.ok(
+      death.deadAtMs + INDEPENDENCE_MARGIN_MS <= SLEEPER_LIFE_MS,
+      `the death must be seen with at least ${String(INDEPENDENCE_MARGIN_MS / 1000)} s of the sleeper's ${String(SLEEPER_LIFE_MS / 1000)} s life left; it was seen at ${String(death.deadAtMs)} ms`,
     );
-    const outcome = await call;
-    assert.ok(seen.ok, `the probe must see the sleeper while the exec runs, or the absence check below proves nothing: ${seen.detail}`);
-    if (outcome.settled === "rejected") {
-      assert.fail(`exec sleep ${SLEEP_SECONDS} must answer with a tool error, not fail the request: ${describeValue(outcome.error)}; realm mcp stderr ${session.stderr()}`);
-    }
-    const timedOut = outcome.value;
-    observe(`timeout reply after ${String(Math.round(performance.now() - startedAt))} ms: ${describeValue(field(timedOut, "structuredContent"))}`);
-    assert.equal(field(timedOut, "isError"), true, `exec sleep ${SLEEP_SECONDS} must return a tool error: ${describeValue(timedOut)}`);
-    assert.deepEqual(toolErrorOf(timedOut), { code: "TOOL_TIMEOUT", retryable: true }, `exec sleep ${SLEEP_SECONDS}: ${describeValue(field(timedOut, "structuredContent"))}`);
 
-    // After the reply, no process whose argv is `sleep 47` may remain. The first listing is taken at once; a later one, within the
-    // bound, covers a kill that lands a moment after the reply.
-    const gone = await pollUntil(
-      async () => {
-        const listing = await sleepersIn(run);
-        if (!listing.ok) {
-          return { done: false, detail: listing.detail };
-        }
-        observe(`after the timeout reply: ${listing.processes.length === 0 ? "no sleeper" : `sleeper(s) ${listing.processes.join("; ")}`}`);
-        return listing.processes.length === 0 ? { done: true } : { done: false, detail: `sleep ${SLEEP_SECONDS} still runs in the sandbox: ${listing.processes.join("; ")}` };
-      },
-      { timeoutMs: SLEEPER_GONE_TIMEOUT_MS, intervalMs: SLEEPER_INTERVAL_MS },
-    );
-    assert.ok(gone.ok, `a timed-out exec must leave no process in the sandbox: ${gone.detail}`);
+    // Settle: still dead a moment later, so a transient empty listing cannot pass.
+    await pause(SETTLE_MS);
+    const settled = await treeOf(run, proof.marker, [SLEEPER_SECONDS, BACKGROUND_SLEEPER_SECONDS], proof.groups);
+    assert.ok(settled.ok, `the settle listing must work: ${settled.ok ? "" : settled.detail}`);
+    const later = judgeTree(proof.flight, settled.members);
+    observe(`settle listing after ${String(SETTLE_MS)} ms: ${String(later.running.length)} running, ${String(later.zombies.length)} zombie(s)`);
+    assert.equal(later.dead, true, `the tree must stay dead: ${describeMembers(later.running)}`);
 
-    // The session is still usable, and the child exits cleanly when its input closes.
+    // The session is still usable and active, and the child exits cleanly when its input closes.
     const echoed = await callTool(session, "exec", { argv: ["echo", "ok"] });
     assert.equal(field(echoed, "exitCode"), 0, `exec echo after the timeout: ${describeValue(echoed)}`);
+    assert.equal(String(field(echoed, "stdout")).trim(), "ok", `exec echo after the timeout: ${describeValue(echoed)}`);
+    const status = run.recorded("realm status", await realmCliWithWorkspace(inputs, run.scenario, ["status"], inputs.workspaceRoot, COMMAND_TIMEOUT_MS * 2));
+    assert.equal(stateOfStatus(status.stdout), "active", `realm status after the timeout: ${describeResult(status)}`);
     session.closeInput();
     const ended = await session.waitForExit(MCP_EXIT_TIMEOUT_MS);
     assert.deepEqual(ended, { code: 0, signal: null }, `realm mcp must exit 0 within ${String(MCP_EXIT_TIMEOUT_MS / 1000)} s of its stdin closing; stderr ${session.stderr()}`);
+  },
+);
+
+// ---- Scenario C2: a process that leaves the process group is recorded, not asserted -------------------------------------------
+
+void test(
+  "live closeout C2: after a timed-out exec the process group is dead, and whether a setsid escapee survives is recorded",
+  { skip: gate, timeout: EXEC_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    const inputs = requireLive();
+    const exec = await startExecScenario(t, "C2");
+    const { run, observe } = exec;
+
+    const setsid = await sandboxExec(inputs, sessionIdFor(inputs.workspaceRoot), ["/bin/sh", "-c", "command -v setsid"]);
+    if (setsid.exitCode !== 0) {
+      observe(`setsid is absent in the sandbox image: ${describeResult(setsid)}`);
+      t.skip("setsid absent in the sandbox image");
+      return;
+    }
+    observe(`setsid: ${setsid.stdout.trim()}`);
+
+    const script = `setsid sleep ${ESCAPEE_SECONDS} & sleep ${SLEEPER_SECONDS}; wait`;
+    const proof = await execUntilTimeout(exec, script, [SLEEPER_SECONDS], [ESCAPEE_SECONDS]);
+    const isEscapee = (member: TreeMember): boolean => isSleeperOf(member, ESCAPEE_SECONDS);
+    const escapeeInFlight = proof.flight.find(isEscapee);
+    observe(`recorded process group(s) ${proof.groups.join(", ")}; escapee in flight: ${escapeeInFlight === undefined ? "none" : describeMembers([escapeeInFlight])}`);
+
+    // The members other than the escapee are dead, as in scenario C. This is asserted.
+    await awaitDeath(exec, proof, [SLEEPER_SECONDS, ESCAPEE_SECONDS], isEscapee);
+
+    // The escapee is recorded, not asserted.
+    const last = await treeOf(run, proof.marker, [SLEEPER_SECONDS, ESCAPEE_SECONDS], proof.groups);
+    let record: string;
+    if (!last.ok) {
+      record = `escapee state unknown: ${last.detail}`;
+    } else {
+      const found = last.members.find(isEscapee);
+      if (found === undefined) {
+        record = "escapee absent: the process that left the group is gone too";
+      } else {
+        const same = escapeeInFlight !== undefined && escapeeInFlight.pid === found.pid && escapeeInFlight.start === found.start;
+        const group = proof.groups.includes(found.pgid) ? "the exec's group" : `its own group ${String(found.pgid)} (the exec's group: ${proof.groups.join(", ")})`;
+        record = `escapee ${found.state === "Z" || found.state === "X" ? "zombie" : "running"}${same ? ", the same process as in flight" : ", not the process seen in flight"}: ${describeMembers([found])}; it sits in ${group}`;
+      }
+    }
+    observe(record);
+    run.capture("escapee.txt", () => `${record}\n`);
+  },
+);
+
+// ---- Scenario D: the egress identity through the dispatcher --------------------------------------------------------------------
+
+void test(
+  "live closeout D: an exec through the dispatcher keeps its egress identity: 1.1.1.1:443 is reachable and 8.8.8.8:443 is refused",
+  { skip: gate, timeout: EXEC_SCENARIO_TIMEOUT_MS },
+  async (t) => {
+    // The supervisor connects out on the sandbox's behalf, so the host needs the real internet (production live 3 skips the same way).
+    if (!(await canConnect(ALLOWED_IP, 443, HOST_PROBE_TIMEOUT_MS))) {
+      t.skip(`the host has no outbound connectivity: a TCP connection to ${ALLOWED_IP}:443 did not open within ${String(HOST_PROBE_TIMEOUT_MS / 1000)} s`);
+      return;
+    }
+    const { session, observe } = await startExecScenario(t, "D", { egressAllow: [{ host: ALLOWED_IP, port: 443 }] });
+
+    const connectAnswer = async (host: string): Promise<NodeProbeResult> => {
+      const result = await callTool(session, "exec", { argv: nodeConnectArgv(host, 443, 4) });
+      assert.equal(field(result, "exitCode"), 0, `node connect probe for ${host} through the dispatcher: ${describeValue(result)}`);
+      const stdout = field(result, "stdout");
+      return parseNodeProbe(typeof stdout === "string" ? stdout : "");
+    };
+    const allowed = await connectAnswer(ALLOWED_IP);
+    observe(`${ALLOWED_IP}:443 through the dispatcher: ${JSON.stringify(allowed)}`);
+    assert.deepEqual(allowed, { kind: "ok", detail: "" }, `a connection to the allowed address ${ALLOWED_IP}:443 must succeed through the dispatcher`);
+    const denied = await connectAnswer(DENIED_IP);
+    observe(`${DENIED_IP}:443 through the dispatcher: ${JSON.stringify(denied)}`);
+    assert.deepEqual(denied, { kind: "error", code: "EACCES" }, `a connection to ${DENIED_IP}:443, which is not allowed, must fail with EACCES through the dispatcher`);
   },
 );
