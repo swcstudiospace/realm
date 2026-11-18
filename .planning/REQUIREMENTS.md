@@ -205,9 +205,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **ENF-03**: The migration path is documented and visible: `"mode": "off"` opts out, `realm doctor` says what to do when a stale or unlabelled client is refused, and the refusal message names the cause and the fix
 - [x] **ENF-04**: The default flip is a recorded breaking change: its commits carry `!` in the subject so the release notes list them, and the release note text and the migration notes are in the docs
 
-- [ ] **EVID-01**: The capability token tests run end to end as a non-root user on a host with `ptrace_scope` 1, and the result is recorded (the Phase 32 runs were as root)
-- [ ] **EVID-02**: The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process and its result is recorded either way, settling or leaving open the memory-read claim of the Phase 32 limits
-- [ ] **EVID-03**: A live enforce proof on the production stack: claude through the daemon with the host attached under enforce, and the audit lines are verified to carry the host and the kid; the evidence is kept outside the repository and cited by date
+- [x] **EVID-01**: The capability token tests run end to end as a non-root user on a host with `ptrace_scope` 1, and the result is recorded (the Phase 32 runs were as root)
+- [x] **EVID-02**: The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process and its result is recorded either way, settling or leaving open the memory-read claim of the Phase 32 limits
+- [x] **EVID-03**: A live enforce proof on the production stack: claude through the daemon with the host attached under enforce, and the audit lines are verified to carry the host and the kid; the evidence is kept outside the repository and cited by date
 
 - [x] **V1LIVE-01**: The v1.0 live items this host can run are re-verified, each with dated evidence kept outside the repository and recorded in the phase, or carried with a named reason: the doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, Omp responsiveness
 - [x] **V1LIVE-02**: The Anda live handshake and licence items from the v1.0 list are closed as dropped by owner decision D-27-01, and the v1.0 open-item list in the planning record is reconciled so that no item is left without a status
@@ -404,9 +404,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | ENF-02 | Phase 34 | Complete |
 | ENF-03 | Phase 34 | Complete |
 | ENF-04 | Phase 34 | Complete (partial: PR 168 squash title lacks the ! marker; the flip commit with ! is in the changelog) |
-| EVID-01 | Phase 35 | Planned |
-| EVID-02 | Phase 35 | Planned |
-| EVID-03 | Phase 35 | Planned |
+| EVID-01 | Phase 35 | Complete |
+| EVID-02 | Phase 35 | Complete |
+| EVID-03 | Phase 35 | Complete |
 | V1LIVE-01 | Phase 36 | Complete |
 | V1LIVE-02 | Phase 36 | Complete |
 | SPEC-01 | Phase 37 | Complete |

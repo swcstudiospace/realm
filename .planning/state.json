@@ -211,7 +211,7 @@
     {
       "number": "35",
       "name": "Capability token evidence",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "36",
@@ -225,9 +225,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 24 of 26 · 98% · executing"
+    "command": "/gsd-new-milestone",
+    "label": "Start a new milestone",
+    "reason": "All phases complete — start a new milestone"
   },
-  "updated_at": "2026-11-18T08:03:28.457Z"
+  "updated_at": "2026-11-18T12:00:37.198Z"
 }

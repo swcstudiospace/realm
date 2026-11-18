@@ -220,7 +220,7 @@ Plans:
 
 - [x] **Phase 33: Cold attach** - `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active until the session is ready, so hosts with a 30 s connect timeout connect on a cold start; tool calls fail closed until ready; closes GAP-31-04 and re-proves claude, opencode and codex cold. (completed 2026-11-18)
 - [x] **Phase 34: Capability tokens enforce by default** - `capabilityTokens.mode` defaults to `enforce` (a breaking change: stale or unlabelled clients are refused), with a documented opt-out, doctor guidance, a clear refusal message, every in-repo client attaching, and docs and tests updated. (completed 2026-11-18)
-- [ ] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid.
+- [x] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid. (completed 2026-11-18)
 - [x] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01. (completed 2026-11-18)
 - [x] **Phase 37: Spec update** - `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state, as an owner-directed edit of 2026-11-18 recorded in the pull request; all other spec content is kept. (completed 2026-11-18)
 
@@ -630,7 +630,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 32. Capability tokens for stdio hosts | 3/3 | Complete    | 2026-11-18 |
 | 33. Cold attach | 3/3 | Complete    | 2026-11-18 |
 | 34. Capability tokens enforce by default | 3/3 | Complete    | 2026-11-18 |
-| 35. Capability token evidence | 0/0 | Not started | - |
+| 35. Capability token evidence | 3/3 | Complete    | 2026-11-18 |
 | 36. Live re-verification of the v1.0 open items | 3/3 | Complete    | 2026-11-18 |
 | 37. Spec update | 1/1 | Complete    | 2026-11-18 |
 
@@ -824,12 +824,12 @@ Plans:
   3. A live run on the production stack attaches claude through the daemon under enforce, a tool call succeeds, and the audit lines carry the host and the kid, verified by `realm audit verify` and a read of the lines.
   4. Each piece of live evidence is dated and kept outside the repository, and the phase record cites it.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 35-01-PLAN.md: Create the evidence page and its guard, then run the capability token tests as a regular user (the realmlive account, ui (wave 1)
-- [ ] 35-02-PLAN.md: Build the memory probe that can settle the Phase 32 claim, run it as a non-root, non-descendant, same-uid process agains (wave 2)
-- [ ] 35-03-PLAN.md: Prove enforce mode on the production stack with a real host attached: claude through the daemon, the default policy (enf (wave 3)
+- [x] 35-01-PLAN.md: Create the evidence page and its guard, then run the capability token tests as a regular user (the realmlive account, ui (wave 1)
+- [x] 35-02-PLAN.md: Build the memory probe that can settle the Phase 32 claim, run it as a non-root, non-descendant, same-uid process agains (wave 2)
+- [x] 35-03-PLAN.md: Prove enforce mode on the production stack with a real host attached: claude through the daemon, the default policy (enf (wave 3)
 
 ### Phase 36: Live re-verification of the v1.0 open items
 

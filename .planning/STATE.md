@@ -3,19 +3,18 @@ gsd_state_version: "1.0"
 milestone: v5.0
 milestone_name: Cold attach, enforced capability tokens and evidence
 current_phase: 35
-current_phase_name: Capability token evidence
-status: executing
-stopped_at: Phase 34 complete, ready to execute Phase 35
-last_updated: "2026-11-18T08:03:28.362Z"
+status: completed
+stopped_at: Phase 35 complete — all phases complete
+last_updated: "2026-11-18T12:00:37.092Z"
 last_activity: 2026-11-18
-last_activity_desc: Phase 34 complete, transitioned to Phase 35
-state_head: 1a71e2b4d708c6861d4f36ff1c5587a4709fa2a8
+last_activity_desc: Phase 35 complete
+state_head: 7f70e18033d080f12ed9c3780c74b72484383534
 progress:
   total_phases: 26
-  completed_phases: 43
+  completed_phases: 44
   total_plans: 13
-  completed_plans: 10
-  percent: 98
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State
@@ -29,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-18)
 
 ## Current Position
 
-Phase: 35 — Capability token evidence
+Phase: 35
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-11-18 — Phase 34 complete, transitioned to Phase 35
+Status: All phases complete
+Last activity: 2026-11-18 — Phase 35 complete
 
 ## Current Recovery Boundaries
 
@@ -58,7 +57,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 101
+- Total plans completed: 104
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -91,6 +90,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 36 | 3 | - | - |
 | 37 | 1 | - | - |
 | 34 | 3 | - | - |
+| 35 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -237,7 +237,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 34 complete, ready to execute Phase 35
+Stopped at: Phase 35 complete — all phases complete
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
