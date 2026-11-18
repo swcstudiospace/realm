@@ -204,6 +204,7 @@ Plans:
 - [x] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves. (completed 2026-11-17)
 - [ ] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build.
 - [ ] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
+- [ ] **Phase 32: Capability tokens for stdio hosts** - Per-session, per-host HMAC capability tokens minted by the daemon and carried by stdio hosts, verified before dispatch and fail-closed together with policy, with per-host profiles, audit attribution, key rotation and a doctor check, and an honest record of what they do not stop (owner override of the Phase 30 outcome, 2026-11-17).
 
 ## Phase Details
 
@@ -732,3 +733,15 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 31 to break down)
+
+### Phase 32: Capability tokens for stdio hosts
+
+**Goal:** A per-session, per-host capability token minted by the daemon and carried by stdio hosts gives per-host least privilege and verified audit attribution, fails closed together with policy, and is documented with the limits the Phase 30 spike measured (no defence against a same-uid reader of the token); built on the owner's override of 2026-11-17.
+**Depends on:** Phase 30
+**Requirements**: CAPT-02, CAPT-03, CAPT-04, CAPT-05, CAPT-06, CAPT-07, CAPT-08, CAPT-09
+**Plans:** 3 plans
+
+Plans:
+- [ ] 32-01-PLAN.md: token, keyring and rotation, mapping and profiles, policy key, redaction (wave 1)
+- [ ] 32-02-PLAN.md: control frame, gate, audit attribution, client, stdio and Omp hosts, seeded wire matrix (wave 2)
+- [ ] 32-03-PLAN.md: realm host token, doctor item, recipe guard, docs and decision record (wave 3)
