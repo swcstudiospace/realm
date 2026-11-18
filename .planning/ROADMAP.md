@@ -730,10 +730,11 @@ Plans:
 **Goal:** The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
 **Depends on:** Phase 28
 **Requirements**: BOOTP-01, BOOTP-02
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 31 to break down)
+- [ ] 31-01-PLAN.md: codex session harness, boot matrix, named gaps (wave 1)
+- [ ] 31-02-PLAN.md: live window on the production stack: claude, opencode, codex (wave 2)
 
 ### Phase 32: Capability tokens for stdio hosts
 
