@@ -286,7 +286,7 @@ void test("no thrown error, toString, JSON or inspect output of a snapshot or a 
     // Positive control: the lookup does return the key, so the checks below are not vacuous.
     assert.deepEqual(snapshot.lookup("k2"), K2);
     assertNoKeyText(snapshot, "snapshot");
-    assertNoKeyText(String(snapshot), "snapshot string");
+    assertNoKeyText(Object.prototype.toString.call(snapshot), "snapshot string");
     assertNoKeyText(read, "read result");
     assertNoKeyText(snapshot.lookup, "lookup function");
     assertNoKeyText(snapshot.retired, "retired list");
