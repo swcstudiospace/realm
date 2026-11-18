@@ -31,3 +31,4 @@
 - [ ] If dependencies changed, `npm audit --omit=dev --audit-level=high` passes (result recorded in this pull request).
 - [ ] No new dependency is added, or its justification is recorded in this pull request.
 - [ ] Release-owned files are not edited: `CHANGELOG.md` and the `version` fields of `package.json`, `package-lock.json`, and the four adapter manifests (AGENTS.md, Versioning and release).
+- [ ] Breaking change: a documented contract, default, wire shape or schema changes incompatibly. The pull request title and the breaking commits carry the `!` marker (AGENTS.md, Merge and release flow).
