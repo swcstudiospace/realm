@@ -161,6 +161,14 @@ void test("replacing or adding a catalogue key throws a TypeError", () => {
   assert.equal(Object.keys(ERROR_CATALOGUE).length, CATALOGUE_SIZE);
 });
 
+void test("D34-1: the POLICY_DENIED reason names capability tokens and realm doctor, is carried as the message, and is not retryable", () => {
+  const err = makeRealmError("POLICY_DENIED");
+  assert.ok(err.reason.includes("capability token"), err.reason);
+  assert.ok(err.reason.includes("realm doctor"), err.reason);
+  assert.equal(err.message, err.reason);
+  assert.equal(err.retryable, false);
+});
+
 void test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {
   assert.equal(
     ERROR_CATALOGUE.AUDIT_WRITE_FAILED.reason,

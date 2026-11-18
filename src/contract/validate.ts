@@ -27,7 +27,7 @@ export interface EgressRule {
   readonly port: number;
 }
 
-// Whether the daemon mints and checks capability tokens: off changes nothing, enforce turns the feature on.
+// Whether the daemon mints and checks capability tokens: enforce is the default (D34-1); off is the opt-out and changes nothing.
 export type CapabilityTokenMode = "off" | "enforce";
 
 // The capabilityTokens policy key (CAPT-04): whether the daemon mints and checks capability tokens, how long one
@@ -47,8 +47,9 @@ export interface Policy {
   readonly shellEnabled: boolean;
   readonly startupBudgetMs: number;
   readonly toolQueueMs: number;
-  // Always present on a validated policy (the schema fills the default). Optional in the type only so hand-built
-  // Policy literals keep compiling. Read it through capabilityPolicyOf (src/capability/admit.ts), which applies the default.
+  // Always present on a validated policy (the schema fills the default, mode enforce). Optional in the type only so
+  // hand-built Policy literals keep compiling. Read it through capabilityPolicyOf (src/capability/admit.ts), which
+  // applies the same default (DEFAULT_CAPABILITY_POLICY).
   readonly capabilityTokens?: CapabilityTokenPolicy;
 }
 

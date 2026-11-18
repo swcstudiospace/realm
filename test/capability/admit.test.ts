@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { capabilityPolicyOf, profileFor, requiredCapability } from "../../src/capability/admit.js";
+import { capabilityPolicyOf, DEFAULT_CAPABILITY_POLICY, profileFor, requiredCapability } from "../../src/capability/admit.js";
 import { TOKEN_CAPABILITIES } from "../../src/capability/token.js";
 import { validate, type Policy } from "../../src/contract/validate.js";
 import { HOST_IDS } from "../../src/host/types.js";
@@ -126,10 +126,18 @@ void test("requiredCapability accepts a null-prototype plain object", () => {
 });
 
 void test("capabilityPolicyOf returns the default for a policy with no member, and the member when present", () => {
-  assert.deepEqual(capabilityPolicyOf(LITERAL), { mode: "off", ttlSeconds: 3600, profiles: {} });
+  assert.deepEqual(capabilityPolicyOf(LITERAL), { mode: "enforce", ttlSeconds: 3600, profiles: {} });
+  assert.equal(capabilityPolicyOf(LITERAL), DEFAULT_CAPABILITY_POLICY);
   const configured = { mode: "enforce", ttlSeconds: 600, profiles: { cursor: ["fs.read"] } } as const;
   assert.deepEqual(capabilityPolicyOf({ ...LITERAL, capabilityTokens: configured }), configured);
-  assert.deepEqual(capabilityPolicyOf(policyOf({})), { mode: "off", ttlSeconds: 3600, profiles: {} });
+  assert.deepEqual(capabilityPolicyOf(policyOf({})), { mode: "enforce", ttlSeconds: 3600, profiles: {} });
+});
+
+void test("D34-1: DEFAULT_CAPABILITY_POLICY equals what validating an empty policy yields, so the schema and the constant cannot drift", () => {
+  assert.deepEqual(DEFAULT_CAPABILITY_POLICY, policyOf({}).capabilityTokens);
+  assert.equal(DEFAULT_CAPABILITY_POLICY.mode, "enforce");
+  assert.ok(Object.isFrozen(DEFAULT_CAPABILITY_POLICY));
+  assert.ok(Object.isFrozen(DEFAULT_CAPABILITY_POLICY.profiles));
 });
 
 void test("profileFor gives all six sorted for a host with no entry, for every host", () => {

@@ -1,6 +1,6 @@
 // CAPT-09: the honesty statements and the tables of the capability-token documentation are pinned. The first paragraph of the Q10
 // section of docs/integration/mcp.md states the same-user limit before anything else; its policy table equals the schema (defaults,
-// bounds, host ids and capability names); its mapping table equals requiredCapability; D32-1 exists with the override date; section 9
+// bounds, host ids and capability names); its mapping table equals requiredCapability; D32-1 exists with the override date and D34-1 records the default flip; section 9
 // of the spike note exists and sections 1 to 8 are byte-identical to the text Phase 30 left; AGENTS.md carries the bullet; and no
 // file among these holds a host path. Reads files only; no process starts and no network is used.
 
@@ -194,9 +194,22 @@ void test("CAPT-09: the spike note has section 9, and sections 1 to 8 are byte-i
   assert.ok(section.includes("Q10"), "section 9 points at the Q10 section");
 });
 
+void test("D34-1: the decision record holds D34-1, the policy reference names the opt-out value, and the Q10 table states the default", () => {
+  const decision = read(FILES.decision);
+  const line = decision.split("\n").find((candidate) => candidate.startsWith("**D34-1 (2026-11-18)."));
+  assert.ok(line !== undefined, "D34-1 with its date");
+  assert.ok(line.includes("D-v5-3") && line.includes("enforce") && line.includes("OQ-32-01"), "D34-1 names the owner decision, the default and the question it closes");
+  assert.ok(decision.includes("Superseded on 2026-11-18"), "D32-1's default paragraph points at D34-1");
+  const reference = read("docs/policy-reference.md");
+  assert.ok(reference.includes("\"capabilityTokens\": { \"mode\": \"off\" }"), "the policy reference names the opt-out value");
+  assert.ok(reference.includes('{ "mode": "enforce", "ttlSeconds": 3600, "profiles": {} }'), "the policy reference states the default");
+  const mode = rowsOf(tableOf(q10Section(), POLICY_HEADER)).find((row) => (row[0] ?? "").replaceAll("`", "") === "mode");
+  assert.deepEqual(codeItems(mode?.[2] ?? ""), ["enforce"], "the Q10 table states the default");
+});
+
 void test("CAPT-09: AGENTS.md carries the capability-token bullet and the layout line, and the contract doc points at Q10", () => {
   const agents = read(FILES.agents);
-  const bullet = agents.split("\n").find((line) => line.startsWith("- With `capabilityTokens.mode` set to `enforce`"));
+  const bullet = agents.split("\n").find((line) => line.startsWith("- With the default `capabilityTokens.mode` of `enforce`"));
   assert.ok(bullet !== undefined, "the control-socket neighbour bullet exists");
   assert.ok(bullet.includes("does not stop a process of the same user"), bullet);
   assert.ok(agents.includes("`capability/`: capability tokens for stdio hosts"), "the layout names src/capability");

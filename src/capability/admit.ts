@@ -10,8 +10,11 @@ import { TOKEN_CAPABILITIES, type TokenCapability } from "./token.js";
 // call the mapping does not know (a valid token is still required, and the dispatcher then refuses the call).
 export type RequiredCapability = TokenCapability | "none" | "unmapped";
 
-const DEFAULT_POLICY: CapabilityTokenPolicy = Object.freeze({
-  mode: "off",
+// The default for code that does not go through the schema: a hand-built Policy literal that omits capabilityTokens, and
+// the doctor when no policy file is configured. For a validated policy the schema (src/core/policy.schema.json) is the
+// source of the default; a test pins the two equal so they cannot drift (D34-1).
+export const DEFAULT_CAPABILITY_POLICY: CapabilityTokenPolicy = Object.freeze({
+  mode: "enforce",
   ttlSeconds: 3600,
   profiles: Object.freeze({}),
 });
@@ -58,10 +61,10 @@ function execCapability(params: unknown): TokenCapability {
   return shell === true ? "exec.shell" : "exec.argv";
 }
 
-// The policy's capabilityTokens, or the default (mode off, ttlSeconds 3600, no profiles). The only reader of the
+// The policy's capabilityTokens, or the default (mode enforce, ttlSeconds 3600, no profiles). The only reader of the
 // member: a validated policy always has it, a hand-built literal may not.
 export function capabilityPolicyOf(policy: Policy): CapabilityTokenPolicy {
-  return policy.capabilityTokens ?? DEFAULT_POLICY;
+  return policy.capabilityTokens ?? DEFAULT_CAPABILITY_POLICY;
 }
 
 // The sorted capabilities a host's token carries: the configured list, all six when the host has no entry, none
