@@ -5,9 +5,10 @@ This snippet carries no token, secret, or host path. Placeholders: `<home>` is t
 
 Moonshot has two products that share the command name `kimi`. `realm host install kimi` and `realm host install
 kimi-code` register `realm mcp --host kimi` and `realm mcp --host kimi-code` in each product's user-level `mcp.json`.
-Of everything in this phase, Kimi has the thinnest evidence: the formats come from official documentation, not from a
-running host. The sections below say exactly what is and is not shown (tiers T1 to T3 are defined under "Evidence
-reached").
+Kimi had the thinnest evidence of the wave 1 hosts: until 2026-11-18 the formats came from official documentation, not
+from a running host. On that day both products were run from scratch installs outside the repository: Kimi Code 2.6.3
+passed its production tier, and the archived legacy kimi-cli 1.51.0 passed its validator tier but failed its production
+tier. The sections below say exactly what is and is not shown (tiers T1 to T3 are defined under "Evidence reached").
 
 ## Which product is which
 
@@ -30,15 +31,19 @@ Legacy Python Kimi CLI, no longer maintained. Please use Kimi Code CLI: https://
 last PyPI release, kimi-cli 1.52.0 (fetched into a scratch environment 2026-11-17), is a deprecation stub: every entry
 point prints "kimi-cli is no longer maintained. Please use the new Kimi Code CLI." and exits 0 without writing
 anything. kimi-cli 1.51.0 answered `--version`, but `kimi mcp add --transport stdio ...` did not return within 60 s in
-an isolated `HOME` and wrote nothing; the cause was not found. No functional Kimi CLI was observed running. **Kimi Code
-is the maintained successor.** Phase 24 ships both rows (one recipe shape, one shared test suite): the `kimi` row keeps
-its `proven` tier by the owner's roadmap while its evidence tier is T1 only; the `kimi-code` row stays `config-only`.
+an isolated `HOME` and wrote nothing; the cause was not found (that command is still not run). On 2026-11-18 kimi-cli
+1.51.0, pinned and installed from its PyPI wheel into a scratch environment, ran `kimi mcp list`, `kimi mcp test` and
+`kimi mcp remove` against the recipe's file. **Kimi Code is the maintained successor and the supported product.** Phase
+24 ships both rows (one recipe shape, one shared test suite): the `kimi` row keeps its `proven` tier by the owner's
+roadmap while its production tier failed on 2026-11-18 (see "Evidence reached"); the `kimi-code` row stays
+`config-only` and was rehearsed.
 Whether to keep the `kimi-code` row, drop it, or promote it in place of `kimi` is an owner decision (OQ-24-01); doing
 either is a table-row and test-pin edit.
 
 ## Sources and dates
 
-All read on 2026-11-17 (documentation; nothing here was observed running).
+Documentation read on 2026-11-17 (nothing in this list was observed running); the pages and registry reads of 2026-11-18
+follow the list.
 
 - Kimi CLI: https://moonshotai.github.io/kimi-cli/en/customization/mcp.html: "MCP server configuration is stored in
   `~/.kimi/mcp.json`, in a format compatible with other MCP clients", with `{"mcpServers": {"chrome-devtools":
@@ -57,6 +62,17 @@ All read on 2026-11-17 (documentation; nothing here was observed running).
   hook installs), neither has an `mcp.json`, and no `kimi` executable is on `PATH`.
 - Node or Bun requirement of either product: not recorded in the pages read.
 
+Read on 2026-11-18, with the scratch installs described under "Observed 2026-11-18":
+
+- Kimi Code repository: https://github.com/MoonshotAI/kimi-code. Kimi Code pages (Markdown variants):
+  https://moonshotai.github.io/kimi-code/en/customization/mcp.html (the `mcp.json` shape, `startupTimeoutMs` with a
+  default of 30000, reconnect with backoff), https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html (the
+  subcommands, `kimi doctor`, `kimi -p`) and https://moonshotai.github.io/kimi-code/en/configuration/env-vars.html
+  (`KIMI_CODE_HOME`, the telemetry and update switches, the `KIMI_MODEL_*` provider variables).
+- npm registry, https://registry.npmjs.org/@moonshot-ai/kimi-code: version 2.6.3 (`latest`), Node `>=22.19.0`, the
+  integrity value that the installed lockfile equals.
+- PyPI, https://pypi.org/pypi/kimi-cli/json: kimi-cli 1.51.0 (uploaded 2026-09-21) and the archived 1.52.0 stub
+  (Python `>=3.12`); the SHA-256 of the 1.51.0 wheel equals the installed download.
 ## Install with realm host
 
 ```bash
@@ -119,7 +135,7 @@ configuration, and the sandbox mount does not hide these names. A read-only or h
 
 ## Kimi Code CLI 2.x, read 2026-11-17
 
-Read on 2026-11-17 from the official Kimi Code pages (https://moonshotai.github.io/kimi-code/en/customization/mcp, https://moonshotai.github.io/kimi-code/en/reference/kimi-command and https://moonshotai.github.io/kimi-code/en/configuration/env-vars). Nothing here was observed running: no Kimi Code executable is installed on the verification machine. Where a third-party guide and an official page differ, the official page wins; they agree on the points below.
+Read on 2026-11-17 from the official Kimi Code pages (https://moonshotai.github.io/kimi-code/en/customization/mcp, https://moonshotai.github.io/kimi-code/en/reference/kimi-command and https://moonshotai.github.io/kimi-code/en/configuration/env-vars). The bullets below are the documentation; the observations of 2026-11-18 follow them. Where a third-party guide and an official page differ, the official page wins; they agree on the points below.
 
 - **Where servers are declared.** `mcp.json`, at user level (`$KIMI_CODE_HOME/mcp.json`, default `~/.kimi-code/mcp.json`) and at project level (`.kimi-code/mcp.json`); a project entry overrides a user entry of the same name. Entries with a `command` field are stdio servers (optional `env`, `cwd`, `startupTimeoutMs`). In the TUI, `/mcp-config` adds, edits and deletes servers and `/mcp` shows their connection status.
 - **No `kimi mcp` command.** The documented subcommands are `login`, `acp`, `web`, `app`, `install-desktop`, `doctor`, `export`, `migrate`, `import-sessions`, `upgrade`, `vis` and `provider`. The Python CLI's `kimi mcp add|list|remove|test|auth` group does not carry over.
@@ -128,25 +144,38 @@ Read on 2026-11-17 from the official Kimi Code pages (https://moonshotai.github.
 - **Provider override.** `KIMI_MODEL_NAME` and `KIMI_MODEL_API_KEY` (both required) with optional `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` (`kimi`, `anthropic` or `openai`) define a temporary provider in memory. A key is required, so a session against a loopback provider would carry a key-shaped header, unlike the Codex session drive [INFERENCE].
 - **Headless runs and trust.** Project-level MCP servers stay disabled in a headless run unless the workspace is trusted (`KIMI_CODE_TRUST_WORKSPACE`); the recipe writes the user-level file.
 
-This is why `kimi-code` is a named gap in [Host plugin gaps](../../integration/host-plugin-gaps.md) (GAP-24-02) and not a session rehearsal: the product is functional, but nothing here was installed, and there is no documented command that lists or launches a registered server without a session.
+Because no documented command lists or launches a registered server without a session, the validator tier of `kimi-code` is a session proof, and GAP-24-02 in [Host plugin gaps](../../integration/host-plugin-gaps.md) is narrowed, not closed.
+
+### Observed 2026-11-18
+
+Kimi Code 2.6.3 was installed from the npm package at that exact version into a scratch directory outside the repository (`npm install --ignore-scripts`; the lockfile integrity equals the registry value; the install is removed after the window) and run on the production stack's account.
+
+- **No validator command.** `kimi mcp` is an unknown command (`unknown command 'mcp'`), so no host command checks the entry; `kimi doctor` exits 0 and does not read `mcp.json`.
+- **The session launches the entry.** `kimi -p` with a temporary provider (`KIMI_MODEL_NAME`, the one fixed non-secret placeholder `KIMI_MODEL_API_KEY`, `KIMI_MODEL_BASE_URL` set to a loopback provider that refuses every request, `KIMI_MODEL_PROVIDER_TYPE` set to `openai`) started `realm mcp --host kimi-code` before any model request: the server saw `initialize`, `notifications/initialized` and `tools/list`, and the six Realm tools were listed (the validator session was ready after 12005 ms with 0 provider requests; the production run showed the same wire).
+- **The model request is retried.** In the production run the host command took 37405 ms because Kimi Code retries the refused model request; the drive ended it once the boot was observed. The provider saw 6 requests, every one carrying the placeholder key, all from loopback peers.
+- **The whole environment is forwarded.** The server saw every name of the host's environment, including `KIMI_MODEL_API_KEY` (the placeholder), unlike the legacy CLI.
+- **Containment.** The update and telemetry switches were set in every run and a dead proxy in the validator runs; the production runs did not measure the CLI's own network use (GAP-43-02).
+- **Not shown.** No model turn and no tool call (GAP-31-02); one version (GAP-31-03).
 
 ## Evidence reached
 
 | Tier | Claim | Result |
 | --- | --- | --- |
 | T1 offline fixture | the recipe on a fixture host in a temporary home, for `kimi` and `kimi-code`: detect, dry-run, install, no-op reinstall, drift, foreign content, hostile content, uninstall, doctor, `realm host status`, the override variables, and the recipe value equal to the manifest launch for both | covered by the offline tests (`test/host/kimi-recipe.test.ts`); the goldens follow the official documentation read 2026-11-17 |
-| T2 host validator | `kimi mcp test realm` launches the registered argv (only a functional Kimi CLI) | gated (`REALM_LIVE_KIMI=1`); **not run**: no `kimi` executable on the verification machine, and the one published release is the inert stub. **Not available for `kimi-code`**: no validator command is documented |
-| T3 live end to end | a real Kimi session booting Realm | **gap, not run**. `kimi`: the Python CLI is archived and its last release is a deprecation stub, so no session can run. `kimi-code`: a functional product that is not installed on the verification machine, with no MCP validator command documented; none was attempted |
+| T2 host validator | `kimi mcp test realm` launches the registered argv (only a functional Kimi CLI); for `kimi-code` a session proof, because no validator command exists | `kimi`: gated (`REALM_LIVE_KIMI=1`); **ran live 2026-11-18, kimi-cli 1.51.0, 2 of 2 passed** (`kimi mcp list`, `kimi mcp test` and `kimi mcp remove` against the stub realm, and a session step against a fake MCP server; the legacy CLI forwards only `HOME` and `PATH` to the server, GAP-43-01). `kimi-code`: gated (`REALM_LIVE_KIMI_CODE=1`); **ran live 2026-11-18, Kimi Code 2.6.3, 2 of 2 passed** as a session proof (`kimi doctor` exits 0, `kimi mcp` is an unknown command, and the `kimi -p` session launched the registered server and listed the six tools) |
+| T3 live end to end | a real Kimi session booting Realm on the production stack | `kimi`: **rehearsal failed, 2026-11-18, kimi-cli 1.51.0**: `kimi mcp test realm` exited 0 after 18225 ms and sent `tools/list`, but the recorder saw no tool names; the cause is not established (GAP-43-03). `kimi-code`: **rehearsed, 2026-11-18, Kimi Code 2.6.3**, cold with no warm-up: a `kimi -p` session against a refusing loopback provider launched `realm mcp --host kimi-code`, the wire shows the handshake, `tools/list` and the six tools, and the provider saw 6 requests all with the one placeholder key. No model turn and no tool call (GAP-31-02) |
 
-The named gaps: `kimi` has T1 only; `kimi-code` has T1 only; no Kimi session of either product has loaded Realm.
+The named gaps: the legacy `kimi` production tier failed and is unexplained (GAP-43-03), and its reachability of a non-default stack is not shown (GAP-43-01); the network use of both CLIs is not measured (GAP-43-02); one version each (GAP-31-03). Kimi Code is the supported product; the legacy CLI is archived.
 
 ## Known limits
 
-- The `kimi` row is the archived product. The recipe is correct only to the extent the documentation is.
+- The `kimi` row is the archived legacy product. Its production tier failed on 2026-11-18, and it forwards only `HOME` and `PATH` to a stdio server, so the recipe (which writes no `env` block) may not reach a non-default stack (GAP-43-01; whether to add one is OQ-43-03).
 - A file over 1 MiB, invalid UTF-8, non-JSON content or a symlink on the path is refused (`status` says `unreadable`).
   A change while the command runs is `concurrent-change`: run it again (residual R-24-02).
-- A server added by editing `mcp.json` joins only sessions Kimi Code creates afterwards (documented), and the start
-  timeout against a cold first boot of up to 230 s is unknown (OQ-24-06; a search summary reported a 30 s default for
-  Kimi Code, not read directly).
+- A server added by editing `mcp.json` joins only sessions Kimi Code creates afterwards (documented). The documented
+  default start timeout of Kimi Code is 30000 ms (OQ-24-06 narrowed: `realm mcp` answers the handshake and `tools/list`
+  at once on a cold first attach, and the Kimi Code production tier listed the tools on a cold attach; a Kimi Code
+  run against a bring-up longer than the default is not shown).
+  The unexplained 1.51.0 `kimi mcp add` hang stays not run.
 
 ACP: not documented in the pages read, so this snippet gives no ACP configuration.
