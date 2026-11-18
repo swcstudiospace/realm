@@ -106,7 +106,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   // Source: contract page, Phase 25 table (T2: kilo mcp list, no result recorded) and OQ-25-09.
   kilo: record({ id: "kilo", family: "json-merge", suites: [WAVE2_SUITE], snippet: "kilo.md", live: "kilo", t2: null, t3: WAVE2_T3, deferral: null }),
   // Source: contract page, Phase 24 table: T2 ran live 2026-11-17, codex-cli 0.154.0, 5 passed, 0 failed, 2 skipped (production tiers), after the
-  // header-owned recipe merged; get and list parse only. T3: Phase 31 wrote a session tier (codex exec against a refusing loopback provider); no dated production result yet.
+  // header-owned recipe merged; get and list parse only. T3: the Phase 31 session tier (codex exec against a refusing loopback provider) passed on the production stack on 2026-11-18, after the exit-race fix.
   codex: record({
     id: "codex",
     family: "toml-table",
@@ -119,7 +119,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe",
       command: "codex mcp get, codex mcp list (parse only)",
     },
-    t3: { status: "not-run", note: "session rehearsal only: codex-cli 0.154.0, 2026-11-17, validator-tier session tests 2 of 2 passed against a refusing loopback provider; the production tier ran on 2026-11-18 and the wire showed the handshake and the six tools, but the test's ready observation raced the host's exit (fixed, no passing run yet); the row becomes rehearsed only after a passing run" },
+    t3: { status: "rehearsed", note: "codex-cli 0.154.0, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): the production tier passed after the exit-race fix, codex exec against a refusing loopback provider launched realm mcp --host codex and listed the six Realm tools, the validator tier (2) and the validator session tests (2) passed the same day, clean before and after, no model turn and no tool call; the validator session result of 2026-11-17 (2 of 2) stands; evidence kept outside the repository" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: copilot mcp get realm and list, parse only, no result recorded) and OQ-25-09.
