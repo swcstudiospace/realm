@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v5.0",
+  "milestone": "v5.0 — Cold attach, enforced capability tokens and evidence",
   "phases": [
     {
       "number": "1",
@@ -201,7 +201,7 @@
     {
       "number": "33",
       "name": "Cold attach",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "34",
@@ -225,9 +225,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "/gsd-progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 23 of 26 · 91% · executing"
   },
-  "updated_at": "2026-11-18T04:10:00.000Z"
+  "updated_at": "2026-11-18T06:52:45.828Z"
 }
