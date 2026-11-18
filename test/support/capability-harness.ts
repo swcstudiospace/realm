@@ -33,6 +33,8 @@ export interface RigOptions {
     readonly profiles?: Readonly<Record<string, readonly string[]>>;
   };
   readonly shellEnabled?: boolean;
+  // The daemon's teardown bound in milliseconds. Absent: the production bound.
+  readonly teardownTimeoutMs?: number;
 }
 
 // The environment the CLI entry reads (the runtime config that names this rig's state directory).
@@ -159,6 +161,7 @@ export async function startRig(t: TestContext, options: RigOptions = {}): Promis
       connectSocket: () => Promise.reject(new Error("connection refused")),
     },
     logger,
+    ...(options.teardownTimeoutMs === undefined ? {} : { teardownTimeoutMs: options.teardownTimeoutMs }),
   };
   const daemon = await startDaemon(daemonOptions);
   t.after(async () => {
