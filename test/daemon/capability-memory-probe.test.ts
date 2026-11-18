@@ -67,15 +67,21 @@ function ptraceScope(): string {
   }
 }
 
-// A self-probe over a token planted in this process, found by its shape only (no needle: a needle would be a second copy in the
-// probe's own memory and the check would prove nothing). When this fails the scanner is broken on this platform.
+// A self-probe over a token planted in this process. The token is held as bytes in its own off-heap ArrayBuffer and as a flat
+// string copy, both referenced until the end (a plain heap string is not reliably one contiguous run of bytes). The probe gets one
+// bytes needle of the token, whose compiled copy is a second contiguous run, so at least two raw hits prove the scanner saw the held
+// buffer; the shape search must find it as well, or fill its capped list. When this fails the scanner is broken on this platform.
 function runSelfCheck(): boolean {
   const iat = Math.floor(Date.now() / 1000);
   const planted = mintToken(randomBytes(32), { kid: "k1", sid: `selfcheck-${randomBytes(4).toString("hex")}`, host: "claude", caps: TOKEN_CAPABILITIES, iat, exp: iat + 3600 });
-  const heldBuffer = Buffer.from(planted, "latin1");
+  const heldBuffer = Buffer.allocUnsafeSlow(planted.length);
+  heldBuffer.write(planted, "latin1");
   const heldText = heldBuffer.toString("latin1");
-  const report = probeProcess({ kind: "target", pid: process.pid, needles: [], markers: [] });
-  return report.mem.open === "ok" && heldText.length === heldBuffer.length && report.mem.tokenCandidates.some((candidate) => candidate.digest === digestOf(planted));
+  const report = probeProcess({ kind: "target", pid: process.pid, needles: [{ kind: "bytes", name: "held", base64: heldBuffer.toString("base64") }], markers: [] });
+  const hits = report.mem.needleHits["held"];
+  const foundBytes = hits !== undefined && hits.raw + hits.latin1 >= 2;
+  const foundShape = report.mem.tokenCandidates.some((candidate) => candidate.digest === digestOf(planted)) || report.mem.candidatesTruncated;
+  return report.mem.open === "ok" && heldText.length === heldBuffer.length && foundBytes && foundShape;
 }
 
 // Run once per file: the second arm of a non-root run reuses the answer instead of scanning this process again.
