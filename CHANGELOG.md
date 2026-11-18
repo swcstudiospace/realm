@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-18
+
+### Added
+- feat(capability)!: enforce capability tokens by default; set capabilityTokens.mode to off to opt out (2637d9a)
+
+### Fixed
+- fix(test): drop the redundant nullish fallback (df6ecec)
+
 ## [0.5.1] - 2026-11-18
 
 ### Documentation
