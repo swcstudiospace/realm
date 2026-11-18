@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-18
+
+### Added
+- feat(milestone)!: start v5.0, cold attach, enforced capability tokens and evidence (release line 0.5.x) (2159258)
+
 ## [0.4.15] - 2026-11-18
 
 ### Documentation
