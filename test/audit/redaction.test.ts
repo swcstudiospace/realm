@@ -196,6 +196,12 @@ void test("a long name run with many credential words keeps its name and redacts
 });
 
 // CAPT-05: the token shape rcap1.PAYLOAD.MAC is redacted in every position, linearly.
+// redactValue returns null-prototype objects, and strict deep equality compares prototypes; a JSON round trip gives
+// plain objects without changing what redactValue returns.
+function plainOf(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(redactValue(value))) as unknown;
+}
+
 const TOKEN = mintToken(randomBytes(32), {
   kid: "k1",
   sid: "11111111-2222-4333-8444-555555555555",
@@ -220,15 +226,15 @@ for (const [name, text] of [
     assert.equal(redactString(`Authorization: Bearer ${text}`), `Authorization: ${REDACTED}`);
     assert.equal(redactString(`${text} and ${text}`), `${REDACTED} and ${REDACTED}`);
     // Under a key whose name carries no credential word, so only the value layer can catch it.
-    assert.deepEqual(redactValue({ note: text }), { note: REDACTED });
-    assert.deepEqual(redactValue({ outer: { list: [text, "plain"] } }), { outer: { list: [REDACTED, "plain"] } });
+    assert.deepEqual(plainOf({ note: text }), { note: REDACTED });
+    assert.deepEqual(plainOf({ outer: { list: [text, "plain"] } }), { outer: { list: [REDACTED, "plain"] } });
     // An exec argv element, as the audit line of an exec that names a token records it.
-    assert.deepEqual(redactValue({ argv: ["curl", "-H", `X-Cap: ${text}`, "url"] }), {
+    assert.deepEqual(plainOf({ argv: ["curl", "-H", `X-Cap: ${text}`, "url"] }), {
       argv: ["curl", "-H", `X-Cap: ${REDACTED}`, "url"],
     });
     assert.equal(serialized({ argv: ["echo", text] }).includes(text.slice(6)), false);
     // The key layer still catches a key named token.
-    assert.deepEqual(redactValue({ token: text }), { token: REDACTED });
+    assert.deepEqual(plainOf({ token: text }), { token: REDACTED });
   });
 }
 
@@ -252,7 +258,7 @@ void test("token shape: the word rcap1 alone, a short tail and ordinary text are
     "list the workspace root",
   ]) {
     assert.equal(redactString(text), text);
-    assert.deepEqual(redactValue({ note: text }), { note: text });
+    assert.deepEqual(plainOf({ note: text }), { note: text });
   }
 });
 

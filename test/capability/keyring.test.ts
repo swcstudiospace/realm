@@ -201,9 +201,11 @@ const GUARD_ROWS: readonly { name: string; run: (stateDir: string) => void }[] =
   {
     name: "a directory where the file belongs",
     run: (dir) => {
-      mkdirSync(join(dir, "capability", "keys.json"), { recursive: true, mode: 0o600 });
+      // The parent is 0700 before the child is made, so the child can be created by a non-root user.
+      mkdirSync(join(dir, "capability"), { mode: 0o700 });
       chmodSync(join(dir, "capability"), 0o700);
-      chmodSync(join(dir, "capability", "keys.json"), 0o600);
+      mkdirSync(join(dir, "capability", "keys.json"), { mode: 0o700 });
+      chmodSync(join(dir, "capability", "keys.json"), 0o700);
     },
   },
   { name: "a file over 64 KiB", run: (dir) => plant(dir, `${ring()}${" ".repeat(64 * 1024)}`) },
