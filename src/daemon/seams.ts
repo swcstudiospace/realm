@@ -52,6 +52,8 @@ export interface BuildDaemonHandleOptions {
   // reads are used. The startup adoption verdict takes the same readers.
   readonly readOciConfig?: (path: string) => string;
   readonly readProcStatus?: (pid: number) => string;
+  // The bound of one session's teardown in milliseconds. Defaults to TEARDOWN_TIMEOUT_MS. A test injects a small value; production never sets it.
+  readonly teardownTimeoutMs?: number;
 }
 
 // The report of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with

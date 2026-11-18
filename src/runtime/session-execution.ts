@@ -38,6 +38,7 @@ import { attachRuntimeEvidence } from "./create-evidence.js";
 import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
 import { readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
+import { AGENTOS_STOP_DEADLINE_MS, CONTAINER_STOP_GRACE_MS, SANDBOX_DELETE_DEADLINE_MS } from "./teardown-stages.js";
 import {
   buildExecArgv,
   deleteSandbox,
@@ -57,13 +58,6 @@ import {
 
 // Bound for the whole OpenShell create, including the label poll (OQ-P3-01).
 const OPENSHELL_CREATE_DEADLINE_MS = 60_000;
-// Grace period a container gets to stop before it is killed (libpod stop timeout).
-const CONTAINER_STOP_GRACE_MS = 10_000;
-// Backstop bound on the AgentOS stop in stop() and destroy(). The supervisor's own per-call timeout normally
-// settles the stop first; this timer only guarantees the container step is reached.
-const AGENTOS_STOP_DEADLINE_MS = 15_000;
-// Bound on the delete of one session's realm sandbox in stop() and destroy(). A delete that misses it is a failed stop.
-const SANDBOX_DELETE_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
 const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;

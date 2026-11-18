@@ -194,7 +194,7 @@ Q5 (capability gaps). `codex mcp get realm` prints a `remove: codex mcp remove r
 
 ## Kimi CLI and Kimi Code
 
-Read date: 2026-11-17 (ISO 8601). Sources: https://github.com/MoonshotAI/kimi-cli; https://moonshotai.github.io/kimi-cli/en/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; the GSD Core installer source at commit `69d604e`. Nothing here was observed running: no functional Kimi executable was available (the PyPI kimi-cli 1.52.0 is a deprecation stub; 1.51.0 did not complete `kimi mcp add` in 60 s).
+Read date: 2026-11-17 (ISO 8601). Sources: https://github.com/MoonshotAI/kimi-cli; https://moonshotai.github.io/kimi-cli/en/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; https://www.kimi.com/code/docs/en/kimi-code-cli/customization/mcp.html and .../configuration/{data-locations,env-vars}.html; the GSD Core installer source at commit `69d604e`. The documentation was read on that date; on 2026-11-18 kimi-cli 1.51.0 (the last functional PyPI release; 1.52.0 is a deprecation stub) and Kimi Code 2.6.3 were run from scratch installs outside the repository (see Q5). `kimi mcp add` was never run: it did not complete in 60 s on 2026-11-17 and the cause was not found.
 
 The flag question is closed: `--kimi` and the id `kimi` are Kimi CLI (Python, `~/.kimi`, `KIMI_SHARE_DIR`); `--kimi-code` and `kimi-code` are Kimi Code (Node, `~/.kimi-code`, `KIMI_CODE_HOME`). The command name `kimi` is shared, so Realm never detects either by it. Kimi CLI is archived upstream ("Legacy Python Kimi CLI, no longer maintained. Please use Kimi Code CLI"); Kimi Code is the successor.
 
@@ -202,11 +202,11 @@ Q1 (Node or Bun). Not recorded in the pages read (Kimi Code is described as Node
 
 Q2 (plugin loading). Not covered by this phase: Realm uses the MCP configuration file.
 
-Q3 (MCP loading). Kimi CLI: "MCP server configuration is stored in `~/.kimi/mcp.json`, in a format compatible with other MCP clients" with `{"mcpServers": {...}}`; commands `kimi mcp add|list|remove|test|auth`; `KIMI_SHARE_DIR` "Customize the share directory path (default: ~/.kimi)"; no project-level behavior documented. Kimi Code: user-level `~/.kimi-code/mcp.json` ("optional"), `KIMI_CODE_HOME` overrides the data root, project-level `.kimi-code/mcp.json` takes effect only after the folder is trusted at the startup prompt, and a server added by editing `mcp.json` mid-session joins only sessions created later. No validator command is documented for Kimi Code.
+Q3 (MCP loading). Kimi CLI: "MCP server configuration is stored in `~/.kimi/mcp.json`, in a format compatible with other MCP clients" with `{"mcpServers": {...}}`; commands `kimi mcp add|list|remove|test|auth`; `KIMI_SHARE_DIR` "Customize the share directory path (default: ~/.kimi)"; no project-level behavior documented. Kimi Code: user-level `~/.kimi-code/mcp.json` ("optional"), `KIMI_CODE_HOME` overrides the data root, project-level `.kimi-code/mcp.json` takes effect only after the folder is trusted at the startup prompt, and a server added by editing `mcp.json` mid-session joins only sessions created later. No validator command is documented for Kimi Code, and on 2.6.3 `kimi mcp` is an unknown command.
 
 Q4 (ACP). Not documented in the pages read.
 
-Q5 (capability gaps). The evidence for both rows is T1 only (offline fixtures against goldens that follow the documentation); no live Realm session through either product is claimed. See [the snippet](../hosts/snippets/kimi.md) and the open owner decision OQ-24-01.
+Q5 (capability gaps). T1 is the offline fixtures against goldens that follow the documentation. On 2026-11-18, Kimi Code 2.6.3 launched `realm mcp --host kimi-code` in a `kimi -p` session on the production stack and listed the six tools (rehearsed), with a session proof as its validator tier because no validator command exists. The legacy kimi 1.51.0 passed its validator tier but its production tier failed (`kimi mcp test realm` sent `tools/list` and the recorder saw no tool names; GAP-43-03), and it forwards only `HOME` and `PATH` to a stdio server (GAP-43-01). No model turn ran for either product. See [the snippet](../hosts/snippets/kimi.md) and the open owner decision OQ-24-01.
 
 ## Grok Build
 
