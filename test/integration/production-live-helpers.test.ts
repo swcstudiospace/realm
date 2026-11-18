@@ -23,6 +23,8 @@ import {
   describeValue,
   findRpcReply,
   isBenchmarkAddress,
+  LIVE_MCP_HOST,
+  mcpArgvOf,
   parseDaemonPids,
   parseListeningSockets,
   parseNodeProbe,
@@ -812,18 +814,14 @@ const ARGV_INPUTS: LiveInputs = {
   hostEnvironment: {},
 };
 
-void test("mcpSessionArgv is exactly the unlabelled form without options, and puts the host flag after the workspace with a host", () => {
-  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
-  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, {}), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
-  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "claude" }), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace", "--host", "claude"]);
-  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "claude", workspace: "/driver/workspace/p" }), [
-    "/driver/cli.js",
-    "mcp",
-    "--workspace",
-    "/driver/workspace/p",
-    "--host",
-    "claude",
-  ]);
+void test("mcpSessionArgv defaults to the labelled form of mcpArgvOf, takes a host and a workspace, and null host is the unlabelled form", () => {
+  const labelled = ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace"];
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS), labelled);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, {}), labelled);
+  assert.deepEqual(mcpArgvOf(ARGV_INPUTS), labelled);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "codex" }), ["/driver/cli.js", "mcp", "--host", "codex", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: null }), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { workspace: "/driver/workspace/p" }), ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace/p"]);
 });
 
 // A driver state directory that already holds an operator policy, and the scenario built over it.
@@ -876,4 +874,19 @@ void test("the shared-state cleanup leaves a keyring that existed before the run
   } finally {
     world.clean();
   }
+});
+
+// ---- mcpArgvOf -----------------------------------------------------------------------------------------------------------------
+
+void test("a live realm mcp session is labelled with a host id, so enforced capability tokens apply to it and it is not refused unlabelled", () => {
+  const inputs: LiveInputs = {
+    image: "localhost/realm-agentos@sha256:0",
+    stateRoot: "/driver/state",
+    secretRoot: "/driver/secret",
+    workspaceRoot: "/driver/workspace",
+    cliPath: "/driver/cli.js",
+    hostEnvironment: {},
+  };
+  assert.deepEqual(mcpArgvOf(inputs), ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace"]);
+  assert.equal(LIVE_MCP_HOST, "claude");
 });

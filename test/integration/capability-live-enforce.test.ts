@@ -423,7 +423,7 @@ void test(
     assert.equal(itemAfter?.status, "pass", "the capability-tokens doctor item must pass after the first attach");
 
     // ---- 3  Enforce is really enforcing: the unlabelled session is refused ----------------------------------------------
-    const unlabelled = startMcpSession(inputs, scenario, { workspace: projectDir });
+    const unlabelled = startMcpSession(inputs, scenario, { host: null, workspace: projectDir });
     sessions.push(unlabelled);
     await initializeMcp(unlabelled);
     // The session may be refused REALM_NOT_ACTIVE until the daemon has adopted it; the first answer that is not that is the verdict.

@@ -1100,22 +1100,32 @@ export interface McpSession {
   readonly pid: number | undefined;
 }
 
+// The host label of every `realm mcp` session the live suites start. Capability tokens are enforced by default, and a session with no
+// host id carries no token, so the daemon refuses its calls POLICY_DENIED. The label is unauthenticated: it only selects the token
+// profile. These suites test the daemon, not a host, so they use one fixed label.
+export const LIVE_MCP_HOST = "claude";
+
 export interface McpSessionOptions {
-  // The host id after --host. Absent: the unlabelled form (no host flag).
-  readonly host?: string;
+  // The host id after --host. Absent: LIVE_MCP_HOST. null: the unlabelled form (no host flag), which an enforcing daemon refuses.
+  readonly host?: string | null;
   // The project the session claims. Absent: the pinned workspace root.
   readonly workspace?: string;
 }
 
-// The argv after node: the compiled CLI, mcp, the workspace, and the host flag when a host is named.
+// The argv after node for a live `realm mcp` session: the compiled CLI, the host label (unless unlabelled) and the workspace.
 export function mcpSessionArgv(inputs: LiveInputs, options: McpSessionOptions = {}): readonly string[] {
-  return [inputs.cliPath, "mcp", "--workspace", options.workspace ?? inputs.workspaceRoot, ...(options.host === undefined ? [] : ["--host", options.host])];
+  const host = options.host === undefined ? LIVE_MCP_HOST : options.host;
+  return [inputs.cliPath, "mcp", ...(host === null ? [] : ["--host", host]), "--workspace", options.workspace ?? inputs.workspaceRoot];
 }
 
-// Starts `realm mcp --workspace <root>` on the current node binary with the scenario's explicit environment and stdio pipes, with
-// `--host <id>` after the workspace when options.host is set (the labelled form a host's registered command takes; without it the
-// session is unlabelled, which an enforcing daemon refuses). options.workspace names another project than the pinned root. Nothing is
-// written until the first request. The child's pid is exposed so a probe can be aimed at it.
+// The argv of `realm mcp` for a live session at the pinned workspace root with the default label.
+export function mcpArgvOf(inputs: LiveInputs): readonly string[] {
+  return mcpSessionArgv(inputs);
+}
+
+// Starts `realm mcp --host <host> --workspace <root>` on the current node binary with the scenario's explicit environment and stdio
+// pipes (default host LIVE_MCP_HOST, default workspace the pinned root; see McpSessionOptions). Nothing is written until the first
+// request. The child's pid is exposed so a probe can be aimed at it.
 export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment, options: McpSessionOptions = {}): McpSession {
   const child = spawn(process.execPath, mcpSessionArgv(inputs, options), {
     env: { ...scenario.cliEnvironment },

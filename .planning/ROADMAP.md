@@ -218,7 +218,7 @@ Plans:
 
 **Milestone Goal:** `realm mcp` connects on a cold start, capability tokens are enforced by default with a migration path, the token claims have live and non-root evidence, the v1.0 live items this host can run are re-verified, and the product spec no longer describes the Anda bridge.
 
-- [ ] **Phase 33: Cold attach** - `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active until the session is ready, so hosts with a 30 s connect timeout connect on a cold start; tool calls fail closed until ready; closes GAP-31-04 and re-proves claude, opencode and codex cold.
+- [x] **Phase 33: Cold attach** - `realm mcp` answers the MCP handshake (`initialize`, `server/discover`, `tools/list`) before `ensure` and `up` complete and reports the realm as not active until the session is ready, so hosts with a 30 s connect timeout connect on a cold start; tool calls fail closed until ready; closes GAP-31-04 and re-proves claude, opencode and codex cold. (completed 2026-11-18)
 - [ ] **Phase 34: Capability tokens enforce by default** - `capabilityTokens.mode` defaults to `enforce` (a breaking change: stale or unlabelled clients are refused), with a documented opt-out, doctor guidance, a clear refusal message, every in-repo client attaching, and docs and tests updated.
 - [ ] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid.
 - [ ] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01.
@@ -628,7 +628,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 30. Capability token spike | 2/2 | Complete    | 2026-11-18 |
 | 31. Production-stack boot rehearsals for wave 1 hosts | 2/2 | Complete    | 2026-11-18 |
 | 32. Capability tokens for stdio hosts | 3/3 | Complete    | 2026-11-18 |
-| 33. Cold attach | 0/0 | Not started | - |
+| 33. Cold attach | 3/3 | Complete    | 2026-11-18 |
 | 34. Capability tokens enforce by default | 0/0 | Not started | - |
 | 35. Capability token evidence | 0/0 | Not started | - |
 | 36. Live re-verification of the v1.0 open items | 0/0 | Not started | - |
@@ -787,12 +787,13 @@ Plans:
   2. A tool call made before the session is ready is refused with the existing not-active refusal and does not touch the sandbox; the same connection serves tool calls once the session is ready, with no reconnect.
   3. The warm path, the status labels and the audit lines are unchanged, shown by the existing contract and smoke tests plus new tests for the not-active window and the transition.
   4. The claude, opencode and codex production tiers pass from a cold start on the live stack with the warm-up removed from the test harness, and `GAP-31-04` is closed with that evidence.
-**Plans:** 3 plans
+
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 33-01-PLAN.md: Make realm mcp answer the MCP handshake and tools/list at once, run ensure, up and the readback in the background, refus (wave 1)
-- [ ] 33-02-PLAN.md: Write the serve-early contract into the three integration pages that state the boot order and the readiness signal, and  (wave 2)
-- [ ] 33-03-PLAN.md: Remove the warm-up from the live harness, add a direct cold probe that shows the early handshake, the refusal and the tr (wave 3)
+- [x] 33-01-PLAN.md: Make realm mcp answer the MCP handshake and tools/list at once, run ensure, up and the readback in the background, refus (wave 1)
+- [x] 33-02-PLAN.md: Write the serve-early contract into the three integration pages that state the boot order and the readiness signal, and  (wave 2)
+- [x] 33-03-PLAN.md: Remove the warm-up from the live harness, add a direct cold probe that shows the early handshake, the refusal and the tr (wave 3)
 
 ### Phase 34: Capability tokens enforce by default
 
@@ -804,6 +805,7 @@ Plans:
   2. The stdio hosts, Omp, ACP and `realm mcp` each attach and complete a tool call under the default, with no policy edit.
   3. A stale or unlabelled client is refused with a message that names the cause and the fix; `"mode": "off"` restores the old behaviour; `realm doctor` shows the guidance.
   4. The change ships under commits whose subjects carry `!`, and the migration notes and release note text are in the docs.
+
 **Plans:** 3 plans
 
 Plans:
@@ -821,6 +823,7 @@ Plans:
   2. The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process, and its result (read succeeded or refused) is recorded in the limits either way.
   3. A live run on the production stack attaches claude through the daemon under enforce, a tool call succeeds, and the audit lines carry the host and the kid, verified by `realm audit verify` and a read of the lines.
   4. Each piece of live evidence is dated and kept outside the repository, and the phase record cites it.
+
 **Plans:** 3 plans
 
 Plans:
@@ -837,6 +840,7 @@ Plans:
   1. The doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, and Omp responsiveness each have a recorded status: re-verified with a dated run, or carried with a named reason.
   2. No item of the v1.0 open list is left without a status; the Anda live handshake and licence items read dropped by D-27-01.
   3. The live evidence is kept outside the repository and the phase verification cites it by date and command.
+
 **Plans:** 3 plans
 
 Plans:
@@ -853,6 +857,7 @@ Plans:
   1. The spec has no statement that describes the Anda bridge, requires `andaUrl`, or requires the degraded state, and the references to them in the spec's other sections are removed or retired.
   2. A diff of the spec shows only those removals and retirements; every other statement is unchanged.
   3. The pull request body records the owner's instruction of 2026-11-18 and the reason.
+
 **Plans:** 0 plans
 
 Plans:
