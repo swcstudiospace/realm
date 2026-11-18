@@ -12,7 +12,7 @@
 //
 // Production tier (the validator gate plus the production prerequisites: Podman 5.x, the digest-pinned image, the driver config and
 // sockets, the openshell CLI, no Realm receipt for claude in the shared state directory). `claude mcp list` is Claude Code's own health
-// check: it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host claude` on the production stack. See runHostProduction.
+// check: it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host claude` on the production stack. The host attaches cold (Phase 33): nothing warms the session first. See runHostProduction.
 //
 // The test never sets a gate variable. No prompt is sent and no credential is forwarded: the environment is an allowlist. The operator's
 // real ~/.claude.json is hashed before and after every test and must not change.
