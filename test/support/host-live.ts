@@ -921,7 +921,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
   // Set once the recipe is installed: the cleanup then uninstalls it, whatever failed in the body.
-  let uninstallRecipe: (() => Promise<void>) | undefined;
+  const recipe: { uninstall?: () => Promise<void> } = {};
   cleanups.add(async () => {
     // Every step runs even when an earlier one fails (the failures are reported together at the end), so a failed assertion never
     // leaves the host receipt behind: the next run's gate refuses to start over a Realm receipt for the host.
@@ -942,7 +942,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
       }
     });
     await step(async () => {
-      await uninstallRecipe?.();
+      await recipe.uninstall?.();
     });
     await step(() => {
       restoreSharedPolicy(scenario);
@@ -1017,7 +1017,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   assert.equal(afterInstall["status"], "installed", `realm host status ${host} must report installed: ${describeValue(afterInstall)}`);
   assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
   // From here on the cleanup uninstalls the recipe (a no-op when the body already did).
-  uninstallRecipe = async () => {
+  recipe.uninstall = async () => {
     const removedAtEnd = await realmHost(["uninstall", host]);
     assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${host} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
   };
