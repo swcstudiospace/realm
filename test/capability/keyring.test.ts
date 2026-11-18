@@ -111,7 +111,7 @@ void test("ensureKeyring creates a 0700 directory and a 0600 file with one activ
     assert.equal(statSync(join(stateDir, "capability")).mode & 0o777, 0o700);
     assert.equal(statSync(keyringPathOf(stateDir)).mode & 0o777, 0o600);
     assert.equal(statSync(keyringPathOf(stateDir)).uid, UID);
-    assert.deepEqual(keysIn(stateDir), [{ kid: "k1", key: snapshot.lookup("k1")?.toString("base64url"), createdAt: 1000 }]);
+    assert.deepEqual(keysIn(stateDir), [{ kid: "k1", key: Buffer.from(snapshot.lookup("k1") ?? new Uint8Array()).toString("base64url"), createdAt: 1000 }]);
     assert.deepEqual(readdirSync(join(stateDir, "capability")), ["keys.json"], "no temp file is left behind");
   });
 });
