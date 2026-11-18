@@ -450,3 +450,102 @@ void test("stdout holds only protocol frames in every outcome", async () => {
     framesOf(session.output.text());
   }
 });
+
+// ---- (j) the one-time refusal diagnostic (Phase 34, D-34-05) -----------------------------------------------------------------
+
+// The lines of the capability hint on a diagnostics stream; every other diagnostic of these sessions is a JSON log line or absent.
+const hintLinesOf = (session: Session): string[] => session.diagnostics.text().split("\n").filter((line) => line.startsWith("realm: "));
+
+const deniedWorld = (): World => {
+  const world = newWorld();
+  world.callCode = "POLICY_DENIED";
+  return world;
+};
+
+void test("the refusal diagnostic: an unlabelled and a labelled MCP session each write exactly one line after two POLICY_DENIED calls", async () => {
+  for (const [flags, expected] of [
+    [[], "no host id"],
+    [["--host", "claude"], "host claude"],
+  ] as const) {
+    const world = deniedWorld();
+    const session = start({ argv: ["mcp", ...flags, "--workspace", WORKSPACE], world });
+    session.input.write(listTools(1));
+    await untilReply(session, 1);
+    await untilAttached(session);
+    session.input.write(callStatus(2));
+    session.input.write(callStatus(3));
+    const first = await untilReply(session, 2);
+    await untilReply(session, 3);
+    assert.equal(toolOutcomeOf(first)["code"], "POLICY_DENIED", "the outcome reaches the host unchanged");
+    const lines = hintLinesOf(session);
+    assert.equal(lines.length, 1, `one line for ${expected}`);
+    assert.ok(lines[0]?.includes(expected));
+    assert.equal(session.diagnostics.text(), `${lines[0] ?? ""}\n`, "nothing else on the diagnostics stream");
+    const result = await finish(session);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "");
+    framesOf(session.output.text());
+  }
+});
+
+void test("the refusal diagnostic: an unlabelled and a labelled ACP session each write exactly one line after two POLICY_DENIED calls", async () => {
+  for (const [flags, expected] of [
+    [[], "no host id"],
+    [["--host", "kimi"], "host kimi"],
+  ] as const) {
+    const session = start({ argv: ["acp", ...flags, "--workspace", WORKSPACE], world: deniedWorld() });
+    session.input.write(frame(1, "initialize", { protocolVersion: 1 }));
+    session.input.write(frame(2, "_realm/tool", { tool: { status: {} } }));
+    session.input.write(frame(3, "_realm/tool", { tool: { status: {} } }));
+    await untilReply(session, 2);
+    await untilReply(session, 3);
+    const lines = hintLinesOf(session);
+    assert.equal(lines.length, 1, `one line for ${expected}`);
+    assert.ok(lines[0]?.includes(expected));
+    const result = await finish(session);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, "");
+    framesOf(session.output.text());
+  }
+});
+
+void test("the refusal diagnostic: a first refusal with another code writes no line, on mcp and on acp", async () => {
+  const mcp = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE] });
+  mcp.input.write(listTools(1));
+  await untilReply(mcp, 1);
+  await untilAttached(mcp);
+  mcp.input.write(callStatus(2));
+  assert.equal(toolOutcomeOf(await untilReply(mcp, 2))["code"], "REALM_NOT_ACTIVE");
+  assert.deepEqual(hintLinesOf(mcp), []);
+  await finish(mcp);
+
+  const acp = start({ argv: ["acp", "--host", "kimi", "--workspace", WORKSPACE] });
+  acp.input.write(frame(1, "initialize", { protocolVersion: 1 }));
+  acp.input.write(frame(2, "_realm/tool", { tool: { status: {} } }));
+  await untilReply(acp, 2);
+  assert.deepEqual(hintLinesOf(acp), []);
+  await finish(acp);
+});
+
+void test("the refusal diagnostic: the local refusal of a pending boot writes no line; the daemon's POLICY_DENIED after readiness writes one", async () => {
+  const world = deniedWorld();
+  let release: () => void = () => undefined;
+  world.gateUp = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const session = start({ argv: ["mcp", "--workspace", WORKSPACE], world });
+  session.input.write(listTools(1));
+  await untilReply(session, 1);
+  session.input.write(callStatus(2));
+  const pending = await untilReply(session, 2);
+  assert.equal(toolOutcomeOf(pending)["code"], "REALM_NOT_ACTIVE", "refused locally while the boot is pending");
+  assert.deepEqual(world.tools, [], "nothing reached the daemon");
+  assert.deepEqual(hintLinesOf(session), [], "a pending-boot refusal is not a capability refusal");
+
+  release();
+  await untilAttached(session);
+  session.input.write(callStatus(3));
+  assert.equal(toolOutcomeOf(await untilReply(session, 3))["code"], "POLICY_DENIED");
+  assert.equal(hintLinesOf(session).length, 1);
+  await finish(session);
+});

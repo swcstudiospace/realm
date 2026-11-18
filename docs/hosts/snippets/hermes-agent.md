@@ -149,7 +149,7 @@ entry, then start Hermes with `hermes chat`:
 mcp_servers:
   realm:
     command: "realm"
-    args: ["mcp"]
+    args: ["mcp", "--host", "hermes"]
 ```
 
 This mirrors the page's minimal stdio example, which uses `command` and
@@ -163,7 +163,7 @@ exposed.
 The repository ships a Hermes Agent Plugins v1 (portable) bundle at
 `adapters/hermes-agent`. It has `plugin.json` (name `realm`, trust
 `untrusted`) and `mcp.json` (stdio server `realm`, command `realm`, args
-`["mcp"]`). It has no Python code. The native `plugin.yaml` is not part of the
+`["mcp", "--host", "hermes"]`). It has no Python code. The native `plugin.yaml` is not part of the
 bundle.
 
 Validate it with the Hermes validator, using an isolated `HERMES_HOME` (run

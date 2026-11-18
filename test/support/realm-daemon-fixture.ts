@@ -33,7 +33,9 @@ export interface RealmDaemonOptions {
   readonly logger?: Logger;
   // The capabilityTokens posture of the policy document the fixture writes. "default" (the default) writes no capabilityTokens key, so the
   // daemon follows the product default. "off" spreads the shared opt-out member in, for a test whose client is tokenless and is not about tokens.
-  readonly capabilityTokens?: "default" | "off";
+  // "no-policy-file" writes no policy file at all: policyPath names a file that does not exist, so the daemon loads the validated defaults.
+  // An object writes a capabilityTokens member with those per-host profiles and no mode, so the default mode applies.
+  readonly capabilityTokens?: "default" | "off" | "no-policy-file" | { readonly profiles: Readonly<Record<string, readonly string[]>> };
 }
 
 export interface RealmDaemonFixture {
@@ -55,6 +57,8 @@ export interface RealmDaemonFixture {
   // as that host, as a labelled realm mcp or realm acp does; without one it is tokenless.
   connectFor(project: string, host?: HostId): DaemonClient;
   readonly done: Promise<void>;
+  // Stops the daemon in process without a control message, for a daemon that admits no project and so cannot be released by down.
+  readonly stop: () => Promise<void>;
 }
 
 async function awaitDone(daemon: StartedDaemon): Promise<void> {
@@ -75,14 +79,17 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   const policyDir = dirname(options.stateDir);
   mkdirSync(policyDir, { recursive: true });
   const policyPath = join(policyDir, "policy.json");
-  writeFileSync(
-    policyPath,
-    JSON.stringify({
-      mode: options.mode,
-      workspaceRoots: [options.workspace],
-      ...(options.capabilityTokens === "off" ? CAPABILITY_TOKENS_OFF : {}),
-    }),
-  );
+  if (options.capabilityTokens !== "no-policy-file") {
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        mode: options.mode,
+        workspaceRoots: [options.workspace],
+        ...(options.capabilityTokens === "off" ? CAPABILITY_TOKENS_OFF : {}),
+        ...(typeof options.capabilityTokens === "object" ? { capabilityTokens: { profiles: options.capabilityTokens.profiles } } : {}),
+      }),
+    );
+  }
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
@@ -115,6 +122,7 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     socketPath: daemon.socketPath,
     policyPath,
     done: daemon.done,
+    stop: () => daemon.stop(),
     async down(project?: string): Promise<void> {
       await release(project ?? options.workspace);
       if (project === undefined) {

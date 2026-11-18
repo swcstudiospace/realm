@@ -47,6 +47,8 @@ export interface World {
   // When set, up waits on it after it is logged: the up is held open and released later (Phase 33).
   gateUp: Promise<void> | null;
   upSeen: boolean;
+  // The code a forwarded tool call is refused with (default REALM_NOT_ACTIVE; POLICY_DENIED scripts the daemon's capability refusal).
+  callCode: ErrorCode;
   readonly log: string[];
   readonly tools: unknown[];
   readonly clients: ScriptedClient[];
@@ -61,6 +63,7 @@ export const newWorld = (): World => ({
   gateAfterUp: null,
   gateUp: null,
   upSeen: false,
+  callCode: "REALM_NOT_ACTIVE",
   log: [],
   tools: [],
   clients: [],
@@ -116,7 +119,7 @@ export class ScriptedClient implements DaemonClient {
   call(tool: unknown): Promise<ToolOutcome> {
     this.world.log.push("call");
     this.world.tools.push(tool);
-    return Promise.resolve({ outcome: "refused", tool: "status", code: "REALM_NOT_ACTIVE", retryable: true });
+    return Promise.resolve({ outcome: "refused", tool: "status", code: this.world.callCode, retryable: true });
   }
 
   metrics(): Promise<MetricsSnapshot> {
