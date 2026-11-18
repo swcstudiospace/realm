@@ -37,6 +37,7 @@ covered_files:
   - "docs/integration/host-support-matrix.md"
   - "docs/hosts/snippets/muse-code.md"
   - "docs/hosts/snippets/hermes-agent.md"
+covered_digest: "v3:sha256:f4d361abab585bd2b7a62f422aade7768d544fe2da6aaf96991479ed9b60680f"
 ---
 
 # Phase 36 Verification: live re-verification of the v1.0 open items

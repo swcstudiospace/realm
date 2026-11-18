@@ -209,10 +209,10 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **EVID-02**: The `/proc/PID/mem` probe runs as a non-root, non-descendant, same-uid process and its result is recorded either way, settling or leaving open the memory-read claim of the Phase 32 limits
 - [ ] **EVID-03**: A live enforce proof on the production stack: claude through the daemon with the host attached under enforce, and the audit lines are verified to carry the host and the kid; the evidence is kept outside the repository and cited by date
 
-- [ ] **V1LIVE-01**: The v1.0 live items this host can run are re-verified, each with dated evidence kept outside the repository and recorded in the phase, or carried with a named reason: the doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, Omp responsiveness
-- [ ] **V1LIVE-02**: The Anda live handshake and licence items from the v1.0 list are closed as dropped by owner decision D-27-01, and the v1.0 open-item list in the planning record is reconciled so that no item is left without a status
+- [x] **V1LIVE-01**: The v1.0 live items this host can run are re-verified, each with dated evidence kept outside the repository and recorded in the phase, or carried with a named reason: the doctor and control-socket live modes, the two reaper live checks, Muse Code and Hermes loading, Omp responsiveness
+- [x] **V1LIVE-02**: The Anda live handshake and licence items from the v1.0 list are closed as dropped by owner decision D-27-01, and the v1.0 open-item list in the planning record is reconciled so that no item is left without a status
 
-- [ ] **SPEC-01**: `docs/specs/realm-spec.xml` no longer describes the Anda bridge, and the statements that require `andaUrl` or the degraded state are removed or retired; all other spec content is unchanged; the pull request records the owner's instruction of 2026-11-18 and the reason (an owner-directed edit of the spec)
+- [x] **SPEC-01**: `docs/specs/realm-spec.xml` no longer describes the Anda bridge, and the statements that require `andaUrl` or the degraded state are removed or retired; all other spec content is unchanged; the pull request records the owner's instruction of 2026-11-18 and the reason (an owner-directed edit of the spec)
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -407,9 +407,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | EVID-01 | Phase 35 | Planned |
 | EVID-02 | Phase 35 | Planned |
 | EVID-03 | Phase 35 | Planned |
-| V1LIVE-01 | Phase 36 | Planned |
-| V1LIVE-02 | Phase 36 | Planned |
-| SPEC-01 | Phase 37 | Planned |
+| V1LIVE-01 | Phase 36 | Complete |
+| V1LIVE-02 | Phase 36 | Complete |
+| SPEC-01 | Phase 37 | Complete |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
 | ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
