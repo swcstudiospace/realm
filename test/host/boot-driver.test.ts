@@ -385,6 +385,69 @@ void test("call while reconnecting is refused REALM_NOT_ACTIVE, retryable, with 
   await driver.shutdown();
 });
 
+// An attempt held open: the attach the driver is waiting on, with the number of attaches it was asked for.
+function heldAttempt(reattach: boolean): Built & { readonly settle: ReturnType<typeof deferredAttach>["settle"]; readonly attaches: () => number } {
+  const held = deferredAttach();
+  let count = 0;
+  const built = buildWith((root) => {
+    count += 1;
+    return held.attachDaemon(root);
+  }, reattach);
+  return { ...built, script: scriptedAttach([]), settle: held.settle, attaches: () => count };
+}
+
+for (const reattach of [false, true]) {
+  void test(`a call refused while the first attempt is in flight is REALM_NOT_ACTIVE, retryable, with no daemon call (re-attach ${reattach ? "on" : "off"})`, async () => {
+    const daemon = new FakeDaemon({ root: ROOT });
+    const { driver, settle } = heldAttempt(reattach);
+    const started = driver.start(ROOT);
+    await flushMicrotasks();
+    for (const tool of [{ exec: { argv: ["true"] } }, { status: {} }]) {
+      const name = Object.keys(tool)[0];
+      assert.deepEqual(await driver.call(tool), { outcome: "refused", tool: name, code: "REALM_NOT_ACTIVE", retryable: true });
+    }
+    assert.equal(daemon.log.length, 0);
+    settle(daemon);
+    await started;
+    await driver.shutdown();
+  });
+
+  void test(`retry while the first attempt is in flight starts no second attempt and the held attach is adopted (re-attach ${reattach ? "on" : "off"})`, async () => {
+    const daemon = new FakeDaemon({ root: ROOT });
+    const { driver, settle, attaches } = heldAttempt(reattach);
+    const started = driver.start(ROOT);
+    await flushMicrotasks();
+    assert.equal(attaches(), 1);
+    assert.deepEqual(await driver.call({ retry: {} }), { outcome: "refused", tool: "retry", code: "REALM_NOT_ACTIVE", retryable: true });
+    await driver.retry();
+    assert.equal(attaches(), 1, "no second attach was started");
+    settle(daemon);
+    await started;
+    assert.equal(driver.outcome().kind, "ready", "the held attach was adopted, not superseded");
+    assert.equal(attaches(), 1);
+    const tool = { exec: { argv: ["true"] } };
+    await driver.call(tool);
+    assert.equal(calls(daemon)[0], tool, "the next call is forwarded");
+    await driver.shutdown();
+  });
+}
+
+void test("a failed attempt with re-attach off still refuses with its code and retryable false, and retry runs one more attach", async () => {
+  const daemon = new FakeDaemon({ root: ROOT });
+  const { driver, script } = build([fail("DAEMON_START_TIMEOUT"), ok(daemon)]);
+  await driver.start(ROOT);
+  assert.deepEqual(await driver.call({ exec: { argv: ["true"] } }), {
+    outcome: "refused",
+    tool: "exec",
+    code: "DAEMON_START_TIMEOUT",
+    retryable: false,
+  });
+  await driver.retry();
+  assert.equal(script.roots.length, 2);
+  assert.equal(driver.outcome().kind, "ready");
+  await driver.shutdown();
+});
+
 void test("retry while failed runs one attach, then forwards", async () => {
   const daemon = new FakeDaemon({ root: ROOT });
   const { driver, script } = build([fail("POLICY_DENIED"), ok(daemon)]);

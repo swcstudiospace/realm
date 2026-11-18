@@ -8,6 +8,9 @@
 // attempt, link "off", and retry() performs exactly one more. With it on, a lost link waits an equal-jitter delay and attaches
 // again, at most retryCap waits per streak, each attempt under the budget, a terminal code ends the streak.
 //
+// A call refused while an attempt is in flight is retryable, and a retry in that state does nothing: it never restarts the
+// attempt the host is waiting for.
+//
 // The status poll runs while a client is adopted. It paints the state the daemon reports (only when the text changed) and is
 // the one detector of a lost link; with re-attach off it never arms a wait. Every timer goes through deps.timers and is cleared
 // at shutdown. A late attach that settles after shutdown, supersession or the budget has its client closed.
@@ -474,7 +477,7 @@ export function createBootDriver(deps: HostBootDeps, boot: ResolvedBoot): BootDr
   };
 
   const retry = async (): Promise<void> => {
-    if (!live || shut || (enabled && link === "attaching")) {
+    if (!live || shut || current !== null || (enabled && link === "attaching")) {
       return;
     }
     disarm(wait);
@@ -521,7 +524,7 @@ export function createBootDriver(deps: HostBootDeps, boot: ResolvedBoot): BootDr
   });
   // Whether a Realm tool call should wait for a fresh attach: no client, or a link that is down.
   const needsAttach = (): boolean => client === null || link === "failed" || link === "reconnecting";
-  const retryableNow = (): boolean => link === "reconnecting" || link === "attaching";
+  const retryableNow = (): boolean => link === "reconnecting" || link === "attaching" || current !== null;
 
   const call = async (tool: unknown): Promise<ToolOutcome> => {
     const name = toolNameOf(tool);

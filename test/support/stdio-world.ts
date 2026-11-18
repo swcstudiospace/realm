@@ -18,7 +18,7 @@ import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/pa
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { FakeTimers } from "./fake-host-daemon.js";
 import { capture, FakeSignals, untilReplyOn, type Capture } from "./stdio-host-harness.js";
-import { boundedWait } from "./timing.js";
+import { boundedWait, pollUntil } from "./timing.js";
 
 const AT = "2026-10-22T00:00:00.000Z";
 
@@ -44,6 +44,8 @@ export interface World {
   readbackOther: boolean;
   // When set, a status call made after up waits on it: the readback is held open.
   gateAfterUp: Promise<void> | null;
+  // When set, up waits on it after it is logged: the up is held open and released later (Phase 33).
+  gateUp: Promise<void> | null;
   upSeen: boolean;
   readonly log: string[];
   readonly tools: unknown[];
@@ -57,6 +59,7 @@ export const newWorld = (): World => ({
   reason: "realm active",
   readbackOther: false,
   gateAfterUp: null,
+  gateUp: null,
   upSeen: false,
   log: [],
   tools: [],
@@ -94,17 +97,20 @@ export class ScriptedClient implements DaemonClient {
     return statusOf(this.world, this.selection);
   }
 
-  up(): Promise<DaemonStatus> {
+  async up(): Promise<DaemonStatus> {
     this.world.log.push("up");
     this.world.upSeen = true;
     this.upCalls += 1;
+    if (this.world.gateUp !== null) {
+      await this.world.gateUp;
+    }
     if (this.world.upResult === "hang") {
       return new Promise<DaemonStatus>(() => undefined);
     }
     if (this.world.upResult !== "ok") {
-      return Promise.reject(new RealmError(this.world.upResult));
+      throw new RealmError(this.world.upResult);
     }
-    return Promise.resolve(statusOf(this.world, this.selection));
+    return statusOf(this.world, this.selection);
   }
 
   call(tool: unknown): Promise<ToolOutcome> {
@@ -147,6 +153,8 @@ export interface StartOptions {
   readonly env?: EnvironmentLike;
   readonly timeoutMs?: number;
   readonly send?: SendControlRequest;
+  // The injected boot timers (default: a fresh FakeTimers).
+  readonly timers?: FakeTimers;
 }
 
 export function startSession(options: StartOptions, rig: StdioRig): Session {
@@ -157,7 +165,7 @@ export function startSession(options: StartOptions, rig: StdioRig): Session {
   const sent: ControlRequest[] = [];
   const spawns: string[] = [];
   const signals = new FakeSignals();
-  const timers = new FakeTimers();
+  const timers = options.timers ?? new FakeTimers();
   const connect: ConnectDaemon = (_socketPath, selection, options) => {
     const client = new ScriptedClient(world, selection, options);
     world.clients.push(client);
@@ -209,6 +217,23 @@ export const markerPathOf = (rig: StdioRig, host: string): string => join(marker
 
 export const markerOf = (rig: StdioRig, host: string): Record<string, unknown> =>
   JSON.parse(readFileSync(markerPathOf(rig, host), "utf8")) as Record<string, unknown>;
+
+// ---- Readiness waits (Phase 33) ----------------------------------------------------------------------------------------------
+
+const ADOPTED_PHASES: readonly string[] = ["attached", "refused"];
+const SETTLED_PHASES: readonly string[] = ["attached", "refused", "failed"];
+
+const phasesOf = (sent: readonly ControlRequest[]): string[] =>
+  reportsOf(sent.filter((request) => request.method === "host-boot")).map((report) => report.phase);
+
+// Waits until the session adopted a client: a host-boot report whose phase is attached or refused was sent. The observer sends
+// it only after the driver adopted a verified client, so this is the exact moment a tools/call is forwarded.
+export const untilAttached = (session: Session): Promise<void> =>
+  pollUntil(() => phasesOf(session.sent).some((phase) => ADOPTED_PHASES.includes(phase)), "the boot adopting a client (an attached or refused report)");
+
+// Waits until the first attempt settled either way: a report whose phase is attached, refused or failed.
+export const untilSettled = (session: Session): Promise<void> =>
+  pollUntil(() => phasesOf(session.sent).some((phase) => SETTLED_PHASES.includes(phase)), "the boot settling (an attached, refused or failed report)");
 
 export const reportsOf = (sent: readonly ControlRequest[]): HostBootReport[] =>
   sent.map((request) => {

@@ -1,14 +1,19 @@
-// The boot sequence of `realm mcp` and `realm acp` (Phase 23, BOOT-03, BOOT-04, BOOT-08). Both entries run the same numbered
-// steps, and the host observes boot through the first protocol reply or the exit code:
+// The boot sequence of `realm mcp` and `realm acp` (Phase 23, BOOT-03, BOOT-04, BOOT-08; Phase 33, COLD-01 to COLD-03). Both
+// entries run the same numbered steps:
 //   1 resolve  the host's manifest and bounds (or the defaults for a session with no --host), a boot id, the observer;
 //   2 ensure   probe the control socket, spawn the detached daemon at most once, poll to the up bound;
 //   3 up       connect for the workspace's selection and run the idempotent up;
 //   4 readback one status read, validated against the selection (session id, bound root);
 //   5 settle   the driver's outcome: ready, refused or failed; marker written, boot report sent, log line written;
 //   6 expose   MCP creates its server and reads stdin; ACP starts its agent.
-// Steps 2 to 5 are the boot driver (src/host/boot-driver.ts) fed the shared attach (src/host/attach.ts). Nothing reads stdin
-// before step 5 settles, so a protocol reply is the readiness signal. The runner writes no stdout at all: boot text goes to
-// diagnostics, and stdout holds protocol frames only, in every outcome.
+// Steps 2 to 5 are the boot driver (src/host/boot-driver.ts) fed the shared attach (src/host/attach.ts). MCP exposes right after
+// step 1 while steps 2 to 5 run behind it: the handshake and tools/list are answered at once, every tool call is refused
+// REALM_NOT_ACTIVE (retryable) until the driver has adopted a verified client, and the same connection forwards calls after
+// that; the host observes boot through the handshake reply, then the refusals or the first forwarded call. When the boot
+// settles, src/cli/stdio-settle.ts decides the one diagnostic and whether the process exits 1 at stdin end (D-33-05). ACP
+// exposes after step 5: nothing reads stdin before step 5 settles, so its first protocol reply is the readiness signal, and a
+// boot that does not end ready exits 1 before any frame. The runner writes no stdout at all: boot text goes to diagnostics,
+// and stdout holds protocol frames only, in every outcome.
 //
 // Teardown is one idempotent function run when stdin ends, on SIGTERM, SIGINT or SIGHUP, and on every other exit: the driver
 // shuts down (timers cleared, client closed, marker removed, a `closed` report sent) and the observer flushes within one second.
@@ -23,7 +28,7 @@ import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { ControlReply, ControlRequest, ControlSelection } from "../daemon/channel.js";
 import { selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { createDaemonAttach, type RefusalRetention } from "../host/attach.js";
-import { BOOT_BOUNDS, isRetryableAttachCode, resolveBoot, type ResolvedBoot } from "../host/boot.js";
+import { BOOT_BOUNDS, resolveBoot, type ResolvedBoot } from "../host/boot.js";
 import { bootHookOf, createBootDriver, type BootDriver } from "../host/boot-driver.js";
 import { createBootObserver, type BootObserver } from "../host/boot-observer.js";
 import { defaultManifestFor, parseHostPluginManifest } from "../host/manifest.js";
@@ -33,6 +38,7 @@ import { newCorrelationId } from "../observe/ids.js";
 import { createLogger, parseLogLevel, type LogLevel } from "../observe/logger.js";
 import { createStderrSink } from "../observe/log-file.js";
 import { createMcpServer } from "../mcp/server.js";
+import { describeSettle, exitCodeAfterClose } from "./stdio-settle.js";
 
 export type StdioSignal = "SIGTERM" | "SIGINT" | "SIGHUP";
 
@@ -148,6 +154,9 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
   let noticeWritten = false;
   // The refusal of the last attach that resolved with one, kept on an object so the readers below see closure writes.
   const attachSeen: { refusal: RealmError | null } = { refusal: null };
+  // The MCP session's state across the background boot: `ending` once stdin closed or a signal came (no text is written after
+  // teardown began), `noClient` when the settle decided that a process that never adopted a client exits 1.
+  const session = { ending: false, noClient: false };
   const retention: RefusalRetention = input.transport === "mcp" ? "always" : "never";
   // The error the last attach threw. A RealmError is described by its code and the daemon-log hint; anything else is a bug in a
   // seam, not a daemon problem, so it is reported as the one catalogue-coded line with no hint.
@@ -231,6 +240,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
       return;
     }
     signalCode = 128 + SIGNAL_NUMBER[signal];
+    session.ending = true;
     releaseHandlers();
     for (const other of SIGNALS) {
       releases.push(
@@ -272,7 +282,51 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
   };
 
   try {
-    // 2 to 5: ensure, up, readback, settle.
+    if (input.transport === "mcp") {
+      // 2 to 5 run behind the server: the driver starts first (it holds the connecting state before the first line is read),
+      // the server is created in the same synchronous turn, and the settle runs when the boot does (D-33-01, D-33-05).
+      void driver.start(selection.workspaceRoot).then(
+        () => {
+          if (session.ending) {
+            return;
+          }
+          const settled = describeSettle({
+            outcome: driver.outcome(),
+            refusal: attachSeen.refusal,
+            reattach: input.reattach,
+            attachFailure: format.attachFailure,
+            failureText,
+          });
+          session.noClient = settled.noClient;
+          if (settled.diagnostic !== null) {
+            input.diagnostics.write(settled.diagnostic);
+          }
+        },
+        (error: unknown) => {
+          if (session.ending) {
+            return;
+          }
+          session.noClient = true;
+          input.diagnostics.write(format.attachFailure(error));
+        },
+      );
+      const server = createMcpServer({ call: (tool: unknown) => driver.call(tool) }, input.mcpInput, input.mcpOutput, input.diagnostics);
+      try {
+        if ((await orSignal(server.closed)) === SIGNALLED) {
+          return await signalExit();
+        }
+      } catch (error: unknown) {
+        session.ending = true;
+        if (error instanceof RealmError) {
+          return fail(format.diagnosticFor(error));
+        }
+        throw error;
+      }
+      session.ending = true;
+      return { exitCode: exitCodeAfterClose(session.noClient, driver.outcome()), stdout: "", stderr: "" };
+    }
+
+    // ACP: 2 to 5 settle before the agent starts.
     try {
       if ((await orSignal(driver.start(selection.workspaceRoot))) === SIGNALLED) {
         return await signalExit();
@@ -281,30 +335,6 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
       return fail(format.attachFailure(error));
     }
     const outcome = driver.outcome();
-
-    // 6 expose
-    if (input.transport === "mcp") {
-      if (outcome.kind === "refused" || (outcome.kind === "failed" && outcome.daemonAnswered)) {
-        input.diagnostics.write(format.attachFailure(attachSeen.refusal ?? makeRealmError(outcome.code ?? "REALM_NOT_ACTIVE")));
-      } else if (outcome.kind === "failed") {
-        const code = outcome.code ?? "REALM_NOT_ACTIVE";
-        if (!(input.reattach && isRetryableAttachCode(code))) {
-          return fail(failureText(code));
-        }
-      }
-      const server = createMcpServer({ call: (tool: unknown) => driver.call(tool) }, input.mcpInput, input.mcpOutput, input.diagnostics);
-      try {
-        if ((await orSignal(server.closed)) === SIGNALLED) {
-          return await signalExit();
-        }
-      } catch (error: unknown) {
-        if (error instanceof RealmError) {
-          return fail(format.diagnosticFor(error));
-        }
-        throw error;
-      }
-      return { exitCode: 0, stdout: "", stderr: "" };
-    }
 
     if (outcome.kind !== "ready") {
       return fail(failureText(outcome.code ?? "REALM_NOT_ACTIVE"));

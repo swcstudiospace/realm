@@ -21,7 +21,7 @@ import { isMetricsSnapshot, type MetricsSnapshot } from "../../src/observe/metri
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { FakeTimers } from "./fake-host-daemon.js";
 import { startRealmDaemon, type RealmDaemonFixture } from "./realm-daemon-fixture.js";
-import { callStatus, capture, FakeSignals, framesOf, toolOutcomeOf, untilReplyOn, type Capture } from "./stdio-host-harness.js";
+import { callStatus, capture, FakeSignals, framesOf, toolOutcomeOf, untilPresence, untilReplyOn, type Capture } from "./stdio-host-harness.js";
 import { boundedWait } from "./timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -32,6 +32,8 @@ const ENV: EnvironmentLike = { PATH: "/usr/bin", HOME: "/root", XDG_RUNTIME_DIR:
 
 // One host process: realm mcp or realm acp on injected streams and signals.
 export interface MatrixHost {
+  // The --host id: the name of the presence marker directory.
+  readonly label: string;
   readonly result: Promise<CliResult>;
   readonly input: PassThrough;
   readonly output: Capture;
@@ -166,7 +168,7 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
       diagnostics: diagnostics.stream,
       signals,
     });
-    return { result, input, output, diagnostics, signals, spawns };
+    return { label: argv[argv.indexOf("--host") + 1] ?? "", result, input, output, diagnostics, signals, spawns };
   };
 
   const metrics = async (): Promise<MetricsSnapshot> => {
@@ -181,6 +183,8 @@ export async function startMatrixRig(index: number, id: string): Promise<MatrixR
   };
 
   const statusOutcome = async (host: MatrixHost, callId: number): Promise<Record<string, unknown>> => {
+    // realm mcp answers before its boot settles and refuses a call until it has: the presence marker is written when it settles.
+    await untilPresence(stateDir, host.label);
     host.input.write(callStatus(callId));
     const reply = await boundedWait(untilReplyOn(host.output, callId), `host status call ${String(callId)}`, MATRIX_BOUND_MS);
     return toolOutcomeOf(reply);

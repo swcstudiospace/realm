@@ -4,6 +4,13 @@
 // the revision each era names (src/mcp/protocol.ts), and the status tool's snapshot and display must match what
 // `realm status` prints for the same runtime. Both eras must also list the six tools with the pinned title and annotations (an
 // independent literal table below, never read from dist or src). Run `npm run build` first; check:mcp does not build.
+//
+// realm mcp answers the handshake before its boot settles (Phase 33), so the first reply is not a readiness signal: the session
+// waits for the presence marker, which is written when the boot settles, and then takes one of two branches by the marker's attach
+// field. attached: the era, marker and status-parity checks as before. failed (the expected branch where the isolated runtime has
+// no usable stack): realm mcp served and refused fail-closed, with the marker code equal to the code on stderr, every call a
+// refused tool result, and realm status printing disconnected. A child that exits before replying, or a marker that never
+// appears within SESSION_TIMEOUT_MS, fails the gate.
 
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,7 +22,7 @@ import { isDeepStrictEqual } from "node:util";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(ROOT, "dist", "src", "cli", "main.js");
 const REPLY_TIMEOUT_MS = 30000;
-// realm mcp waits up to the 60 s up bound for a daemon before it refuses, so a session needs more than REPLY_TIMEOUT_MS.
+// realm mcp waits up to the 60 s up bound for a daemon before its boot settles, so a session needs more than REPLY_TIMEOUT_MS.
 const SESSION_TIMEOUT_MS = 120000;
 
 export function frameFor(id, method, params) {
@@ -237,9 +244,29 @@ function hasReply(text, id) {
   });
 }
 
-// Drives one MCP session as `realm mcp --host claude`: writes the first request, reads the presence marker once its reply has
-// arrived (the session is then settled and still reading), writes the rest, closes stdin, and reads the marker again after the
-// child exits. Resolves with the replies by id, stderr, the child pid and both marker observations.
+// Polls for the marker of a child until it exists, the bound passes or the child ends. Resolves with the marker, or null when the
+// bound passed or the child ended first. The poll interval is a parameter so the unit test runs without waiting.
+export function waitForMarker(read, { isEnded, timeoutMs, intervalMs = 50 }) {
+  return new Promise((resolvePromise) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      const marker = read();
+      if (marker !== null) {
+        resolvePromise(marker);
+      } else if (isEnded() || Date.now() >= deadline) {
+        resolvePromise(null);
+      } else {
+        setTimeout(check, intervalMs);
+      }
+    };
+    check();
+  });
+}
+
+// Drives one MCP session as `realm mcp --host claude`: writes the first request, waits for its reply, then waits for the presence
+// marker (written when the boot settles, after the handshake is already answered), writes the rest, closes stdin, and reads the
+// marker again after the child exits. Resolves with the replies by id, stderr, the child pid, both marker observations and
+// whether the first reply and the marker were seen.
 function session(env, cwd, workspaceRoot, stateDir, requests) {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, [CLI, "mcp", "--host", "claude", "--workspace", workspaceRoot], {
@@ -250,6 +277,7 @@ function session(env, cwd, workspaceRoot, stateDir, requests) {
     let stdout = "";
     let stderr = "";
     let markerDuring = null;
+    let ended = false;
     let sentRest = false;
     const [first, ...rest] = requests;
     const timer = setTimeout(() => {
@@ -262,11 +290,16 @@ function session(env, cwd, workspaceRoot, stateDir, requests) {
       stdout += chunk;
       if (!sentRest && hasReply(stdout, first[0])) {
         sentRest = true;
-        markerDuring = readMarker(stateDir, "claude", child.pid);
-        for (const [id, method, params] of rest) {
-          child.stdin.write(frameFor(id, method, params));
-        }
-        child.stdin.end();
+        void waitForMarker(() => readMarker(stateDir, "claude", child.pid), { isEnded: () => ended, timeoutMs: SESSION_TIMEOUT_MS }).then((marker) => {
+          markerDuring = marker;
+          if (marker === null || ended) {
+            return;
+          }
+          for (const [id, method, params] of rest) {
+            child.stdin.write(frameFor(id, method, params));
+          }
+          child.stdin.end();
+        });
       }
     });
     child.stderr.on("data", (chunk) => {
@@ -277,6 +310,7 @@ function session(env, cwd, workspaceRoot, stateDir, requests) {
       rejectPromise(error);
     });
     child.on("close", () => {
+      ended = true;
       clearTimeout(timer);
       resolvePromise({
         replies: parseReplies(stdout),
@@ -288,6 +322,19 @@ function session(env, cwd, workspaceRoot, stateDir, requests) {
     });
     child.stdin.write(frameFor(first[0], first[1], first[2]));
   });
+}
+
+// A status call answered by a realm whose boot failed: a refused tool result (isError true) whose structuredContent carries the
+// failure code or REALM_NOT_ACTIVE. Returns null when it is, else why not.
+export function describeFailedStatus(mcpResult, code) {
+  const outcome = mcpResult?.structuredContent;
+  if (mcpResult?.isError !== true) {
+    return "the status call of a realm whose boot failed must be an error result";
+  }
+  if (outcome?.outcome !== "refused" || (outcome.code !== code && outcome.code !== "REALM_NOT_ACTIVE")) {
+    return `the status call must be refused with ${code} or REALM_NOT_ACTIVE, got ${JSON.stringify(outcome)}`;
+  }
+  return null;
 }
 
 async function main() {
@@ -309,27 +356,31 @@ async function main() {
       [6, "tools/call", { name: "status", arguments: {}, _meta: modernMeta }],
       [7, "tools/list", { _meta: { [META_VERSION_KEY]: "1900-01-01" } }],
     ]);
-    if (!replies.some((reply) => reply.id === 1)) {
-      // Fail-closed attach: realm mcp exits before serving when no daemon can start. Accept only that outcome,
-      // with a catalogue code on stderr and realm status reporting disconnected.
-      const code = /^([A-Z][A-Z_]+):/m.exec(stderr)?.[1];
-      const cliStatus = runCli(["status"], env, scratch);
-      if (code === undefined || cliStatus.stdout.trim() !== "disconnected") {
-        throw new Error(`MCP session produced no reply and no fail-closed attach refusal: ${stderr.trim()}`);
-      }
-      expect(markerAfter === null, "a session that exited before serving left a presence marker");
-      process.stdout.write(`mcp smoke: realm mcp refused attach fail-closed (${code}); realm status disconnected\n`);
-      return;
-    }
-    // A served session wrote its marker before the first reply and removes it when it ends.
+    expect(replies.some((reply) => reply.id === 1), `realm mcp exited before replying to initialize: ${stderr.trim()}`);
+    expect(markerDuring !== null, "the presence marker never appeared: the boot did not settle (or the child ended first)");
     const markerProblem = describeMarker(markerDuring, pid);
-    expect(markerProblem === null, `presence marker after the first reply: ${String(markerProblem)}`);
+    expect(markerProblem === null, `presence marker once the boot settled: ${String(markerProblem)}`);
     expect(markerAfter === null, "the presence marker is removed once the session ends");
+    const failedCode = markerDuring.attach === "failed" ? markerDuring.code : null;
+    if (markerDuring.attach === "failed") {
+      // The isolated runtime has no usable stack: realm mcp answered the handshake, refused every call and wrote its failure.
+      const stderrCode = /^([A-Z][A-Z_]+):/m.exec(stderr)?.[1];
+      expect(typeof failedCode === "string" && failedCode === stderrCode, `the marker code (${String(failedCode)}) must equal the code on stderr (${String(stderrCode)})`);
+    }
     const packageVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
     const { legacyCall, modernCall } = checkEras(replies, packageVersion);
     const cli = runCli(["status"], env, scratch);
     if (cli.status !== 0 && cli.stdout.trim() !== "disconnected") {
       throw new Error(`realm status exited ${String(cli.status)}: ${cli.stderr}`);
+    }
+    if (markerDuring.attach === "failed") {
+      expect(cli.stdout.trim() === "disconnected", `realm status must print disconnected after a failed boot, got ${cli.stdout.trim()}`);
+      for (const [era, call] of [["legacy", legacyCall], ["modern", modernCall]]) {
+        const problem = describeFailedStatus(call, failedCode);
+        expect(problem === null, `${era}: ${String(problem)}`);
+      }
+      process.stdout.write(`mcp smoke: realm mcp served and refused fail-closed (${failedCode}); handshake and tools/list answered; realm status disconnected\n`);
+      return;
     }
     for (const [era, call] of [["legacy", legacyCall], ["modern", modernCall]]) {
       const parity = compareStatus(cli.stdout, call);

@@ -663,8 +663,9 @@ function writeNotice(deps: ResolvedDeps, status: DaemonStatus): void {
 }
 
 // realm mcp and realm acp attach to the shared daemon (P6-D9) through the boot sequence in src/cli/stdio-host.ts: ensure the
-// daemon, claim the workspace with up, read the status back, and only then read and answer protocol frames. stdout carries only
-// protocol messages, so every refusal and diagnostic goes to stderr. Neither entry ever sends down.
+// daemon, claim the workspace with up, read the status back. realm mcp reads and answers frames at once (tool calls are refused
+// REALM_NOT_ACTIVE until the attach settles); realm acp reads frames only after it. stdout carries only protocol messages, so
+// every refusal and diagnostic goes to stderr. Neither entry ever sends down.
 function runStdio(
   transport: "mcp" | "acp",
   deps: ResolvedDeps,

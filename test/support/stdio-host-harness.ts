@@ -2,6 +2,8 @@
 // writable, and the JSON-RPC frame helpers that check stdout holds protocol frames only.
 
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import type { StdioSignal, StdioSignals } from "../../src/cli/stdio-host.js";
 import { pollUntil } from "./timing.js";
@@ -88,3 +90,11 @@ export function toolOutcomeOf(reply: Record<string, unknown>): Record<string, un
   assert.ok(typeof content === "object" && content !== null);
   return content as Record<string, unknown>;
 }
+
+// Waits for the presence marker of a labelled session: the observer writes it only after the driver adopted a verified client,
+// so it is the exact "ready to forward" signal for a session over a real daemon (Phase 33).
+export const markerFileOf = (stateDir: string, host: string, pid: number = process.pid): string =>
+  join(stateDir, "hosts", `${host}-active`, `${String(pid)}.json`);
+
+export const untilPresence = (stateDir: string, host: string, pid: number = process.pid): Promise<void> =>
+  pollUntil(() => existsSync(markerFileOf(stateDir, host, pid)), `the presence marker of ${host} for process ${String(pid)}`);

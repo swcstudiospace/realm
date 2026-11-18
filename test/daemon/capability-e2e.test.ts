@@ -19,7 +19,7 @@ import { connectDaemon, type DaemonClient } from "../../src/daemon/client.js";
 import type { HostId } from "../../src/host/types.js";
 import { FakeTimers } from "../support/fake-host-daemon.js";
 import { startRig, type Rig } from "../support/capability-harness.js";
-import { capture, FakeSignals, frame, listTools, toolOutcomeOf, untilReplyOn } from "../support/stdio-host-harness.js";
+import { capture, FakeSignals, frame, listTools, toolOutcomeOf, untilPresence, untilReplyOn } from "../support/stdio-host-harness.js";
 import { boundedWait, pollUntil, testTimeout } from "../support/timing.js";
 
 const ENFORCE = { mode: "enforce", profiles: { cursor: ["fs.read", "fs.list"] } } as const;
@@ -192,6 +192,9 @@ async function runStdio(rig: Rig, host: HostId): Promise<{ readonly diagnostics:
   const result = runCli(["mcp", "--host", host, "--workspace", rig.workspace], deps);
   input.write(listTools(1));
   await untilReplyOn(output, 1);
+  // realm mcp answers tools/list before the attach settles and refuses a call until a client is adopted: the presence marker is
+  // written exactly then (Phase 33).
+  await untilPresence(rig.stateDir, host);
   input.write(frame(2, "tools/call", { name: "read", arguments: { path: "doc.txt", maxBytes: 64 } }));
   input.write(frame(3, "tools/call", { name: "write", arguments: { path: "doc.txt", content: "by the stdio host" } }));
   const read = await untilReplyOn(output, 2);
