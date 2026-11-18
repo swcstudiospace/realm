@@ -53,6 +53,7 @@ covered_files:
   - "docs/integration/writing-a-host-plugin.md"
   - "docs/policy-reference.md"
   - "AGENTS.md"
+covered_digest: "v3:sha256:07385b7d952acc7c8433f113deb854c26567c29712af0776ecc26014ebaf2955"
 ---
 
 # Phase 40 Verification: host ids for Muse Code, Prime Agent and Grok Build
