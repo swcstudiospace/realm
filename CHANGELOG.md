@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-18
+
+### Added
+- feat(capability): per-client enforce proofs, refusal hint, labelled launchers, migration docs (34-03) (#168) (e4f7bea)
+
+### Fixed
+- fix(test): host health-check tiers assert a bounded connect and the six tools, not a ready session (#169) (dbdbf23)
+
 ## [0.5.4] - 2026-11-18
 
 ### Fixed
