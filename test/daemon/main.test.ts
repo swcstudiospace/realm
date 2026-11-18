@@ -22,6 +22,7 @@ import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import { daemonLogPath, daemonStartFailureSince } from "../../src/daemon/ensure.js";
 import { defaultPolicyPath } from "../../src/runtime/host-paths.js";
 import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/bounds.js";
+import { DAEMON_REPLY_ALLOWANCE_MS } from "../../src/daemon/sessions.js";
 import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
 import { bindRoot } from "../../src/fs/root.js";
 import type { SessionContainers } from "../../src/runtime/session-execution.js";
@@ -678,7 +679,7 @@ void test("a stop that rejects during a signal shutdown returns 1 with its code"
 
 void test("the CLI down bound outlasts the daemon teardown bound", () => {
   assert.ok(
-    CONTROL_TIMEOUT_MS.down > TEARDOWN_TIMEOUT_MS,
+    CONTROL_TIMEOUT_MS.down >= TEARDOWN_TIMEOUT_MS + 2 * DAEMON_REPLY_ALLOWANCE_MS,
     "the CLI must not give up before the daemon finishes teardown",
   );
 });

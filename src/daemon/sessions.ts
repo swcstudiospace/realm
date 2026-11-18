@@ -30,7 +30,7 @@ export function upLockWaitMs(upClientMs: number, probeTimeoutMs: number, replyAl
   return upClientMs - 2 * probeTimeoutMs - replyAllowanceMs;
 }
 
-// The lock wait a down may spend queued: its client bound less the reply allowance. With the defaults this is 40 s.
+// The lock wait a down may spend queued: its client bound less the reply allowance. With the defaults this is 70 s.
 export function downLockWaitMs(downClientMs: number, replyAllowanceMs: number): number {
   return downClientMs - replyAllowanceMs;
 }

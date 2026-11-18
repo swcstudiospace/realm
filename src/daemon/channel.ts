@@ -33,8 +33,9 @@ const KNOWN_CODES: readonly string[] = ERROR_CODES;
 export const SOCKET_TIMEOUT_MS = 5000;
 
 // Bound for one control request, per method. down must outlast the controller teardown bound
-// (TEARDOWN_TIMEOUT_MS in lifecycle/bounds.ts, 30 s), or the CLI gives up while the daemon is
-// still tearing down. up must outlast the policy startup budget plus a margin for the reply, or the
+// (TEARDOWN_TIMEOUT_MS in lifecycle/bounds.ts, 60 s) plus the reply allowance twice (the waiter check in releaseSession) plus
+// 5 s of queue wait, or the CLI gives up while the daemon is still tearing down. The value is mirrored, not imported (P6-D10),
+// and the channel test pins it to that formula over the real constants. up must outlast the policy startup budget plus a margin for the reply, or the
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its
 // own bound, so it gets that bound plus 10 s for the reply. host-boot records one report in memory plus at most one audit
@@ -57,7 +58,7 @@ const TOOL_CALL_BOUND_MS = 30_000;
 export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Object.freeze({
   status: 5_000,
   up: STARTUP_BUDGET_DEFAULT_MS + UP_REPLY_MARGIN_MS,
-  down: 45_000,
+  down: 75_000,
   doctor: 60_000,
   tool: TOOL_CALL_BOUND_MS + 10_000,
   metrics: 5_000,

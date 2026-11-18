@@ -33,6 +33,8 @@ import {
 } from "../../src/daemon/channel.js";
 import { validate } from "../../src/contract/validate.js";
 import { TOOL_CALL_TIMEOUT_MS } from "../../src/tools/dispatch.js";
+import { TEARDOWN_TIMEOUT_MS } from "../../src/lifecycle/bounds.js";
+import { DAEMON_REPLY_ALLOWANCE_MS } from "../../src/daemon/sessions.js";
 
 const SECRET = "sk-test-0123456789abcdefghijkl";
 
@@ -139,7 +141,8 @@ void test("RT-06: the up request outlasts the policy startup budget by a positiv
     "an up request must not time out inside the default startup budget",
   );
   assert.equal(CONTROL_TIMEOUT_MS.status, 5_000);
-  assert.equal(CONTROL_TIMEOUT_MS.down, 45_000);
+  // The down bound follows the teardown bound: the bound, the reply allowance twice (the waiter check in releaseSession), and 5 s of queue wait.
+  assert.equal(CONTROL_TIMEOUT_MS.down, TEARDOWN_TIMEOUT_MS + 2 * DAEMON_REPLY_ALLOWANCE_MS + 5_000);
   assert.equal(CONTROL_TIMEOUT_MS.doctor, 60_000);
   assert.equal(CONTROL_TIMEOUT_MS.tool, TOOL_CALL_TIMEOUT_MS + 10_000);
   assert.equal(CONTROL_TIMEOUT_MS["host-boot"], 5_000);
