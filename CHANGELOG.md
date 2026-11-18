@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-18
+
+### Fixed
+- fix(test): warm the session before the production host tier; re-pin the OpenCode jsonc contract; record GAP-31-04 and the codex session result (#144) (5678978)
+
 ## [0.4.5] - 2026-11-18
 
 ### Fixed
