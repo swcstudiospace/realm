@@ -914,6 +914,8 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
 
   const suffix = randomBytes(6).toString("hex");
   const projectDir = join(inputs.workspaceRoot, `host-boot-${host}-${suffix}`);
+  // The directory must exist first: sandboxNameFor resolves its real path. The cleanup below runs `realm down` only while it exists.
+  mkdirSync(projectDir);
   const sandboxes = [sandboxNameFor(projectDir)];
   const cleanups = createCleanups();
   t.after(() => cleanups.run());
@@ -940,7 +942,6 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     const residue = await waitForNoResidue(inputs, sandboxes);
     assert.ok(residue.ok, `residue after realm down: ${residue.detail}`);
   });
-  mkdirSync(projectDir);
 
   // The host's own configuration home. Claude: a directory of the scenario named by CLAUDE_CONFIG_DIR. Codex: a directory of the
   // scenario named by CODEX_HOME. OpenCode: the `opencode` directory beside the scenario's realm/config.json, so both tools read their
