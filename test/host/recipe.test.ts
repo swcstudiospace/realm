@@ -206,6 +206,94 @@ void test("json-merge uninstall refuses drift and plans nothing, and treats a mi
   assert.deepEqual(none.changes, []);
 });
 
+// ---- json-merge seed and refuseIfPresent -----------------------------------------------
+
+const SEED = { schema_version: 1 };
+const seeded: Json = { ...json, seed: SEED, refuseIfPresent: ["mcp_servers"] };
+const RIVAL = { mcp_servers: { other: { command: "x" } } };
+
+void test("json-merge with a seed writes the seed first and the entry second into an absent file", () => {
+  const first = installed(seeded, { "settings.json": null });
+  const text = afterOf(first.plan, "settings.json");
+  assert.equal(text, `${JSON.stringify({ schema_version: 1, mcpServers: { realm: FIXTURE_JSON_VALUE } }, null, 2)}\n`);
+  const entry = first.plan.entries[0];
+  assert.equal(entry?.createdFile, true);
+  assert.deepEqual(entry.createdParents, [["mcpServers"]]);
+  assert.equal(entry.ownedSha256, sha256Text(CANONICAL_FIXTURE_VALUE));
+  // The seed copy is never shared with the recipe.
+  assert.deepEqual(SEED, { schema_version: 1 });
+});
+
+void test("json-merge never gives an existing file the seed, and leaves a seed member the user already has", () => {
+  const lacks = planRecipe(seeded, state("install", { "settings.json": '{\n  "keep": true\n}\n' }));
+  assert.deepEqual(JSON.parse(afterOf(lacks, "settings.json") ?? ""), { keep: true, mcpServers: { realm: FIXTURE_JSON_VALUE } });
+  const holds = planRecipe(seeded, state("install", { "settings.json": '{\n  "schema_version": 7\n}\n' }));
+  assert.deepEqual(JSON.parse(afterOf(holds, "settings.json") ?? ""), { schema_version: 7, mcpServers: { realm: FIXTURE_JSON_VALUE } });
+  assert.equal(holds.entries[0]?.createdFile, undefined);
+});
+
+void test("json-merge refuseIfPresent refuses an install and a reinstall over a rival key, with a fixed message", () => {
+  const rival = `${JSON.stringify(RIVAL, null, 2)}\n`;
+  assert.throws(
+    () => planRecipe(seeded, state("install", { "settings.json": rival })),
+    (error: unknown) => error instanceof HostRefusal && error.refusal === "foreign-content" && error.code === "POLICY_DENIED" && !error.message.includes("mcp_servers"),
+  );
+  const first = installed(seeded, { "settings.json": null });
+  const reinstalled = { ...JSON.parse(first.files["settings.json"] ?? "") as Record<string, unknown>, ...RIVAL };
+  refused(
+    () => planRecipe(seeded, state("install", { "settings.json": JSON.stringify(reinstalled) }, { receipt: first.plan.entries })),
+    "foreign-content",
+    "POLICY_DENIED",
+  );
+  const fine = planRecipe(seeded, state("install", { "settings.json": '{\n  "other": 1\n}\n' }));
+  assert.equal(fine.changes[0]?.action, "update");
+});
+
+void test("json-merge uninstall removes a created file that holds exactly the seed, and keeps it otherwise", () => {
+  const first = installed(seeded, { "settings.json": null });
+  const gone = planRecipe(seeded, state("uninstall", first.files, { receipt: first.plan.entries }));
+  assert.equal(gone.changes[0]?.action, "remove");
+  assert.equal(gone.changes[0].after, null);
+
+  const extra = { ...JSON.parse(first.files["settings.json"] ?? "") as Record<string, unknown>, added: true };
+  const keptExtra = planRecipe(seeded, state("uninstall", { "settings.json": JSON.stringify(extra, null, 2) }, { receipt: first.plan.entries }));
+  assert.equal(keptExtra.changes[0]?.action, "update");
+  assert.deepEqual(JSON.parse(afterOf(keptExtra, "settings.json") ?? ""), { schema_version: 1, added: true });
+
+  const changed = { schema_version: 2, mcpServers: { realm: FIXTURE_JSON_VALUE } };
+  const keptChanged = planRecipe(seeded, state("uninstall", { "settings.json": JSON.stringify(changed, null, 2) }, { receipt: first.plan.entries }));
+  assert.equal(keptChanged.changes[0]?.action, "update");
+  assert.deepEqual(JSON.parse(afterOf(keptChanged, "settings.json") ?? ""), { schema_version: 2 });
+
+  const preExisting = installed(seeded, { "settings.json": '{\n  "schema_version": 1\n}\n' });
+  const restored = planRecipe(seeded, state("uninstall", preExisting.files, { receipt: preExisting.plan.entries }));
+  assert.equal(restored.changes[0]?.action, "update", "a file Realm did not create is never deleted");
+});
+
+void test("json-merge seed and refuseIfPresent are validated on install and uninstall, and are optional", () => {
+  const bad: Partial<Json>[] = [
+    { seed: {} },
+    { seed: { "__proto__": 1 } },
+    { seed: { "bad key": 1 } },
+    { seed: { mcpServers: 1 } },
+    { seed: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${String(i)}`, i])) },
+    { seed: { a: Number.NaN } },
+    { refuseIfPresent: [] },
+    { refuseIfPresent: ["a", "a"] },
+    { refuseIfPresent: ["a", "b", "c", "d", "e"] },
+    { refuseIfPresent: ["mcpServers"] },
+    { refuseIfPresent: ["__proto__"] },
+    { seed: SEED, refuseIfPresent: ["schema_version"] },
+  ];
+  for (const extra of bad) {
+    const recipe: Json = { ...json, ...extra };
+    schemaInvalid(() => planRecipe(recipe, state("install", { "settings.json": null })));
+    schemaInvalid(() => planRecipe(recipe, state("uninstall", { "settings.json": null })));
+  }
+  const plain = installed(json, { "settings.json": null });
+  assert.equal(afterOf(plain.plan, "settings.json"), `${JSON.stringify({ mcpServers: { realm: FIXTURE_JSON_VALUE } }, null, 2)}\n`);
+});
+
 // ---- text-block ------------------------------------------------------------------
 
 const BODY = `${BLOCK_BEGIN}\n${FIXTURE_TEXT_BLOCK}\n${BLOCK_END}\n`;

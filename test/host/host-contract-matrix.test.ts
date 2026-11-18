@@ -113,6 +113,12 @@ const leakyResolver: typeof resolveHomeSpecs = (row, env) => {
   return value === undefined ? real : real.map((spec) => ({ path: value, role: spec.role }));
 };
 
+// The owned table of the codex row with its args array spread over several lines.
+function multiLineTable(args: readonly (string | number)[]): string {
+  const elements = args.map((arg) => `    ${JSON.stringify(arg)},\n`).join("");
+  return `[mcp_servers.realm]\ncommand = "realm"\nargs = [\n${elements}]\nenabled = true`;
+}
+
 const DEFECTS: readonly RowDefect[] = [
   defect("an unfrozen copy of the claude row", "claude", ["not-frozen"], () => undefined, false),
   defect("the claude flag is a near miss", "claude", ["identity"], (draft) => {
@@ -162,6 +168,20 @@ const DEFECTS: readonly RowDefect[] = [
   // The semicolon is a shell metacharacter and the last argument is no host id (launch-unsafe), and it differs from the manifest (launch-mismatch).
   defect("an argument with a semicolon on the qwen row", "qwen", ["launch-mismatch", "launch-unsafe"], (draft) => {
     put(recipeValue(draft), "args", ["mcp", "--host", "qwen;"]);
+  }),
+  // The multi-line args array a host such as Grok Build writes: four-space indent, one element per line, a trailing comma.
+  defect("the codex text in the multi-line form reads to the same launch", "codex", [], (draft) => {
+    put(at(draft, "recipe"), "text", multiLineTable(["mcp", "--host", "codex"]));
+  }),
+  // The path element is launch-unsafe; an argument list that differs from the manifest's is also launch-mismatch (as for the cursor row above).
+  defect("a multi-line args array with a path element on the codex row", "codex", ["launch-mismatch", "launch-unsafe"], (draft) => {
+    put(at(draft, "recipe"), "text", multiLineTable(["mcp", "--host", "/codex"]));
+  }),
+  defect("a multi-line args array with a number element on the codex row", "codex", ["launch-mismatch", "launch-unsafe"], (draft) => {
+    put(at(draft, "recipe"), "text", multiLineTable(["mcp", "--host", 7]));
+  }),
+  defect("a multi-line args array that never closes on the codex row", "codex", ["launch-mismatch", "launch-unsafe"], (draft) => {
+    put(at(draft, "recipe"), "text", multiLineTable(["mcp", "--host", "codex"]).replace("\n]", ""));
   }),
   {
     name: "a manifest that adds net.egress with a scope to an mcp-config host (cursor)",
