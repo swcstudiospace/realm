@@ -4,6 +4,16 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-18
+
+### Fixed
+- fix(test): create the host-boot project before naming its sandbox; correct the OpenCode uninstall contract (observed 2026-11-17) (#141) (9da42cf)
+
+### Documentation
+- docs(phase-30): close phase 30, capability token spike (#143) (1f15910)
+- docs(phase-32): plan capability tokens for stdio hosts (CAPT-02..09) (#142) (8ae8cc5)
+- docs(phase-30): capability token spike with measured results (CAPT-01) (#140) (5503b98)
+
 ## [0.4.4] - 2026-11-18
 
 ### Documentation
