@@ -1,8 +1,8 @@
-// The guard on shipped launchers (Phase 34, D-34-07, T-34-15): capability tokens are enforced by default, so a launcher the
-// repository ships must not be a bare `realm mcp`. Every launcher in the adapter files (JSON, YAML and Markdown), and every
-// `realm mcp` command line or args array in a code fence of docs/hosts/snippets and README.md, is either labelled with a canonical
-// mcp-config host id or belongs to the named set of hosts that have no host id. A new bare launcher fails here with its file and
-// line. Reads files only.
+// The guard on shipped launchers (Phase 34, D-34-07, T-34-15; made total by Phase 40, D-40-08): capability tokens are enforced by
+// default, so a launcher the repository ships must not be a bare `realm mcp`. Every launcher in the adapter files (JSON, YAML and
+// Markdown), and every `realm mcp` command line or args array in a code fence of docs/hosts/snippets and README.md, carries a
+// canonical mcp-config host id; there is no named exception. A bare launcher, an alias, an unknown id, or the id of another host
+// in a host's own file fails here with its file and line. Reads files only.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,17 +17,17 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 // The canonical ids a stdio session may name with --host (not an alias).
 const MCP_CONFIG_IDS: readonly HostId[] = HOST_IDS.filter((id) => HOST_RUNTIMES[id].integration === "mcp-config");
 
-// The named set (GAP-34-01 in docs/integration/host-plugin-gaps.md): these hosts have no host id, so their launchers are bare and
-// the default refuses them until the operator opts out or borrows a label. Grok Build has no launcher of its own: it shares the
-// Claude plugin bundle, which is labelled claude.
-const NAMED_HOSTS = ["grok-build", "muse-code", "prime-agent"] as const;
-// The files whose bare launchers the named set accounts for. Each must hold at least one launcher and every launcher in it must
-// be bare: a file that gains a label has to leave this list, and a host that gains an id has to leave NAMED_HOSTS.
-const NAMED_UNLABELLED_FILES: readonly string[] = [
-  "adapters/muse-code/mcp-settings.snippet.json",
-  "adapters/prime-agent/MCP.md",
-  "docs/hosts/snippets/muse-code.md",
-  "docs/hosts/snippets/prime-agent.md",
+// Each shipped file that is one host's own launcher, and the id it carries (a copy of another host's label fails). The Claude bundle is
+// shared with Grok Build by the Grok Build page and stays labelled claude (GAP-40-01).
+const OWN_ID_OF_FILE: readonly (readonly [string, HostId])[] = [
+  ["adapters/muse-code/mcp-settings.snippet.json", "muse-code"],
+  ["docs/hosts/snippets/muse-code.md", "muse-code"],
+  ["adapters/prime-agent/MCP.md", "prime-agent"],
+  ["docs/hosts/snippets/prime-agent.md", "prime-agent"],
+  ["docs/hosts/snippets/grok-build.md", "grok-build"],
+  ["adapters/claude-plugin/.mcp.json", "claude"],
+  ["adapters/hermes-agent/mcp.json", "hermes"],
+  ["adapters/hermes-agent/mcp.snippet.yaml", "hermes"],
 ];
 const SHARED_GROK_BUNDLE = "adapters/claude-plugin/.mcp.json";
 
@@ -134,6 +134,7 @@ void test("the scan finds the shipped launchers: the adapters, the snippets and 
     "adapters/prime-agent/MCP.md",
     "docs/hosts/snippets/claude-code.md",
     "docs/hosts/snippets/hermes-agent.md",
+    "docs/hosts/snippets/grok-build.md",
     "docs/hosts/snippets/qwen.md",
   ]) {
     assert.ok(
@@ -143,45 +144,54 @@ void test("the scan finds the shipped launchers: the adapters, the snippets and 
   }
 });
 
-void test("every shipped launcher carries a canonical host id, or belongs to the named set of hosts that have none", () => {
+void test("every shipped launcher carries a canonical mcp-config host id: the guard is total, with no named exception", () => {
   for (const launcher of LAUNCHERS) {
     const flag = hostFlagOf(launcher);
     const where = `${launcher.file}:${String(launcher.line)}`;
-    if (flag.present) {
-      assert.ok(
-        MCP_CONFIG_IDS.some((id) => id === flag.value),
-        `${where}: --host ${String(flag.value)} is not a canonical mcp-config id (an alias or an unknown id is refused by realm mcp)`,
-      );
-      continue;
-    }
+    assert.ok(flag.present, `${where}: a bare realm mcp launcher; the enforced capability-token default refuses it. Add --host ID`);
     assert.ok(
-      NAMED_UNLABELLED_FILES.includes(launcher.file),
-      `${where}: a bare realm mcp launcher; the enforced capability-token default refuses it. Add --host ID or, for a host with no id, name it in GAP-34-01 and the named set of this test`,
+      MCP_CONFIG_IDS.some((id) => id === flag.value),
+      `${where}: --host ${String(flag.value)} is not a canonical mcp-config id (an alias or an unknown id is refused by realm mcp)`,
     );
   }
 });
 
-void test("the named set cannot rot: each named file holds only bare launchers, and no named host has gained an id", () => {
-  for (const file of NAMED_UNLABELLED_FILES) {
+for (const [file, id] of OWN_ID_OF_FILE) {
+  void test(`${file}: every launcher names its own host id ${id}, and the file holds one`, () => {
     const inFile = LAUNCHERS.filter((launcher) => launcher.file === file);
     assert.ok(inFile.length > 0, `${file} holds a launcher`);
     for (const launcher of inFile) {
-      assert.equal(hostFlagOf(launcher).present, false, `${file}:${String(launcher.line)} gained a host flag: remove the file from the named set`);
+      assert.equal(hostFlagOf(launcher).value, id, `${file}:${String(launcher.line)} names another host's id`);
     }
-  }
+  });
+}
+
+void test("the three Phase 40 hosts have ids and recipes, so no host is left without a label", () => {
   const knownIds: readonly string[] = HOST_IDS;
-  for (const host of NAMED_HOSTS) {
-    assert.ok(
-      !knownIds.includes(host),
-      `${host} now has a host id: label its launchers, remove it from the named set and close or narrow GAP-34-01`,
-    );
+  for (const host of ["muse-code", "prime-agent", "grok-build"] as const) {
+    assert.ok(knownIds.includes(host), `${host} has a host id`);
+    assert.notEqual(HOST_RUNTIMES[host].recipe, null, `${host} has a recipe`);
   }
 });
 
-void test("Grok Build shares the Claude plugin bundle, which is labelled claude; the Hermes bundle is labelled hermes", () => {
+void test("the shipped Muse Code snippet is the muse-code recipe: the realm entry deep-equals the recipe value and the seed members are the recipe's", () => {
+  const recipe = HOST_RUNTIMES["muse-code"].recipe;
+  assert.ok(recipe !== null && recipe.kind === "json-merge");
+  const snippet = JSON.parse(readFileSync(join(REPO_ROOT, "adapters", "muse-code", "mcp-settings.snippet.json"), "utf8")) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(snippet).sort(), ["mcpServers", "schema_version"]);
+  assert.deepEqual({ schema_version: snippet["schema_version"] }, recipe.seed);
+  const servers = snippet["mcpServers"] as Record<string, unknown>;
+  assert.deepEqual(Object.keys(servers), ["realm"]);
+  assert.deepEqual(servers["realm"], recipe.value);
+  assert.equal(Object.hasOwn(snippet, "mcp_servers"), false, "the old spelling is never shipped");
+});
+
+void test("the Claude plugin bundle stays labelled claude, shared with Grok Build by its page; the Hermes bundle is labelled hermes", () => {
   const labelOf = (file: string): (string | undefined)[] =>
     LAUNCHERS.filter((launcher) => launcher.file === file).map((launcher) => hostFlagOf(launcher).value);
   assert.deepEqual(labelOf(SHARED_GROK_BUNDLE), ["claude"]);
   assert.deepEqual(labelOf("adapters/hermes-agent/mcp.json"), ["hermes"]);
   assert.deepEqual(labelOf("adapters/hermes-agent/mcp.snippet.yaml"), ["hermes"]);
+  const grokPage = readFileSync(join(REPO_ROOT, "docs", "hosts", "snippets", "grok-build.md"), "utf8");
+  assert.ok(grokPage.includes("adapters/claude-plugin") && grokPage.includes("claude"), "the Grok Build page says the shared bundle is labelled claude");
 });

@@ -1,4 +1,4 @@
-// TEST-HOST-03: the generic lifecycle contract on every real row, in fixture roots under the realpath of os.tmpdir(). The 16 rows with a
+// TEST-HOST-03: the generic lifecycle contract on every real row, in fixture roots under the realpath of os.tmpdir(). The 19 rows with a
 // recipe run one scenario built from the row (dry run, install, receipt, audit chain, log, reinstall, neighbor survival, byte-exact
 // restoration, override variable); the three rows without a recipe run the refusal scenario. A planted secret must reach no sink. The
 // seeded-defect table then injects one defect at a time through the adapter's own seams and must trip exactly the named code, on a

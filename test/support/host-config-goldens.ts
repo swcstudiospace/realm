@@ -499,3 +499,158 @@ _config_version: 53
 // between the second and the third.
 export const HERMES_REAL_SHAPED_PARTS = { head: HERMES_REAL_SHAPED_HEAD, servers: HERMES_REAL_SHAPED_SERVERS, tail: HERMES_REAL_SHAPED_TAIL } as const;
 export const HERMES_REAL_SHAPED_FILE = `${HERMES_REAL_SHAPED_HEAD}${HERMES_REAL_SHAPED_SERVERS}${HERMES_REAL_SHAPED_TAIL}`;
+
+// Phase 40 (plan 40-02, Task 1). Observed 2026-11-18 in throwaway homes with a stub `realm` first on PATH: Muse Code 1.4.23,
+// Prime Agent 0.10.2, Grok Build 1.0.77. Evidence ids E-40-02 to E-40-09 of 40-CONTEXT. No host path, no token.
+
+// source: E-40-02; muse 1.4.23; read 2026-11-18; observed. `muse mcp add realm -- realm mcp --host muse-code` into an empty config
+// created settings.json with exactly this text: sorted keys, two-space indent, no trailing newline, no `required` member.
+export const MUSE_MCP_ADD_FILE = `{
+  "mcpServers": {
+    "realm": {
+      "args": [
+        "mcp",
+        "--host",
+        "muse-code"
+      ],
+      "command": "realm",
+      "type": "stdio"
+    }
+  },
+  "schema_version": 1
+}`;
+
+// source: E-40-02; muse 1.4.23; read 2026-11-18; observed. The `mcpServers.realm` object of MUSE_MCP_ADD_FILE.
+export const MUSE_MCP_ADD_ENTRY = { type: "stdio", command: "realm", args: ["mcp", "--host", "muse-code"] } as const;
+
+// source: E-40-03; muse 1.4.23; read 2026-11-18; observed. The file after `muse mcp add other -- other-cmd --x` over a file that holds
+// the recipe entry (`required: true`): sorted keys, two-space indent, no trailing newline; the realm entry is value-identical,
+// `required` kept. `muse mcp remove other` returns the file to the text of MUSE_RECIPE_FILE.
+export const MUSE_REWRITTEN_FILE = `{
+  "mcpServers": {
+    "other": {
+      "args": [
+        "--x"
+      ],
+      "command": "other-cmd",
+      "type": "stdio"
+    },
+    "realm": {
+      "args": [
+        "mcp",
+        "--host",
+        "muse-code"
+      ],
+      "command": "realm",
+      "required": true,
+      "type": "stdio"
+    }
+  },
+  "schema_version": 1
+}`;
+
+// source: E-40-03; muse 1.4.23; read 2026-11-18; observed. The file Muse leaves after `muse mcp remove other`: the realm entry with
+// `required: true`, the same canonical form as MUSE_REWRITTEN_FILE without the other server.
+export const MUSE_RECIPE_FILE = `{
+  "mcpServers": {
+    "realm": {
+      "args": [
+        "mcp",
+        "--host",
+        "muse-code"
+      ],
+      "command": "realm",
+      "required": true,
+      "type": "stdio"
+    }
+  },
+  "schema_version": 1
+}`;
+
+// source: E-40-03; muse 1.4.23; read 2026-11-18; observed. The `mcpServers.realm` object the muse-code recipe writes.
+export const MUSE_RECIPE_ENTRY = { type: "stdio", command: "realm", args: ["mcp", "--host", "muse-code"], required: true } as const;
+
+// source: E-40-06; prime-agent 0.10.2; read 2026-11-18; observed. `prime-agent mcp add realm -- realm mcp --host prime-agent` wrote
+// settings.json of the agent directory with exactly this text (two-space indent, no trailing newline). It also created auth.json.
+export const PRIME_MCP_ADD_FILE = `{
+  "mcpServers": {
+    "realm": {
+      "type": "stdio",
+      "command": "realm",
+      "args": [
+        "mcp",
+        "--host",
+        "prime-agent"
+      ]
+    }
+  }
+}`;
+
+// source: E-40-06; prime-agent 0.10.2; read 2026-11-18; observed. The `mcpServers.realm` object of PRIME_MCP_ADD_FILE.
+export const PRIME_MCP_ADD_ENTRY = { type: "stdio", command: "realm", args: ["mcp", "--host", "prime-agent"] } as const;
+
+// source: E-40-06; prime-agent 0.10.2; read 2026-11-18; observed. The file after `prime-agent mcp add other -- o --x` over
+// PRIME_MCP_ADD_FILE: the new server appended after realm, realm value-identical, same layout.
+export const PRIME_REWRITTEN_FILE = `{
+  "mcpServers": {
+    "realm": {
+      "type": "stdio",
+      "command": "realm",
+      "args": [
+        "mcp",
+        "--host",
+        "prime-agent"
+      ]
+    },
+    "other": {
+      "type": "stdio",
+      "command": "o",
+      "args": [
+        "--x"
+      ]
+    }
+  }
+}`;
+
+// source: E-40-07; grok 1.0.77; read 2026-11-18; observed. `grok mcp add realm -- realm mcp --host grok-build` (scope user) wrote the
+// table into `.grok/config.toml` below HOME with exactly this text, trailing newline included: the args array over six lines with a
+// four-space indent and a trailing comma, then `enabled = true`. It is the text Realm owns for Grok Build (D-40-05): Grok rewrites a
+// single-line array into this form on any later `grok mcp add`, so this is the host's own stable form.
+export const GROK_MCP_ADD_TOML = '[mcp_servers.realm]\ncommand = "realm"\nargs = [\n    "mcp",\n    "--host",\n    "grok-build",\n]\nenabled = true\n';
+
+// source: E-40-07; grok 1.0.77; read 2026-11-18; observed. A hand-grown config (a comment, a `model` key, the realm table in the
+// single-line form, one other table) before `grok mcp add second -- s --y`.
+export const GROK_HAND_GROWN_TOML = `# my config
+model = "grok-x"
+
+[mcp_servers.realm]
+command = "realm"
+args = ["mcp", "--host", "grok-build"]
+enabled = true
+
+[mcp_servers.other]
+command = "o"
+`;
+
+// source: E-40-07; grok 1.0.77; read 2026-11-18; observed. GROK_HAND_GROWN_TOML after `grok mcp add second -- s --y`: Grok's TOML editor
+// dropped the comment, rewrote the realm args into the multi-line form (the table now equals GROK_MCP_ADD_TOML), kept the other table
+// and appended the new one with a single-line args array.
+export const GROK_REWRITTEN_TOML = `model = "grok-x"
+
+[mcp_servers.realm]
+command = "realm"
+args = [
+    "mcp",
+    "--host",
+    "grok-build",
+]
+enabled = true
+
+[mcp_servers.other]
+command = "o"
+
+[mcp_servers.second]
+command = "s"
+args = ["--y"]
+enabled = true
+`;

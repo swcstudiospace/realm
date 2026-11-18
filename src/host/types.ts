@@ -9,7 +9,7 @@ import type { ErrorCode, RealmError } from "../core/errors.js";
 import type { State } from "../core/states.js";
 import type { EnvironmentLike } from "../session/paths.js";
 
-// The 19 hosts: the Omp reference plus the 18 GSD Core installer flags.
+// The 22 hosts: the Omp reference, the 18 GSD Core installer flags and the three Realm-only hosts of Phase 40 (muse-code, prime-agent, grok-build).
 export const HOST_IDS = Object.freeze([
   "omp",
   "claude",
@@ -30,6 +30,9 @@ export const HOST_IDS = Object.freeze([
   "kimi-code",
   "zcode",
   "pi",
+  "muse-code",
+  "prime-agent",
+  "grok-build",
 ] as const);
 export type HostId = (typeof HOST_IDS)[number];
 

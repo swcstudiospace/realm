@@ -310,7 +310,7 @@
     {
       "file": "src/host/boot-report.ts",
       "name": "BOOT_REPORT_HOSTS",
-      "reason": "D-1306 test-only seam: the closed host vocabulary (the 19 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
+      "reason": "D-1306 test-only seam: the closed host vocabulary (the 22 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
     },
     {
       "file": "src/host/boot-report.ts",

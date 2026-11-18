@@ -256,7 +256,7 @@ for (const row of REFUSED) {
 
 void test("the capabilityTokens schema: host ids equal HOST_IDS and capabilities equal the mcp-config ceiling, as sets", () => {
   const schema = tokenSchema();
-  assert.equal(schema.properties.profiles.propertyNames.enum.length, 19);
+  assert.equal(schema.properties.profiles.propertyNames.enum.length, 22);
   assert.deepEqual(new Set(schema.properties.profiles.propertyNames.enum), new Set<string>(HOST_IDS));
   assert.equal(schema.properties.profiles.propertyNames.enum.length, HOST_IDS.length);
   const capabilities = schema.properties.profiles.additionalProperties.items.enum;

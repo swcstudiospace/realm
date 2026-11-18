@@ -158,17 +158,18 @@ void test("HOST-07: an unknown host is a usage error; gemini and vscode are unkn
 
 // ---- list -------------------------------------------------------------------------------------------------------------------
 
-void test("HOST-07: list needs no config, no HOME and no file system, and names the 19 hosts, recipe ready for the 16 hosts with a recipe and pending for windsurf, trae and zcode", async () => {
+void test("HOST-07: list needs no config, no HOME and no file system, and names the 22 hosts, recipe ready for the 19 hosts with a recipe and pending for windsurf, trae and zcode", async () => {
   const result = await runCli(["host", "list"], { env: {}, readConfig: () => { throw new Error("list must not read the config"); } });
   const rows = json(result) as { id: string; flag: string; aliases: string[]; tier: string; integration: string; homeVerified: boolean; recipe: string }[];
   assert.deepEqual(rows.map((row) => row.id), [...HOST_IDS]);
-  assert.equal(rows.length, 19);
+  assert.equal(rows.length, 22);
   const ready: readonly HostId[] = [
     "omp", "claude", "opencode", "codex", "kimi", "kimi-code",
     "cursor", "copilot", "qwen", "augment", "pi", "cline", "antigravity", "kilo", "codebuddy", "hermes",
+    "muse-code", "prime-agent", "grok-build",
   ];
   assert.ok(rows.every((row) => row.recipe === (ready.includes(row.id as HostId) ? "ready" : "pending")));
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 16);
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 19);
   assert.equal(rows.filter((row) => row.recipe === "pending").length, 3);
   assert.deepEqual(rows.filter((row) => row.recipe === "pending").map((row) => row.id), ["windsurf", "trae", "zcode"]);
   assert.deepEqual(Object.keys(rows[0] ?? {}), ["id", "flag", "aliases", "tier", "integration", "homeVerified", "recipe"]);
@@ -180,13 +181,13 @@ void test("HOST-07: list needs no config, no HOME and no file system, and names 
   assert.equal(rows.find((row) => row.id === "antigravity")?.homeVerified, true);
 });
 
-void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table: the fixture claude replaces the real row; the other 15 recipe rows are ready from the real table)", async (t) => {
+void test("HOST-07: list reports recipe ready for a host whose runtime entry has a recipe (injected table: the fixture claude replaces the real row; the other 18 recipe rows are ready from the real table)", async (t) => {
   const r = rig(t);
   const rows = json(await realmHost(r, "list")) as { id: string; recipe: string }[];
   assert.equal(rows.find((row) => row.id === "claude")?.recipe, "ready");
   assert.equal(rows.find((row) => row.id === "omp")?.recipe, "ready");
-  // The injected claude and the 15 real recipe rows: the 16 hosts with a recipe.
-  assert.equal(rows.filter((row) => row.recipe === "ready").length, 16);
+  // The injected claude and the 18 real recipe rows: the 19 hosts with a recipe.
+  assert.equal(rows.filter((row) => row.recipe === "ready").length, 19);
 });
 
 // ---- detect -----------------------------------------------------------------------------------------------------------------
@@ -696,7 +697,7 @@ void test("BOOT-05: the all-hosts status keeps the exact row for a host with no 
   const r = rig(t);
   writePresence(r.host.stateDir, "claude", { pid: process.pid, ...MARKER });
   const rows = json(await realmHost(r, "status")) as { id: string }[];
-  assert.equal(rows.length, 19);
+  assert.equal(rows.length, 22);
   for (const row of rows) {
     const keys = Object.keys(row).sort();
     if (row.id === "claude") {

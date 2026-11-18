@@ -2,8 +2,9 @@
 // driven against the real daemon in this process over the existing fakes (startRealmDaemon), over a real Unix socket, with a
 // policy file that has no capabilityTokens key (and once with no policy file at all).
 //
-//   E1  the 18 mcp-config hosts: realm mcp --host ID answers a status call; the session audit file has one capability.attach line
-//       per id and every call line carries that host and a kid; the chain verifies.
+//   E1  the 21 mcp-config hosts: realm mcp --host ID answers a status call; the session audit file has one capability.attach line
+//       per id and every call line carries that host and a kid; the chain verifies. E1b runs muse-code, prime-agent and grok-build
+//       with the argument list their install recipe registers; E1c shows each of them has its own profile.
 //   E2  realm acp --host ID completes one tool call over ACP stdio, with the same audit fields.
 //   E3  Omp's attach, configured as src/omp/extension.ts configures it, attaches as omp and completes a call.
 //   E4  the CLI commands that use the control socket without a token still work, and the keyring exists before any attach.
@@ -30,6 +31,7 @@ import { sendRequest, type ControlReply } from "../../src/daemon/channel.js";
 import { connectDaemon } from "../../src/daemon/client.js";
 import { createDaemonAttach } from "../../src/host/attach.js";
 import { HOST_RUNTIMES } from "../../src/host/runtimes.js";
+import { registeredArgvOf } from "../support/host-contract.js";
 import { HOST_IDS, type HostId } from "../../src/host/types.js";
 import { isMetricsSnapshot, type MetricsSnapshot } from "../../src/observe/metrics.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
@@ -40,7 +42,7 @@ import { boundedWait, testTimeout } from "../support/timing.js";
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const BOUND_MS = 5000;
 const ENV: EnvironmentLike = { PATH: "/usr/bin", HOME: "/root", XDG_RUNTIME_DIR: "/run/user/0" };
-// The 18 ids a stdio session may name with --host, from the runtime table, so a new host id is covered automatically.
+// The 21 ids a stdio session may name with --host, from the runtime table, so a new host id is covered automatically.
 const MCP_HOSTS: readonly HostId[] = HOST_IDS.filter((id) => HOST_RUNTIMES[id].integration === "mcp-config");
 const WRITE_CALL = (id: number): string => frame(id, "tools/call", { name: "write", arguments: { path: "from-unlabelled.txt", content: "x" } });
 
@@ -124,6 +126,14 @@ function bootHost(world: World, argv: readonly string[]): Host {
 
 const mcpHost = (world: World, workspace: string, host?: HostId): Host =>
   bootHost(world, host === undefined ? ["mcp", "--workspace", workspace] : ["mcp", "--host", host, "--workspace", workspace]);
+
+// A session started with the argument list the host's install recipe registers (the elements after the command), not one built from the id.
+function registeredHost(world: World, workspace: string, id: HostId): Host {
+  const argv = registeredArgvOf(HOST_RUNTIMES[id]);
+  assert.ok(argv !== null, `${id}: the recipe registers a launcher`);
+  assert.deepEqual(argv, ["realm", "mcp", "--host", id], `${id}: the registered launcher is the bare labelled one`);
+  return bootHost(world, [...argv.slice(1), "--workspace", workspace]);
+}
 
 async function end(host: Host): Promise<CliResult> {
   host.input.end();
@@ -211,8 +221,8 @@ const hasKeyring = (world: World): boolean => existsSync(keyringPathOf(world.sta
 
 // ---- E1 to E4: the default ----------------------------------------------------------------------------------------------------
 
-void test("E1: each of the 18 mcp-config hosts attaches under the default and answers a status call; the audit lines carry its id and a kid", testTimeout(120_000), async (t) => {
-  assert.equal(MCP_HOSTS.length, 18, "the runtime table names 18 mcp-config hosts");
+void test("E1: each of the 21 mcp-config hosts attaches under the default and answers a status call; the audit lines carry its id and a kid", testTimeout(120_000), async (t) => {
+  assert.equal(MCP_HOSTS.length, 21, "the runtime table names 21 mcp-config hosts");
   const world = await startWorld(t, "default");
   await world.fixture.up(world.project("anchor"));
   const project = world.project("e1");
@@ -238,6 +248,68 @@ void test("E1: each of the 18 mcp-config hosts attaches under the default and an
   }
   assert.equal(new Set(calls.map((line) => line["host"])).size, MCP_HOSTS.length, "every host's calls are attributed to itself");
   assert.equal(verifyAuditFile(auditPathOf(world, project)).ok, true, "the audit chain verifies");
+});
+
+// The three Realm-only hosts of Phase 40 (D-40-01): each has a recipe, so the launcher below is the one `realm host install ID` registers.
+const PHASE_40_HOSTS: readonly HostId[] = ["muse-code", "prime-agent", "grok-build"];
+const writeTo = (name: string) => (id: number): string => frame(id, "tools/call", { name: "write", arguments: { path: name, content: "x" } });
+
+void test("E1b: muse-code, prime-agent and grok-build attach under the default with the argument list their recipe registers, attributed to themselves and never to claude", testTimeout(120_000), async (t) => {
+  const world = await startWorld(t, "default");
+  await world.fixture.up(world.project("anchor"));
+  const project = world.project("e1b");
+  for (const id of PHASE_40_HOSTS) {
+    assert.ok(MCP_HOSTS.includes(id), `${id} is an mcp-config host`);
+    const host = registeredHost(world, project, id);
+    assert.equal(host.label, id);
+    const outcome = await mcpCall(world, host, 1, callStatus);
+    assert.equal(outcome["outcome"], "done", `${id}: the call is admitted`);
+    assert.equal(stateOf(outcome), "active", `${id}: the sandbox is active`);
+    assert.equal(hintLinesOf(host).length, 0, `${id}: no refusal diagnostic`);
+    assert.equal((await end(host)).exitCode, 0, `${id}: clean exit`);
+  }
+  // A claude session on the same daemon keeps its own id: the ids stay separate on the audit lines.
+  const claude = mcpHost(world, project, "claude");
+  assert.equal((await mcpCall(world, claude, 1, callStatus))["outcome"], "done");
+  assert.equal((await end(claude)).exitCode, 0);
+
+  const lines = auditLinesOf(world, project);
+  const attaches = attachLinesOf(lines);
+  assert.deepEqual(attaches.map((line) => line["host"]).sort(), ["claude", ...PHASE_40_HOSTS].sort(), "one attach line per id");
+  for (const line of attaches) {
+    assert.equal(typeof line["kid"], "string", "the attach line names the key id");
+  }
+  const calls = callLinesOf(lines);
+  assert.equal(calls.length, (PHASE_40_HOSTS.length + 1) * 2, "an admission and a result line per call");
+  for (const id of [...PHASE_40_HOSTS, "claude"]) {
+    assert.equal(calls.filter((line) => line["host"] === id).length, 2, `${id}: its calls are attributed to ${id}`);
+  }
+  assert.equal(calls.filter((line) => line["host"] === "claude").length, 2, "only the claude session is attributed to claude");
+  assert.equal(verifyAuditFile(auditPathOf(world, project)).ok, true, "the audit chain verifies");
+});
+
+void test("E1c: each new host id has its own profile: an empty profile for muse-code refuses its write, and prime-agent and grok-build write under the default capabilities", testTimeout(120_000), async (t) => {
+  const world = await startWorld(t, { profiles: { "muse-code": [] } });
+  await world.fixture.up(world.project("anchor"));
+  const project = world.project("e1c");
+
+  const muse = registeredHost(world, project, "muse-code");
+  assert.equal((await mcpCall(world, muse, 1, callStatus))["outcome"], "done", "muse-code: status is admitted with an empty profile");
+  muse.input.write(writeTo("from-muse-code.txt")(2));
+  const refused = toolOutcomeOf(await boundedWait(untilReplyOn(muse.output, 2), "the refused write", BOUND_MS));
+  assert.equal(refused["outcome"], "refused");
+  assert.equal(refused["code"], "POLICY_DENIED");
+  assert.equal((await end(muse)).exitCode, 0);
+  assert.equal(existsSync(join(project, "from-muse-code.txt")), false, "the refused write changed nothing");
+
+  for (const id of ["prime-agent", "grok-build"] as const) {
+    const host = registeredHost(world, project, id);
+    const file = `from-${id}.txt`;
+    const outcome = await mcpCall(world, host, 1, writeTo(file));
+    assert.equal(outcome["outcome"], "done", `${id}: a write is admitted without a profile entry`);
+    assert.equal(existsSync(join(project, file)), true, `${id}: the write happened`);
+    assert.equal((await end(host)).exitCode, 0, `${id}: clean exit`);
+  }
 });
 
 void test("E2: realm acp with a host flag completes one tool call over ACP stdio under the default, with the same audit fields", testTimeout(60_000), async (t) => {

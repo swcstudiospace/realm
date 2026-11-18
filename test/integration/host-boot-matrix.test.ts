@@ -1,9 +1,9 @@
 // TEST-HOST-06: the boot path of every stdio host id against a real daemon. Fixtures and fakes: a real daemon over fakes, no
-// Podman, no real host (26-CONTEXT GAP-26-01). Each of the 18 mcp-config ids gets a fresh daemon in this process over the existing
+// Podman, no real host (26-CONTEXT GAP-26-01). Each of the 21 mcp-config ids gets a fresh daemon in this process over the existing
 // fakes (test/support/boot-matrix-rig.ts) and boots through realm mcp and realm acp driven by runCli on injected streams and
 // signals; they dial the daemon's real control socket with the real connectDaemon and the real host-boot recorder.
 //
-// Why one daemon per id: the daemon's host-boot method has a token bucket (60 reports, one more per second), which 18 ids with
+// Why one daemon per id: the daemon's host-boot method has a token bucket (60 reports, one more per second), which 21 ids with
 // several reports each would exhaust, and a daemon per id keeps the metrics and the boot audit chain exact per id.
 //
 // Per id, on its own daemon and in order, with every project released when its step ends:

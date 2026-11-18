@@ -1,27 +1,33 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SchemaInvalidError } from "../../src/contract/validate.js";
+import { parseControlSelection } from "../../src/daemon/channel.js";
 import { isSafeKeySegment, isSafeRelPath } from "../../src/host/recipe.js";
 import { defaultManifestFor } from "../../src/host/manifest.js";
 import { HOST_ALIASES, HOST_RUNTIMES, recipePending, resolveHomes, resolveHomeSpecs, resolveHostId } from "../../src/host/runtimes.js";
 import { HOST_IDS, type HostEnv, type HostId, type HostRuntimeEntry, type HostTier } from "../../src/host/types.js";
 import { fixtureEntry } from "../support/fixture-host.js";
+import { registeredArgvOf } from "../support/host-contract.js";
 
-// Pinned from 21-DISCOVERY.md (GSD Core `next`, commit 69d604e, 2026-11-16).
+// Pinned from 21-DISCOVERY.md (GSD Core `next`, commit 69d604e, 2026-11-16) and, for the last three ids, 40-CONTEXT D-40-01 (Phase 40).
 const EXPECTED_IDS = [
   "omp", "claude", "opencode", "kilo", "codex", "copilot", "antigravity", "cursor", "windsurf", "augment",
-  "trae", "qwen", "hermes", "codebuddy", "cline", "kimi", "kimi-code", "zcode", "pi",
+  "trae", "qwen", "hermes", "codebuddy", "cline", "kimi", "kimi-code", "zcode", "pi", "muse-code", "prime-agent", "grok-build",
 ];
+// The 18 GSD Core installer flags (the Omp reference and the three Realm-only hosts have no installer flag of GSD Core).
 const EXPECTED_FLAGS = [
   "--claude", "--opencode", "--kilo", "--codex", "--copilot", "--antigravity", "--cursor", "--windsurf", "--augment",
   "--trae", "--qwen", "--hermes", "--codebuddy", "--cline", "--kimi", "--kimi-code", "--zcode", "--pi",
 ];
+// The Realm-only hosts of Phase 40: their flags are shown by `realm host list` and are not GSD Core installer flags.
+const REALM_ONLY_IDS: readonly HostId[] = ["muse-code", "prime-agent", "grok-build"];
+const REALM_ONLY_FLAGS = ["--muse-code", "--prime-agent", "--grok-build"];
 const EXPECTED_TIERS: Record<HostId, HostTier> = {
   omp: "reference", claude: "proven", opencode: "proven", codex: "proven", kimi: "proven",
   kilo: "config-only", copilot: "config-only", antigravity: "config-only", cursor: "config-only",
   windsurf: "config-only", augment: "config-only", trae: "config-only", qwen: "config-only",
   hermes: "config-only", codebuddy: "config-only", cline: "config-only", "kimi-code": "config-only",
-  zcode: "config-only", pi: "config-only",
+  zcode: "config-only", pi: "config-only", "muse-code": "config-only", "prime-agent": "config-only", "grok-build": "config-only",
 };
 const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "skills" | "mcp"])[]> = {
   antigravity: [[".gemini/config", "config"]],
@@ -43,12 +49,16 @@ const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "ski
   "kimi-code": [[".kimi-code", "config"]],
   zcode: [[".zcode", "config"]],
   pi: [[".pi/agent", "config"]],
+  "muse-code": [[".config/muse", "config"]],
+  "prime-agent": [[".prime/agent", "config"]],
+  "grok-build": [[".grok", "config"]],
 };
 
-// Phase 24 and 25: the hosts with a recipe (16 of the 19), and the per-host override variable, base variable and binaries.
+// Phase 24, 25 and 40: the hosts with a recipe (19 of the 22), and the per-host override variable, base variable and binaries.
 const WITH_RECIPE: readonly HostId[] = [
   "omp", "claude", "opencode", "codex", "kimi", "kimi-code",
   "cursor", "copilot", "qwen", "augment", "pi", "cline", "antigravity", "kilo", "codebuddy", "hermes",
+  "muse-code", "prime-agent", "grok-build",
 ];
 // The three hosts deferred by decision (25-CONTEXT D-25-02, OQ-25-01 to OQ-25-03): they keep `recipe: null` and refuse as recipe-pending.
 const WITHOUT_RECIPE: readonly HostId[] = ["windsurf", "trae", "zcode"];
@@ -65,6 +75,7 @@ const EXPECTED_OVERRIDES: Partial<Record<HostId, string>> = {
   cline: "CLINE_DIR",
   codebuddy: "CODEBUDDY_CONFIG_DIR",
   hermes: "HERMES_HOME",
+  "prime-agent": "PRIME_AGENT_CODING_AGENT_DIR",
 };
 const EXPECTED_BINARIES: Partial<Record<HostId, readonly string[]>> = {
   omp: ["omp"],
@@ -81,19 +92,24 @@ const EXPECTED_BINARIES: Partial<Record<HostId, readonly string[]>> = {
   kilo: ["kilo", "kilocode"],
   codebuddy: ["codebuddy"],
   hermes: ["hermes"],
+  "muse-code": ["muse"],
+  "prime-agent": ["prime-agent"],
+  "grok-build": ["grok"],
 };
 
 const env = (over: Record<string, string> = {}, home = "/home/u"): HostEnv => ({ home, env: over, pathDirs: [] });
 
-void test("HOST_IDS lists the 19 hosts in order", () => {
+void test("HOST_IDS lists the 22 hosts in order", () => {
   assert.deepEqual([...HOST_IDS], EXPECTED_IDS);
   assert.deepEqual(Object.keys(HOST_RUNTIMES).sort(), [...EXPECTED_IDS].sort());
 });
 
-void test("the 18 non-Omp flags match the GSD Core installer flags; no gemini or vscode", () => {
-  const flags = HOST_IDS.filter((id) => id !== "omp").map((id) => HOST_RUNTIMES[id].flag);
+void test("the 18 GSD Core flags match the installer flags and the three Realm-only flags are named; no gemini or vscode", () => {
+  const flags = HOST_IDS.filter((id) => id !== "omp" && !REALM_ONLY_IDS.includes(id)).map((id) => HOST_RUNTIMES[id].flag);
   assert.deepEqual(new Set(flags), new Set(EXPECTED_FLAGS));
   assert.equal(flags.length, 18);
+  assert.deepEqual(REALM_ONLY_IDS.map((id) => HOST_RUNTIMES[id].flag), REALM_ONLY_FLAGS);
+  assert.equal(HOST_IDS.filter((id) => id !== "omp").length, 21);
   assert.equal(resolveHostId("gemini"), undefined);
   assert.equal(resolveHostId("vscode"), undefined);
 });
@@ -131,7 +147,7 @@ void test("homes, verification, override and binaries are pinned", () => {
     assert.deepEqual(entry.homes.map((h) => [h.rel, h.role]), EXPECTED_HOMES[id], id);
     assert.equal(entry.homeVerified, true, id);
     assert.equal(entry.envOverride, EXPECTED_OVERRIDES[id] ?? null, id);
-    const expectedBase = id === "opencode" ? { name: "XDG_CONFIG_HOME", sub: "opencode" } : id === "kilo" ? { name: "XDG_CONFIG_HOME", sub: "kilo" } : undefined;
+    const expectedBase = id === "opencode" || id === "kilo" || id === "muse-code" ? { name: "XDG_CONFIG_HOME", sub: id === "muse-code" ? "muse" : id } : undefined;
     assert.deepEqual(entry.envBase, expectedBase, id);
     assert.deepEqual([...entry.binaries], EXPECTED_BINARIES[id] ?? [], id);
     assert.equal(entry.integration, id === "omp" ? "extension" : "mcp-config", id);
@@ -149,7 +165,7 @@ void test("every home rel is a relative POSIX path without traversal", () => {
   }
 });
 
-void test("Phase 25: 16 hosts have a recipe; recipePending is true for exactly windsurf, trae and zcode (the deferred hosts), which have no conflicts, envBase, shadows or recipe", () => {
+void test("Phases 25 and 40: 19 hosts have a recipe; recipePending is true for exactly windsurf, trae and zcode (the deferred hosts), which have no conflicts, envBase, shadows or recipe", () => {
   const omp = HOST_RUNTIMES.omp;
   assert.deepEqual(omp.recipe, { kind: "bundle-copy", source: "omp", dest: "extensions/realm" });
   assert.deepEqual(omp.conflicts, [".omp/plugins/node_modules/agent-realm"]);
@@ -171,7 +187,7 @@ void test("Phase 25: 16 hosts have a recipe; recipePending is true for exactly w
   assert.equal(HOST_IDS.filter((id) => recipePending(id)).length, 3);
   assert.deepEqual(HOST_IDS.filter((id) => recipePending(id)), ["windsurf", "trae", "zcode"]);
   assert.deepEqual(HOST_IDS.filter((id) => recipePending(id)), HOST_IDS.filter((id) => WITHOUT_RECIPE.includes(id)));
-  assert.equal(HOST_IDS.filter((id) => !recipePending(id)).length, 16);
+  assert.equal(HOST_IDS.filter((id) => !recipePending(id)).length, 19);
 });
 
 void test("every conflicts entry in the table is a safe relative path", () => {
@@ -389,10 +405,10 @@ function registeredArgv(id: HostId): readonly string[] {
     return value;
   };
   if (recipe.kind === "toml-table") {
-    const lines = recipe.text.split("\n");
-    const command: unknown = JSON.parse(/^command = (".*")$/.exec(lines[1] ?? "")?.[1] ?? "null");
-    assert.ok(typeof command === "string", id);
-    return [command, ...strings(JSON.parse(/^args = (\[.*\])$/.exec(lines[2] ?? "")?.[1] ?? "null"))];
+    // The argument array is one line (codex) or spread over several (grok-build): the contract checker's reader handles both.
+    const argv = registeredArgvOf(HOST_RUNTIMES[id]);
+    assert.ok(argv !== null, id);
+    return argv;
   }
   if (recipe.kind === "yaml-map") {
     const command = recipe.value["command"];
@@ -579,7 +595,7 @@ void test("Phase 25: the wave-2 overrides are the hosts' own variable names (D-2
     assert.equal(table.includes(gsdOnly), false, gsdOnly);
   }
   for (const id of HOST_IDS) {
-    assert.equal(HOST_RUNTIMES[id].envBase !== undefined, id === "opencode" || id === "kilo", id);
+    assert.equal(HOST_RUNTIMES[id].envBase !== undefined, id === "opencode" || id === "kilo" || id === "muse-code", id);
   }
 });
 
@@ -644,5 +660,47 @@ void test("Phase 25: the codebuddy and hermes rows hold exactly the recipes of 2
     assert.equal(HOST_RUNTIMES[id].recipe, null, id);
     assert.equal(HOST_RUNTIMES[id].tier, "config-only", id);
   }
-  assert.equal(HOST_IDS.filter((id) => HOST_RUNTIMES[id].recipe !== null).length, 16);
+  assert.equal(HOST_IDS.filter((id) => HOST_RUNTIMES[id].recipe !== null).length, 19);
+});
+
+void test("Phase 40: the three Realm-only rows are frozen, register exactly realm mcp --host ID, and join their homes as decided (D-40-02)", () => {
+  for (const id of REALM_ONLY_IDS) {
+    const entry = HOST_RUNTIMES[id];
+    assert.ok(Object.isFrozen(entry) && Object.isFrozen(entry.recipe), id);
+    assert.equal(entry.integration, "mcp-config", id);
+    assert.deepEqual(entry.aliases, [], id);
+    assert.equal(entry.conflicts, undefined, id);
+    assert.equal(entry.shadows, undefined, id);
+    assert.deepEqual(registeredArgv(id), ["realm", "mcp", "--host", id], id);
+    assert.deepEqual(defaultManifestFor(id, "0.0.0").launch, { command: "realm", args: ["mcp", "--host", id] }, id);
+  }
+  const home = "/home/u";
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["muse-code"], env({}, home)), ["/home/u/.config/muse"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["muse-code"], env({ XDG_CONFIG_HOME: "/x/cfg" }, home)), ["/x/cfg/muse"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["prime-agent"], env({}, home)), ["/home/u/.prime/agent"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["prime-agent"], env({ PRIME_AGENT_CODING_AGENT_DIR: "/x/agent" }, home)), ["/x/agent"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["grok-build"], env({}, home)), ["/home/u/.grok"]);
+  assert.deepEqual(resolveHomes(HOST_RUNTIMES["grok-build"], env({ HOME: "/x/h", XDG_CONFIG_HOME: "/x/cfg" }, home)), ["/home/u/.grok"], "Grok documents no relocation variable");
+});
+
+void test("Phase 40: the Muse Code row carries the seed and the rival key, and no other row carries either", () => {
+  for (const id of HOST_IDS) {
+    const recipe = HOST_RUNTIMES[id].recipe;
+    if (recipe === null || recipe.kind !== "json-merge") {
+      continue;
+    }
+    assert.deepEqual(recipe.seed, id === "muse-code" ? { schema_version: 1 } : undefined, id);
+    assert.deepEqual(recipe.refuseIfPresent, id === "muse-code" ? ["mcp_servers"] : undefined, id);
+  }
+  const muse = HOST_RUNTIMES["muse-code"].recipe;
+  assert.ok(muse !== null && muse.kind === "json-merge");
+  assert.ok(Object.isFrozen(muse.seed) && Object.isFrozen(muse.refuseIfPresent));
+  assert.deepEqual(muse.value, { type: "stdio", command: "realm", args: ["mcp", "--host", "muse-code"], required: true });
+});
+
+void test("Phase 40: each new id has the shape of a host label the daemon channel accepts", () => {
+  const selection = { workspaceRoot: "/srv/project", sessionId: "p0123456789ab" };
+  for (const id of REALM_ONLY_IDS) {
+    assert.deepEqual(parseControlSelection("capability-attach", { selection, host: id }), { selection }, id);
+  }
 });

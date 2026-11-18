@@ -49,7 +49,7 @@
         "profiles": {
           "type": "object",
           "propertyNames": {
-            "enum": ["omp", "claude", "opencode", "kilo", "codex", "copilot", "antigravity", "cursor", "windsurf", "augment", "trae", "qwen", "hermes", "codebuddy", "cline", "kimi", "kimi-code", "zcode", "pi"]
+            "enum": ["omp", "claude", "opencode", "kilo", "codex", "copilot", "antigravity", "cursor", "windsurf", "augment", "trae", "qwen", "hermes", "codebuddy", "cline", "kimi", "kimi-code", "zcode", "pi", "muse-code", "prime-agent", "grok-build"]
           },
           "additionalProperties": {
             "type": "array",

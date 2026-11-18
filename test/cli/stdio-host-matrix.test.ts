@@ -1,5 +1,5 @@
 // TEST-HOST-05: the boot sequence of realm mcp and realm acp for every stdio host id, on scripted daemons. The flag grammar names
-// exactly the 18 mcp-config ids; each id then runs readiness, the bounded retry, the failure paths and the teardown on both
+// exactly the 21 mcp-config ids; each id then runs readiness, the bounded retry, the failure paths and the teardown on both
 // transports. Fixtures and fakes: a scripted daemon, injected streams, signals and timers (test/support/stdio-world.ts); no
 // socket, no Podman, no real host (26-CONTEXT GAP-26-01). stdio-host.test.ts keeps the claude and kimi statements of the same
 // facts; this file repeats them per id and adds nothing they contradict.
@@ -110,8 +110,8 @@ async function untilQuiet(world: World, what: string): Promise<void> {
 
 // ---- M0: the flag grammar -----------------------------------------------------------------------------------------------------
 
-void test("TEST-HOST-05 grammar: --host takes exactly the 18 canonical mcp-config ids on mcp and acp, nothing else", testTimeout(120_000), async () => {
-  assert.equal(MCP_HOSTS.length, 18);
+void test("TEST-HOST-05 grammar: --host takes exactly the 21 canonical mcp-config ids on mcp and acp, nothing else", testTimeout(120_000), async () => {
+  assert.equal(MCP_HOSTS.length, 21);
   const accepted: Record<Transport, string[]> = { mcp: [], acp: [] };
   for (const transport of TRANSPORTS) {
     for (const id of HOST_IDS) {
