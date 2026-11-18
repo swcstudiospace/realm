@@ -30,6 +30,7 @@ covered_files:
   - "docs/integration/omp.md"
   - "docs/policy-reference.md"
   - "AGENTS.md"
+covered_digest: "v3:sha256:c49137ccca75c60f07e858f68e5760856bef25e2986fd1ec130b034d17a09f93"
 ---
 
 # Phase 39 Verification: timed-out exec kill proof

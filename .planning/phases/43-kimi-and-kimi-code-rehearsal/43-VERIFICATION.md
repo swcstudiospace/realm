@@ -27,6 +27,7 @@ covered_files:
   - "docs/integration/host-plugin-contract.md"
   - "docs/integration/hosts.md"
   - "docs/hosts/snippets/kimi.md"
+covered_digest: "v3:sha256:53a67b295e20e8293098b749085cdfdacb99a0c6d6710af2c0e2267a897c4f97"
 ---
 
 # Phase 43 Verification: Kimi and Kimi Code rehearsal

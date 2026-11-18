@@ -27,6 +27,7 @@ covered_files:
   - "docs/integration/runtime-decision.md"
   - "docs/integration/openshell.md"
   - "docs/policy-reference.md"
+covered_digest: "v3:sha256:458e526f60441b90d9b38fe0e937a38952258bf1696e63d76e89400690d3a59d"
 ---
 
 # Phase 41 Verification: daemon teardown flake

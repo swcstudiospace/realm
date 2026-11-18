@@ -1,20 +1,21 @@
 ---
 gsd_state_version: "1.0"
 milestone: v6.0
-milestone_name: Responsiveness, exec kill proof, host ids and evidence debt (Starting)
-status: Starting
-stopped_at: Milestone v6.0 started, phases 38 to 43 planned
-last_updated: "2026-11-18T13:30:00.000Z"
-last_activity: 2026-11-18
-last_activity_desc: Milestone v6.0 started
-state_head: abf7993
-progress:
-  total_phases: 6
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+milestone_name: Responsiveness, exec kill proof, host ids and evidence debt
 current_phase: 38
+current_phase_name: Omp responsiveness during cold attach
+status: executing
+stopped_at: Phase 43 complete, ready to execute Phase 38
+last_updated: "2026-11-18T21:55:38.374Z"
+last_activity: 2026-11-18
+last_activity_desc: Phase 43 complete, transitioned to Phase 38
+state_head: 6f67de4d72eb919d581653014576afffdc33731c
+progress:
+  total_phases: 32
+  completed_phases: 48
+  total_plans: 16
+  completed_plans: 11
+  percent: 96
 ---
 
 # Project State
@@ -28,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-11-18)
 
 ## Current Position
 
-Phase: 38 (Omp responsiveness during cold attach), not started
-Plan: —
-Status: Starting milestone v6.0 (phases 38 to 43, release line 0.6.x)
-Last activity: 2026-11-18 — Milestone v6.0 started
+Phase: 38 — Omp responsiveness during cold attach
+Plan: Not started
+Status: Ready to execute
+Last activity: 2026-11-18 — Phase 43 complete, transitioned to Phase 38
 
 ## Current Recovery Boundaries
 
@@ -57,7 +58,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 104
+- Total plans completed: 114
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -91,6 +92,10 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 37 | 1 | - | - |
 | 34 | 3 | - | - |
 | 35 | 3 | - | - |
+| 39 | 3 | - | - |
+| 40 | 3 | - | - |
+| 41 | 2 | - | - |
+| 43 | 2 | - | - |
 
 **Recent Trend:**
 
@@ -237,7 +242,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 37 complete — all phases complete
+Stopped at: Phase 43 complete, ready to execute Phase 38
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
