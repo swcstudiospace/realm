@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v5.0",
+  "milestone": "v6.0",
   "phases": [
     {
       "number": "1",
@@ -222,6 +222,36 @@
       "number": "37",
       "name": "Spec update",
       "status": "complete"
+    },
+    {
+      "number": "38",
+      "name": "Omp responsiveness during cold attach",
+      "status": "pending"
+    },
+    {
+      "number": "39",
+      "name": "Timed-out exec kill proof",
+      "status": "pending"
+    },
+    {
+      "number": "40",
+      "name": "Host ids for Muse Code, Prime Agent and Grok Build",
+      "status": "pending"
+    },
+    {
+      "number": "41",
+      "name": "Daemon teardown flake",
+      "status": "pending"
+    },
+    {
+      "number": "42",
+      "name": "Evidence debt",
+      "status": "pending"
+    },
+    {
+      "number": "43",
+      "name": "Kimi and kimi-code rehearsal",
+      "status": "pending"
     }
   ],
   "next": {
@@ -229,5 +259,5 @@
     "label": "Show progress",
     "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-18T12:13:47.104Z"
+  "updated_at": "2026-11-18T13:30:00.000Z"
 }

@@ -18,7 +18,7 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 
 ## Status
 
-- v0.1.x was the first release line, for milestone v1.0 (a provisional name), and v0.2.x was the line of milestone v2.0. v0.3.x, for milestone v3.0, becomes the current line with its first release and is the only line that is supported.
+- v0.1.x was the first release line, for milestone v1.0 (a provisional name), and v0.2.x was the line of milestone v2.0. v0.3.x, for milestone v3.0, and the later lines follow the same rule. Only the latest release line is supported: currently 0.5.x, and 0.6.x from its first release.
 - `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
 - The Podman-gated production live suite and Omp status checks have versioned historical receipts in [OpenShell integration](docs/integration/openshell.md), [Omp integration](docs/integration/omp.md) and [ACP integration](docs/integration/acp.md). On 2026-10-31 the parent exercised compiled Realm 0.3.26 with a temporary matching rebuilt driver on rootless Podman 5.7.1: fresh generated-config `init` → active `up`/`status` → unbound `down`, then production crash/reap/reattach and real MCP exec/write/read (2 passed, 0 skipped). The 2026-11-13 quickstart on Realm 0.3.29 is in the transcript below and covers `init`, `up`, `status` and `down` only. This is not installer provisioning or Omp containment proof. Other platforms remain unverified live.

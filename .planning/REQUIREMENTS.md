@@ -214,6 +214,25 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 - [x] **SPEC-01**: `docs/specs/realm-spec.xml` no longer describes the Anda bridge, and the statements that require `andaUrl` or the degraded state are removed or retired; all other spec content is unchanged; the pull request records the owner's instruction of 2026-11-18 and the reason (an owner-directed edit of the spec)
 
+### v6.0 Responsiveness, exec kill proof, host ids and evidence debt
+
+- [ ] **OMPR-01**: The Omp cold attach is measured on a quiet host (one-minute load per CPU below 0.5) with `test/integration/omp-responsiveness.test.ts`: `get_state` answered across the attach, with the number of probes, the maximum and the 95th percentile recorded, and the result recorded as a pass or a finding (OI-11; Linear SPE-34662)
+- [ ] **OMPR-02**: If the quiet-host measurement exceeds the harness thresholds, the Omp extension path is made non-blocking (it answers before `up` completes, as `realm mcp` does since Phase 33), fail closed is kept (no mutation before the session is ready), and the measurement is repeated and recorded; if it passes, the phase records that no code change was needed
+- [ ] **OMPR-03**: The numbers and the host facts (load, CPU count, Omp version, date) are recorded in the phase and in `docs/integration/omp.md` either way, and the OI-11 row of the v1.0 open items reads closed on that evidence
+- [ ] **EXEC-01**: A live closeout test runs a sleeper that outlives the timeout window; after `TOOL_TIMEOUT` the sleeper is dead (not merely finished) within a stated bound, shown by a check independent of the sleeper's own run time (a sleeper longer than the observation window and a process-state check inside the sandbox) (finding F-3; Linear SPE-34663)
+- [ ] **EXEC-02**: If the sleeper survives, the kill path of the dispatcher and driver is fixed so that a timed-out exec's process tree is killed, the session stays usable, and a hermetic test pins the behaviour
+- [ ] **EXEC-03**: The timeout contract is unchanged for callers (the retryable `TOOL_TIMEOUT` reply, the per-call bound, the audit line), and the docs and the finding F-3 record state what the proof shows and its limits
+- [ ] **HOSTID-01**: Muse Code, Prime Agent and Grok Build each have a host id in the closed host-id list and the policy `profiles` schema, with a manifest, recipe or launcher label as the host's config surface allows; a host with no verifiable config surface stays config-only with a label in its launcher
+- [ ] **HOSTID-02**: Each of the three hosts attaches and completes a tool call under the enforce default with no policy edit (`GAP-34-01` is closed in `docs/integration/host-plugin-gaps.md`), and the guard test of labelled launchers (`test/host/adapters-labelled.test.ts`) no longer carries the named exception
+- [ ] **HOSTID-03**: The contract checker, the support matrix, the host-plugin docs, the policy reference and the migration notes are updated and agree with the registry, and the docs site build and `check:docs` pass
+- [ ] **TEAR-01**: The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, and its cause is found and recorded
+- [ ] **TEAR-02**: The cause is fixed or bounded, with a hermetic test that fails without the fix and a live run on the production stack that stops with a sandbox container and reports `failedTeardowns=0`
+- [ ] **DEBT-01**: The whole unit suite runs as a non-root user (uid 5002) and the result is recorded (EVID-01 Set B), including any failure as a finding
+- [ ] **DEBT-02**: A script under `scripts/check`, with tests, reports every commit subject in a pull request range that is breaking (by the repository's own rules) and lacks the `!` marker, unless the pull request lands as a merge commit; it is wired into the gate conventions of the repository
+- [ ] **DEBT-03**: The guard is enforcing where the existing gate conventions allow it without a workflow change; where enforcement needs a change under `.github/workflows/**` the guard stays report-only and the needed change is recorded for human review
+- [ ] **KIMI-01**: Kimi CLI and Kimi Code CLI are installed in a scratch location outside the repository, and the validator and production tiers are run as for claude, opencode and codex, with each result recorded with version and date
+- [ ] **KIMI-02**: Anything that cannot run has a named blocker, and `GAP-24-02` and the support matrix are updated to the evidence tier reached
+
 ## Carried from v2.0 (not in this milestone)
 
 - [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected (Accepted limitation, Phase 27 disposition, 2026-11-17: the requirement text is unmet; owner-confirmed approximation of 2026-10-23)
@@ -270,6 +289,8 @@ These requirements were completed in v1.0 and v2.0 and bind every phase of v3.0.
 v3.0 requirements: 52 total, 52 mapped
 
 v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Complete (ENF-04 with a recorded partial). Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`
+
+v6.0 requirements: 16 total (OMPR-01..03, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 16 mapped to phases 38 to 43, all Planned
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
@@ -410,6 +431,22 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | V1LIVE-01 | Phase 36 | Complete |
 | V1LIVE-02 | Phase 36 | Complete |
 | SPEC-01 | Phase 37 | Complete |
+| OMPR-01 | Phase 38 | Planned |
+| OMPR-02 | Phase 38 | Planned |
+| OMPR-03 | Phase 38 | Planned |
+| EXEC-01 | Phase 39 | Planned |
+| EXEC-02 | Phase 39 | Planned |
+| EXEC-03 | Phase 39 | Planned |
+| HOSTID-01 | Phase 40 | Planned |
+| HOSTID-02 | Phase 40 | Planned |
+| HOSTID-03 | Phase 40 | Planned |
+| TEAR-01 | Phase 41 | Planned |
+| TEAR-02 | Phase 41 | Planned |
+| DEBT-01 | Phase 42 | Planned |
+| DEBT-02 | Phase 42 | Planned |
+| DEBT-03 | Phase 42 | Planned |
+| KIMI-01 | Phase 43 | Planned |
+| KIMI-02 | Phase 43 | Planned |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
 | ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
