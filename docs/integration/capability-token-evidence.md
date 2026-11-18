@@ -10,7 +10,7 @@ This page does not give a defence. A process of the same user that can read the 
 | --- | --- | --- | --- | --- | --- |
 | EVID-01 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, Set A twice as uid 5002 | EVID-01: the non-root run |
 | EVID-02 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, kernel 6.8.0-149-generic, ptrace_scope 1, verdict settled | EVID-02: the memory probe |
-| EVID-03 | not-run | - | - | - | EVID-03: the live enforce proof |
+| EVID-03 | recorded | scripted client, scripted provider | 2026-11-18 | claude 2.1.322 on the production stack (Podman 5.7.1), both drives ran, main at the merge of PR 178 | EVID-03: the live enforce proof |
 
 The vocabulary of the Status cell is exactly four words. `not-run`: no dated run produced a result. `recorded`: a dated run produced the result the requirement asks for. `partial`: a dated run produced part of it, and the row names which part. `failed`: a dated run failed, and the row names the first failing assertion or the catalogue code.
 
@@ -26,7 +26,7 @@ Each value is read in a window and never assumed. The label is `Observed` only f
 | Node version | v24.18.0 | Observed | 2026-11-18 |
 | Account uid and gid | uid 5002, gid 5002, no supplementary groups | Observed | 2026-11-18 |
 | Harness account | realmlive | Observed | 2026-11-18 |
-| Podman version | not-run | - | - |
+| Podman version | 5.7.1 (rootless, the realmlive account's stack) | Observed | 2026-11-18 |
 
 ## EVID-01: the non-root run
 
@@ -64,13 +64,17 @@ Verdict: recorded. Observed on 2026-11-18, the frozen rule gives settled: arm N 
 
 ## EVID-03: the live enforce proof
 
-Claude through the daemon on the production stack with the default policy, the host attached, and the audit lines checked for host and kid. Two drives, each with its own tier: a scripted client driving the registered host command, and the real host driven against a scripted provider when that is feasible.
+Claude through the daemon on the production stack with the default policy (the policy file names no `capabilityTokens` member, so the mode is enforce and nothing hides a change of the default), the host attached, and the audit lines checked for host and kid. Two drives, each with its own tier: a script driving the registered host command `realm mcp --host claude`, and the real claude CLI driven against a scripted loopback provider that this repository's test owns.
 
 | Drive | Tier | Version | Result | Audit lines checked | Leak scan | Status | Date |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| launcher-driven | not-run | - | not-run | - | not-run | not-run | - |
-| host-driven | not-run | - | not-run | - | not-run | not-run | - |
-| live probe observation | not-run | - | not-run | - | not-run | not-run | - |
+| launcher-driven | scripted client driving the registered command | registered command of claude 2.1.322, Podman 5.7.1 | effective mode enforce, keyring present before the first call, doctor item capability-tokens pass; cold start active after 8088 ms and 5 status calls (REALM_NOT_ACTIVE x4, then active); status and list then ran (3 calls); active kid k1, key file mode 600; an unlabelled session (no host flag) was refused POLICY_DENIED with no tool work, and the daemon logs hold 1 capability.refused line | 8 lines: 1 attach, 3 admission, 3 result, 1 refusal; the attach line has tool capability.attach, outcome ok, host claude, kid k1; every call line has host claude and kid k1; realm audit verify exit 0; the unedited copy exit 0, the host-edited copy exit 1, the kid-edited copy exit 1 | clean: 71 sinks over the whole run, the token shape and 3 key texts, no hit | recorded | 2026-11-18 |
+| host-driven | scripted provider, no credential, no real model | claude 2.1.322 | claude itself issued one tools/call for status against the scripted provider, through a wire recorder, against the warm session: exit 0 after 1670 ms; wire methods server/discover, tools/list (all six tools), tools/call x1; provider requests 2, 0 rejected | 11 lines: 2 attach, 4 admission, 4 result, 1 refusal; the check passed with 4 calls, host claude and kid k1 on every call line; realm audit verify exit 0 | clean: 71 sinks over the whole run, the token shape and 3 key texts, no hit | recorded | 2026-11-18 |
+| live probe observation | non-descendant probe of the same uid, ptrace_scope 1, no needle passed | Node v24.18.0 | the realm mcp process: 109 regions listed, 0 read, mem open denied EACCES, 0 token candidates, environment has no token shape; the daemon: 158 regions listed, 0 read, mem open denied EACCES, 0 candidates, key file readable by the same uid | not applicable | reports redacted: no token shape in either | recorded | 2026-11-18 |
+
+Status `recorded`: both drives ran and every check passed (Observed, 2026-11-18). The host-driven turn used a scripted loopback provider with a placeholder key value, no credential and no real model, so what is shown is claude itself issuing the tool call and completing it through the daemon under enforce, not a model deciding to use Realm (Observed). The call lines carry the host label and the key id of the token the daemon minted at the attach, and the attach line precedes the first call line; each new process that attached wrote its own attach line (the launcher session one, claude's own process a second) (Observed). The attach step is unauthenticated, so the lines attribute a call to the host label the client named, not to a verified process (From code).
+
+The feasibility check ran first on the validator tier, with the real recipe installed and a stub realm behind the registered command: claude print mode against the scripted provider issued tools/call for status, exit 0 after 1888 ms, 2 provider messages, 6 MCP tools offered, 0 rejected (Observed, 2026-11-18). It needs `ENABLE_TOOL_SEARCH` set to `false`: by default claude defers MCP tool schemas behind its tool search and offers the provider no MCP tool by name, so a scripted reply that waits for the status tool never fires (Observed, claude 2.1.322). Before the run the host was clean (0 containers, 0 sandboxes, 0 daemons, an empty workspace); a keyring existed and was left as it was; afterwards the policy file was restored, the receipt and presence entries were as before, the operator's real claude file was unchanged and nothing remained (Observed).
 
 ## Not shown
 
@@ -81,10 +85,12 @@ What this evidence does not cover, however the rows above fall:
 - Any reader that is a descendant of the holder, or root (Inference from the kernel documentation; the root control only shows the scanner works).
 - `process_vm_readv` and `ptrace` attach: not exercised; the probe covers the access routes of `/proc/PID/mem` and `/proc/PID/environ` only (Inference from the kernel documentation that the access check is the same).
 - A same-user reader of the key file: the key file is readable by the same user, the page records that beside the memory result, and a same-user reader can mint tokens whatever the memory result is (From code).
-- A real model turn, if the host-driven drive uses a scripted provider (From code).
+- A real model turn: the host-driven drive used a scripted loopback provider with a placeholder key, so claude issued the tool call and no model decided to (Observed, 2026-11-18).
+- One claude version (2.1.322), one machine, one kernel and one day; a scripted provider is not a model (Observed, 2026-11-18).
+- The interplay of enforce with the cold attach was observed once (4 refusals REALM_NOT_ACTIVE, then active) and is not the Phase 33 cold-attach proof (Observed, 2026-11-18).
+- The attach step is unauthenticated, so the audit lines attribute a call to a host label, not to a verified process (From code).
 - Hosts other than claude (From code).
-- The whole unit suite (Set B) as the same user: not run in the window, and the Podman version was not read (Observed, 2026-11-18).
-- The live enforce proof (EVID-03): not run, so no live audit line or host-driven drive is recorded (Observed, 2026-11-18).
+- The whole unit suite (Set B) as the same user: not run in the window (Observed, 2026-11-18).
 
 ## Evidence kept outside the repository
 
