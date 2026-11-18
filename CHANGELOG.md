@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-11-18
+
+### Documentation
+- docs(phase-31): codex production tier passed on the production stack (2026-11-18) (#151) (6bab500)
+
 ## [0.4.10] - 2026-11-18
 
 ### Added
