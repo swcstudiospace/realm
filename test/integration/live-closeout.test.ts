@@ -370,7 +370,7 @@ const SETTLE_MS = 3_000;
 const MARKER_PREFIX = "realm-kill-proof-";
 // A command that does not exist: scenario C records what the dispatcher answers for it (no assertion).
 const MISSING_COMMAND = "realm-no-such-command";
-const TIMEOUT_BINARY = "/usr/bin/timeout";
+const BASH_BINARY = "/usr/bin/bash";
 const DISPATCH_REQUEST_BOUND_MS = 60_000;
 // The egress policy of production live 3 (test/integration/production-driver.test.ts): 1.1.1.1:443 allowed, 8.8.8.8:443 not.
 const ALLOWED_IP = "1.1.1.1";
@@ -558,10 +558,10 @@ void test(
     const exec = await startExecScenario(t, "C");
     const { run, session, observe } = exec;
 
-    // Tooling: Plan 39-02 wraps every exec in /usr/bin/timeout, so the image must provide it. Runs on every build.
-    const version = await sandboxExec(inputs, sessionIdFor(inputs.workspaceRoot), [TIMEOUT_BINARY, "--version"]);
-    assert.equal(version.exitCode, 0, `the sandbox image must provide ${TIMEOUT_BINARY} (Plan 39-02 relies on it): ${describeResult(version)}`);
-    observe(`${TIMEOUT_BINARY} --version: ${version.stdout.split(/\r?\n/)[0] ?? ""}`);
+    // Tooling: Plan 39-02 wraps every exec in a bash watchdog (bash 5.0 or newer), so the image must provide it. Runs on every build.
+    const version = await sandboxExec(inputs, sessionIdFor(inputs.workspaceRoot), [BASH_BINARY, "--version"]);
+    assert.equal(version.exitCode, 0, `the sandbox image must provide ${BASH_BINARY} (Plan 39-02 relies on it): ${describeResult(version)}`);
+    observe(`${BASH_BINARY} --version: ${version.stdout.split(/\r?\n/)[0] ?? ""}`);
 
     // Observation only (D-39-06): what the dispatcher answers for a command that does not exist. Nothing is asserted.
     const missing = await settle(session.request("tools/call", { name: "exec", arguments: { argv: [MISSING_COMMAND] } }, DISPATCH_REQUEST_BOUND_MS));

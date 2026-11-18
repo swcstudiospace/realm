@@ -16,6 +16,7 @@ import { renderNetworkPolicies } from "../../src/runtime/egress.js";
 import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../src/runtime/driver/sandbox-binding.js";
+import { watchdogWorkload } from "../../src/runtime/exec-watchdog.js";
 import {
   buildExecArgv,
   buildPolicyDocument,
@@ -1001,7 +1002,10 @@ void test("TOOL-03: exec spawns the pinned exec argv with output capture on and 
   const outcome = await runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 1500);
   assert.deepEqual(outcome, { exitCode: 0, stdout: "hello", stderr: "warn", truncated: false });
   const [call] = f.openshell.calls();
-  assert.deepEqual(call?.argv, buildExecArgv(SESSION, WORKLOAD));
+  assert.deepEqual(call?.argv, buildExecArgv(SESSION, watchdogWorkload(WORKLOAD, 1500)));
+  const exec = call.argv.slice(call.argv.indexOf("--") + 1);
+  assert.deepEqual([exec[0], exec[1], exec[3], exec[4]], ["/usr/bin/bash", "-c", "realm-exec-wd", "2"]);
+  assert.deepEqual(exec.slice(5), ["/usr/bin/agent", "--serve"]);
   assert.equal(call.captureOutput, true);
   assert.equal(call.timeoutMs, 1500);
   assert.equal(f.store.list().length, 0, "exec creates no container");
@@ -1035,7 +1039,51 @@ void test("TOOL-03: a deadline expiry during exec maps to TOOL_TIMEOUT", async (
 void test("TOOL-03: exec refuses a non-positive timeout before any OpenShell run starts", async (t) => {
   const f = await fixture(t);
   await assertCode(runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, 0), "SCHEMA_INVALID");
+  await assertCode(runSandboxExec(f.openshell.runner, SESSION, WORKLOAD, -5), "SCHEMA_INVALID");
   assert.equal(f.openshell.callCount(), 0);
+});
+
+// A runner that records its argv and, when it runs, moves a fake monotonic clock and then settles as the step says.
+function clockedExec(elapsedMs: number, settle: "resolve" | "timed-out" | "failed", exitCode = 0): {
+  readonly runner: OpenShellRunner;
+  readonly now: () => number;
+  readonly runs: string[][];
+} {
+  let clock = 1000;
+  const runs: string[][] = [];
+  const runner: OpenShellRunner = (argv) => {
+    runs.push([...argv]);
+    clock += elapsedMs;
+    return settle === "resolve" ? Promise.resolve({ exitCode, stdout: "", stderr: "", truncated: false }) : Promise.reject(new OpenShellRunnerError(settle));
+  };
+  return { runner, now: () => clock, runs };
+}
+
+void test("EXEC-02: the shell-form workload is wrapped, with its shell elements verbatim after the duration", async () => {
+  const exec = clockedExec(10, "resolve");
+  await runSandboxExec(exec.runner, SESSION, ["/bin/sh", "-c", "echo hi; sleep 1"], 28000, exec.now);
+  assert.deepEqual(exec.runs, [[...buildExecArgv(SESSION, watchdogWorkload(["/bin/sh", "-c", "echo hi; sleep 1"], 28000))]]);
+  assert.deepEqual(exec.runs[0]?.slice(-5), ["realm-exec-wd", "28.5", "/bin/sh", "-c", "echo hi; sleep 1"]);
+});
+
+void test("EXEC-03, D-39-04: a run that resolves at the deadline is TOOL_TIMEOUT whatever its exit code", async () => {
+  for (const exitCode of [0, 124, 137]) {
+    const exec = clockedExec(28000, "resolve", exitCode);
+    await assertCode(runSandboxExec(exec.runner, SESSION, WORKLOAD, 28000, exec.now), "TOOL_TIMEOUT");
+  }
+});
+
+void test("EXEC-03, D-39-04: a run that resolves one millisecond before the deadline keeps its exit code, 124 and 137 included", async () => {
+  for (const exitCode of [0, 7, 124, 137]) {
+    const exec = clockedExec(27999, "resolve", exitCode);
+    const outcome = await runSandboxExec(exec.runner, SESSION, WORKLOAD, 28000, exec.now);
+    assert.equal(outcome.exitCode, exitCode);
+  }
+});
+
+void test("EXEC-03: a rejected timed-out run is TOOL_TIMEOUT and a rejected failed run is REALM_NOT_ACTIVE, as before the watchdog", async () => {
+  await assertCode(runSandboxExec(clockedExec(28000, "timed-out").runner, SESSION, WORKLOAD, 28000), "TOOL_TIMEOUT");
+  await assertCode(runSandboxExec(clockedExec(5, "failed").runner, SESSION, WORKLOAD, 28000), "REALM_NOT_ACTIVE");
 });
 
 void test("TOOL-03: captured output is bounded at 262144 bytes per stream, and truncated is set when a stream is cut", async () => {

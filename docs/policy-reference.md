@@ -363,7 +363,8 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
-| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. |
+| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. For an `exec`, the process tree is ended inside the sandbox by the watchdog of `src/runtime/exec-watchdog.ts` shortly after the reply (dead about 3 s after it in the Phase 39 live run); the client kill alone does not end it. |
+| `WATCHDOG_MARGIN_MS` | `500` (`src/runtime/exec-watchdog.ts`) | Added to the 28 s runner deadline to give the in-sandbox exec watchdog its own deadline (28.5 s), so the watchdog never ends a call before the client's bound does. Not a policy key. |
 | `TEARDOWN_TIMEOUT_MS` | `60_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`, derived as the worst case of the stage bounds of one session end (`SESSION_END_WORST_CASE_MS`, `src/runtime/teardown-stages.ts`, 57 000 ms) plus a 3 000 ms margin; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
 | `CONTAINER_STOP_GRACE_MS` | `2_000` (`src/runtime/teardown-stages.ts`) | Libpod stop timeout grace period of the stop path (`CONTAINER_STOP_GRACE_MS`, `src/runtime/teardown-stages.ts`); the sandbox runtime ignores SIGTERM, so a longer grace is dead time. |
