@@ -348,7 +348,7 @@ export async function runColdAttachProbe(options: ColdProbeOptions): Promise<Col
 
     let afterReady: ColdAfterReady | undefined;
     if (firstSuccessMs !== undefined && !childExited) {
-      const listed = await callTool("list", { path: "." });
+      const listed = await callTool("list", { path: ".", depth: 1 });
       let listOutcome = "no reply";
       if (listed !== undefined) {
         const served = classifyCall(listed.result);
