@@ -993,10 +993,11 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const shimDir = join(scenario.root, "shim");
   const wireLog = join(scenario.root, "wire.log");
   writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog });
-  const pathValue = [shimDir, dirname(options.bin), scenario.cliEnvironment["PATH"]].filter((entry): entry is string => entry !== undefined && entry !== "").join(delimiter);
+  // The production PATH stays ahead of the host binary's directory: the host spawns `realm mcp`, which probes `podman --version`, and
+  // the production Podman 5 sits early on that PATH while the host's own directory (for example /usr/bin) may hold Podman 4.
+  const productionPath = inputs.hostEnvironment["PATH"];
+  const pathValue = [shimDir, productionPath, dirname(options.bin)].filter((entry): entry is string => entry !== undefined && entry !== "").join(delimiter);
   const env: Readonly<Record<string, string>> = { ...scenario.cliEnvironment, PATH: pathValue, ...overrides };
-  // The scenario with the environment the host gives `realm mcp`: the warm-up below runs through the production helper with it.
-  const hostScenario: ScenarioEnvironment = { ...scenario, cliEnvironment: env };
 
   const realmHost = (words: readonly string[]): Promise<CliResult> => runCli(["host", ...words], { env, now: () => new Date() });
   const realmStatus = (): Promise<CommandResult> => realmCliWithWorkspace(inputs, scenario, ["status"], projectDir, REALM_COMMAND_TIMEOUT_MS);
@@ -1026,10 +1027,16 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   // creation (about 35 to 60 s measured 2026-11-18) outlasts the hosts' MCP connect timeouts (OpenCode 30 s; Claude's `mcp list`
   // probe gave up as well). `realm up` is idempotent, so the host attach below hits a warm session. The cold-attach gap itself is
   // GAP-31-04; the wave 1 boot matrix says the production tier requires a warm session. The warm-up runs through the production
-  // helper (`realmCli`) with the environment the host gives `realm mcp` (the scenario environment, the recorder and the host's own
-  // directory first on PATH), the one environment under which the realm CLI was observed to reach Podman in a host attach.
-  const warmed = await realmCli(inputs, hostScenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
-  assert.equal(warmed.exitCode, 0, `realm up --workspace for the project before the host attach: ${describeResult(warmed)}`);
+  // helper (`realmCli`) with the scenario environment (HOME, XDG_RUNTIME_DIR, the scenario's config home, the driver socket) and
+  // exactly the production PATH, with no recorder or host directory on it: `realm up` runs `podman --version` and the openshell
+  // calls and needs nothing else from PATH.
+  const warmScenario: ScenarioEnvironment = { ...scenario, cliEnvironment: { ...scenario.cliEnvironment, ...(productionPath === undefined ? {} : { PATH: productionPath }) } };
+  const warmed = await realmCli(inputs, warmScenario, ["up", "--workspace", projectDir], WARM_UP_TIMEOUT_MS);
+  assert.equal(
+    warmed.exitCode,
+    0,
+    `realm up --workspace for the project before the host attach (PATH ${JSON.stringify(warmScenario.cliEnvironment["PATH"] ?? "unset")}): ${describeResult(warmed)}`,
+  );
 
   // The host command, from a directory under the pinned workspace root. The recorder's wire summary is what the tool listing is
   // asserted from; the daemon's view (status active, an attached boot report) is asserted beside it.
