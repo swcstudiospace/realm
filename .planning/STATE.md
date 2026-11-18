@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
-milestone: v5.0
-status: Awaiting next milestone
-stopped_at: Phase 37 complete — all phases complete
-last_updated: "2026-11-18T12:13:47.032Z"
+milestone: v6.0
+milestone_name: Responsiveness, exec kill proof, host ids and evidence debt (Starting)
+status: Starting
+stopped_at: Milestone v6.0 started, phases 38 to 43 planned
+last_updated: "2026-11-18T13:30:00.000Z"
 last_activity: 2026-11-18
-last_activity_desc: Milestone v5.0 completed and archived
-state_head: 1528fb6426d5780f83bf69a9efaba2942fd59777
+last_activity_desc: Milestone v6.0 started
+state_head: abf7993
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
-milestone_name: Cold attach, enforced capability tokens and evidence (Shipped 2026-11-18)
-current_phase: 37
+  total_phases: 6
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 38
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase: 37
 See: .planning/PROJECT.md (updated 2026-11-18)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v5.0, Cold attach, enforced capability tokens and evidence (phases 33 to 37, release line 0.5.x), is complete and archived (2026-11-18); the next milestone is not started. Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`.
+**Current focus:** Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt (phases 38 to 43, release line 0.6.x). Phases 38, 39, 40, 41 and 43 are independent; 42 comes after the others for the final non-root whole-suite run. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`; the v5.0 close-out is `.planning/milestones/v5.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: Milestone v5.0 complete
+Phase: 38 (Omp responsiveness during cold attach), not started
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-11-18 — Milestone v5.0 completed and archived
+Status: Starting milestone v6.0 (phases 38 to 43, release line 0.6.x)
+Last activity: 2026-11-18 — Milestone v6.0 started
 
 ## Current Recovery Boundaries
 

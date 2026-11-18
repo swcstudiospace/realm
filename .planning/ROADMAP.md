@@ -8,6 +8,8 @@ Milestone v3.0, Containment by Default, makes the sandbox the place where a mode
 
 Milestone v5.0, Cold attach, enforced capability tokens and evidence, makes `realm mcp` answer the MCP handshake before the sandbox is up so that hosts with a 30 second connect timeout connect on a cold start (Phase 33), turns capability tokens on by default as a breaking change with a migration path (Phase 34), backs the token claims with a non-root run, a memory-read probe and a live enforce proof (Phase 35), re-verifies the v1.0 live items this host can run (Phase 36), and removes the Anda bridge from the product spec by owner direction (Phase 37). It has five phases, 33 to 37, on release line 0.5.x; 34 depends on 33 and 35 on 34, while 36 and 37 are independent.
 
+Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt, measures the Omp cold attach on a quiet host and makes the Omp path non-blocking if it exceeds the thresholds (Phase 38), proves that a timed-out exec is killed and not merely finished (Phase 39), gives Muse Code, Prime Agent and Grok Build host ids so they work under the enforce default (Phase 40), finds and fixes the daemon teardown report `failedTeardowns=1` after about 30 s (Phase 41), pays the evidence debt of v5.0 (Phase 42), and rehearses kimi and kimi-code (Phase 43). It has six phases, 38 to 43, on release line 0.6.x; 38, 39, 40, 41 and 43 are independent and 42 comes after the others for the final non-root whole-suite run.
+
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
 ## Milestones
@@ -17,6 +19,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
 - 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
 - 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
+- 🚧 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 43 (in progress, release line 0.6.x)
 
 ## Phases
 
@@ -223,6 +226,17 @@ Plans:
 - [x] **Phase 35: Capability token evidence** - A non-root end-to-end run of the token tests on a `ptrace_scope` 1 host, the `/proc/PID/mem` probe run as a non-root non-descendant same-uid process with the result recorded, and a live enforce proof on the production stack with claude via the daemon, audit lines carrying host and kid. (completed 2026-11-18)
 - [x] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01. (completed 2026-11-18)
 - [x] **Phase 37: Spec update** - `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state, as an owner-directed edit of 2026-11-18 recorded in the pull request; all other spec content is kept. (completed 2026-11-18)
+
+### 🚧 v6.0 Responsiveness, exec kill proof, host ids and evidence debt (In progress, release line 0.6.x)
+
+**Milestone Goal:** The Omp cold attach is measured and, if needed, made non-blocking; a timed-out exec is proved dead; Muse Code, Prime Agent and Grok Build work under the enforce default; the daemon teardown report is explained and fixed; the v5.0 evidence debt is paid; and kimi and kimi-code are rehearsed or have named blockers.
+
+- [ ] **Phase 38: Omp responsiveness during cold attach** - `get_state` is measured across the Omp cold attach on a quiet host with the existing harness, the Omp extension path is made non-blocking if the measurement exceeds the thresholds, and the numbers are recorded either way (OI-11).
+- [ ] **Phase 39: Timed-out exec kill proof** - A live closeout test shows that a sleeper outliving the timeout window is dead, not merely finished, after `TOOL_TIMEOUT`, by a proof independent of the sleeper's own run time; the kill path is fixed if the sleeper survives (finding F-3).
+- [ ] **Phase 40: Host ids for Muse Code, Prime Agent and Grok Build** - The three hosts get host ids and manifests, recipes or launcher labels so they attach under the enforce default, `GAP-34-01` is closed, and the contract checker, the support matrix and the docs agree.
+- [ ] **Phase 41: Daemon teardown flake** - The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, its cause found, and the fix or bound proved by a hermetic test and a live run.
+- [ ] **Phase 42: Evidence debt** - The whole unit suite runs as uid 5002 (EVID-01 Set B), and a script under `scripts/check` reports breaking commit subjects without the `!` marker on a pull request range, report-only where enforcement needs a workflow change.
+- [ ] **Phase 43: Kimi and kimi-code rehearsal** - Both CLIs are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02).
 
 ## Phase Details
 
@@ -633,6 +647,12 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 35. Capability token evidence | 3/3 | Complete    | 2026-11-18 |
 | 36. Live re-verification of the v1.0 open items | 3/3 | Complete    | 2026-11-18 |
 | 37. Spec update | 1/1 | Complete    | 2026-11-18 |
+| 38. Omp responsiveness during cold attach | 0/0 | Not started | - |
+| 39. Timed-out exec kill proof | 0/0 | Not started | - |
+| 40. Host ids for Muse Code, Prime Agent and Grok Build | 0/0 | Not started | - |
+| 41. Daemon teardown flake | 0/0 | Not started | - |
+| 42. Evidence debt | 0/0 | Not started | - |
+| 43. Kimi and kimi-code rehearsal | 0/0 | Not started | - |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -862,3 +882,93 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 37 to break down)
+
+### Phase 38: Omp responsiveness during cold attach
+
+**Goal:** `get_state` is measured across the Omp cold attach on a quiet host (one-minute load per CPU below 0.5) with `test/integration/omp-responsiveness.test.ts`; if the measurement exceeds the harness thresholds, the Omp extension path answers before `up` completes (as `realm mcp` does since Phase 33) and the measurement is repeated; the numbers are recorded either way (OI-11; Linear SPE-34662).
+**Depends on:** Phase 37
+**Requirements**: OMPR-01, OMPR-02, OMPR-03
+**Success Criteria** (what must be TRUE):
+  1. A cold-attach run on a quiet host (load per CPU below 0.5 at the start) completes with at least 40 probes over a window of at least 10 s, and the maximum, the 95th percentile and the host facts are recorded in the phase and in `docs/integration/omp.md`.
+  2. If the maximum exceeds 1000 ms or the 95th percentile exceeds 500 ms, the Omp extension path is changed so that it answers before `up` completes, no mutation runs before the session is ready, and a repeat run passes; if the first run passes, the phase records that no code change was needed.
+  3. The existing status vocabulary, the not-active refusal and the audit lines are unchanged, shown by the existing Omp and contract tests plus a test for the not-active window of the Omp path if the path changed.
+  4. The OI-11 row reads closed on the quiet-host evidence, or stays open with the measured numbers and a named reason.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 38 to break down)
+
+### Phase 39: Timed-out exec kill proof
+
+**Goal:** A live closeout test where a sleeper outlives the timeout window shows the sleeper dead (not merely finished) after `TOOL_TIMEOUT`, within a bound, by a proof independent of the sleeper's own run time; the kill path is fixed if the sleeper survives (finding F-3; Linear SPE-34663).
+**Depends on:** Phase 37
+**Requirements**: EXEC-01, EXEC-02, EXEC-03
+**Success Criteria** (what must be TRUE):
+  1. The live test runs a sleeper longer than its own observation window, receives the retryable `TOOL_TIMEOUT`, and then finds, by a process-state check inside the sandbox, that the sleeper and its children are gone within a stated bound.
+  2. If the sleeper survives in a first run, the kill path is fixed so that a timed-out exec's process tree is killed, and a hermetic test fails without the fix and passes with it.
+  3. The session stays usable after the kill (a following exec succeeds), and the `TOOL_TIMEOUT` reply, the per-call bound and the audit line are unchanged for callers.
+  4. Finding F-3 is closed with the dated live evidence and its limits stated.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 39 to break down)
+
+### Phase 40: Host ids for Muse Code, Prime Agent and Grok Build
+
+**Goal:** Muse Code, Prime Agent and Grok Build get host ids and manifests, recipes or launcher labels so that they work under the enforce default (GAP-34-01 closed), with the contract checker, the support matrix and the docs updated; a host with no verifiable config surface stays config-only with a label in its launcher.
+**Depends on:** Phase 37
+**Requirements**: HOSTID-01, HOSTID-02, HOSTID-03
+**Success Criteria** (what must be TRUE):
+  1. The three host ids are in the host-id list and the policy `profiles` schema, and a test pins both lists to the host layer so they cannot drift.
+  2. Each of the three hosts attaches and completes a tool call under the default `enforce` mode with no policy edit, attributed to its own host id in the audit line (Grok Build no longer reads as `claude`).
+  3. The guard test of labelled launchers has no named exception left, and the contract checker, the support matrix and `docs/integration/host-plugin-gaps.md` (GAP-34-01 closed) agree with the registry.
+  4. The docs site build and `check:docs` pass, and the migration notes tell an existing install of these hosts what to change.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 40 to break down)
+
+### Phase 41: Daemon teardown flake
+
+**Goal:** The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, its cause found, and the fix or bound proved by a hermetic test and a live run.
+**Depends on:** Phase 37
+**Requirements**: TEAR-01, TEAR-02
+**Success Criteria** (what must be TRUE):
+  1. A recorded reproduction (hermetic or live) shows the stop with a sandbox container reaching `failedTeardowns=1` and `REALM_STOPPING`, with the timing and the cause named in the phase record.
+  2. The cause is fixed or bounded in the code, and a hermetic test fails without the change and passes with it.
+  3. A live run on the production stack stops the daemon with a sandbox container and the `daemon.stopped` line reports `failedTeardowns=0` with no `code`.
+  4. The `daemon.stopped` event contract (the `failedTeardowns` count and the first failure code) is unchanged.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 41 to break down)
+
+### Phase 42: Evidence debt
+
+**Goal:** The v5.0 evidence debt is paid: the whole unit suite runs as uid 5002 (EVID-01 Set B) and a script under `scripts/check` reports commit subjects that are breaking but lack the `!` marker on a pull request range, enforcing where the gate conventions allow and report-only where enforcement needs a workflow change.
+**Depends on:** Phase 38, Phase 39, Phase 40, Phase 41
+**Requirements**: DEBT-01, DEBT-02, DEBT-03
+**Success Criteria** (what must be TRUE):
+  1. The whole unit suite runs as a non-root user (uid 5002) and its pass and fail counts are recorded with the host facts, failures included as findings.
+  2. The guard script has tests that fail on a seeded breaking commit without `!` and pass when the marker is present or the range lands as a merge commit.
+  3. The guard is wired into the repository's gate conventions; where enforcement would need a change under `.github/workflows/**` it stays report-only and the needed change is written down for human review.
+  4. The `check:docs` and `check:gates` gates pass with the new script.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 42 to break down)
+
+### Phase 43: Kimi and kimi-code rehearsal
+
+**Goal:** Kimi CLI and Kimi Code CLI are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02).
+**Depends on:** Phase 37
+**Requirements**: KIMI-01, KIMI-02
+**Success Criteria** (what must be TRUE):
+  1. Each of the two CLIs is installed outside the repository, and its version and the install source are recorded with the date.
+  2. The validator tier and the production tier run for each CLI that can run, and the result is recorded in `docs/integration/wave1-boot-matrix.md` with the evidence label.
+  3. Anything that cannot run has a named blocker (for example the archived `kimi` stub), and `GAP-24-02` and the support matrix read the evidence tier reached.
+  4. The scratch installs are removed and the production stack is left as found (no leftover container or session).
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 43 to break down)

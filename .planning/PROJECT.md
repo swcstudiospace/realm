@@ -10,11 +10,26 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ## Current State
 
-Shipped: **v5.0 Cold attach, enforced capability tokens and evidence** (2026-11-18, release line 0.5.x), and no milestone is active. Earlier: v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md`. The record is in `.planning/milestones/`: for example `v5.0-ROADMAP.md`, `v5.0-REQUIREMENTS.md`, `v5.0-MILESTONE-AUDIT.md` and `v5.0-phases/`, and the same set for v2.0 to v4.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0). Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
+Shipped: **v5.0 Cold attach, enforced capability tokens and evidence** (2026-11-18, release line 0.5.x), and milestone v6.0 is in progress. Earlier: v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md`. The record is in `.planning/milestones/`: for example `v5.0-ROADMAP.md`, `v5.0-REQUIREMENTS.md`, `v5.0-MILESTONE-AUDIT.md` and `v5.0-phases/`, and the same set for v2.0 to v4.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0). Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
 
 What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
 
 Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
+
+## Current Milestone: v6.0 Responsiveness, exec kill proof, host ids and evidence debt
+
+**Goal:** The Omp cold attach is measured on a quiet host and made non-blocking if it exceeds the thresholds; a timed-out exec is proved dead, not merely finished; Muse Code, Prime Agent and Grok Build work under the enforce default; the daemon teardown report `failedTeardowns=1` is explained and fixed; the v5.0 evidence debt is paid; and kimi and kimi-code are rehearsed or have named blockers. Release line 0.6.x. The latest release line is supported (`SECURITY.md`).
+
+**Target features:**
+
+- Omp responsiveness during cold attach (Phase 38): a quiet-host measurement of `get_state` with the existing harness, a non-blocking Omp path if the thresholds are exceeded, the numbers recorded either way (OI-11; Linear SPE-34662)
+- Timed-out exec kill proof (Phase 39): a live test shows the sleeper dead after `TOOL_TIMEOUT`, independent of its own run time; the kill path is fixed if it survives (finding F-3; Linear SPE-34663)
+- Host ids for Muse Code, Prime Agent and Grok Build (Phase 40): the three hosts attach under the enforce default; GAP-34-01 closes
+- Daemon teardown flake (Phase 41): `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s reproduced, its cause found, fixed or bounded, proved hermetically and live
+- Evidence debt (Phase 42): the whole unit suite as uid 5002 (EVID-01 Set B) and a guard for the `!` marker on breaking commit subjects (report-only where enforcement needs a workflow change)
+- Kimi and kimi-code rehearsal (Phase 43): both CLIs run through the validator and production tiers from a scratch install, or have named blockers (GAP-24-02)
+
+The owner decisions of 2026-11-18 are recorded in `.planning/MILESTONE-CONTEXT.md`; the v5.0 context is archived at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md` and the decisions D1 to D6 of v3.0 (2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPR, EXEC, HOSTID, TEAR, DEBT, KIMI) are in `.planning/REQUIREMENTS.md` and the phases (38 to 43) in `.planning/ROADMAP.md`.
 
 ## Last Milestone: v5.0 Cold attach, enforced capability tokens and evidence (shipped 2026-11-18)
 
@@ -28,9 +43,9 @@ Verified only as far as a connection and a scripted run: no LLM-driven tool call
 - Live re-verification of the v1.0 open items (Phase 36): each item this host can run is re-verified with dated evidence or carried with a named reason; the Anda items are closed as dropped (D-27-01); OI-13 accepted by the owner; OI-11 (Omp responsiveness) recorded as a loaded-host run that failed its thresholds
 - Spec update (Phase 37): `docs/specs/realm-spec.xml` drops the Anda bridge, as an owner-directed edit of 2026-11-18
 
-**v5.1 candidates (planned, not built):** Omp responsiveness during cold attach (OI-11, a quiet-slot measurement or a cause found in the Omp path); the timed-out exec kill proof (finding F-3); enforce by default for the hosts without a host id (Muse Code, Prime Agent, Grok Build); kimi and kimi-code (GAP-24-02).
+**v5.1 candidates (taken into v6.0, Phases 38 to 43):** Omp responsiveness during cold attach (OI-11, a quiet-slot measurement or a cause found in the Omp path); the timed-out exec kill proof (finding F-3); enforce by default for the hosts without a host id (Muse Code, Prime Agent, Grok Build); kimi and kimi-code (GAP-24-02).
 
-The owner decisions of 2026-11-18 are recorded in `.planning/MILESTONE-CONTEXT.md`; the decisions D1 to D6 of v3.0 (2026-10-29) are archived in `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (COLD, ENF, EVID, V1LIVE, SPEC) are in `.planning/REQUIREMENTS.md` and the phases (33 to 37) in `.planning/ROADMAP.md`.
+The owner decisions of 2026-11-18 are recorded in `.planning/milestones/v5.0-MILESTONE-CONTEXT.md`; the decisions D1 to D6 of v3.0 (2026-10-29) are archived in `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (COLD, ENF, EVID, V1LIVE, SPEC) are in `.planning/REQUIREMENTS.md` and the phases (33 to 37) in `.planning/ROADMAP.md`.
 
 **Carried, not in v5.0** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted limitation, Phase 27 disposition of 2026-11-17; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dropped by owner decision D-27-01, 2026-11-17), PRD-DRV-01 (complete: the owner confirmed its amendment on 2026-11-17) and UI-01 (an accepted limitation; Phase 36 recorded a loaded-host Omp cold-attach run that failed its thresholds, and the status stays the owner's call). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
 
@@ -146,4 +161,4 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-11-18 after completing milestone v5.0*
+*Last updated: 2026-11-18 after starting milestone v6.0*

@@ -31,7 +31,7 @@ The baseline gates were run once at main 00e0003 before anything was written: ty
 
 ## Pending decisions and validation requests (none blocks anything)
 
-Status 2026-10-29: the owner answered D1 to D6 (all proposals; D2 yes; D3 yes; D4 yes; D5 add them; D6 signed off). The answers and their meaning are recorded in `.planning/MILESTONE-CONTEXT.md`, and the defaults in the table below are superseded by them.
+Status 2026-10-29: the owner answered D1 to D6 (all proposals; D2 yes; D3 yes; D4 yes; D5 add them; D6 signed off). The answers and their meaning are recorded in `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`, and the defaults in the table below are superseded by them.
 
 | Id | Kind | Question | Default if unanswered |
 |---|---|---|---|
