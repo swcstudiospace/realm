@@ -191,8 +191,8 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **CAPT-07**: The verified host and key id are recorded on the audit lines of every tokened call; attaches and refusals are audited within a bound; the chain covers the fields
 - [ ] **CAPT-08**: realm host token status and rotate work without a daemon; a doctor item capability-tokens reports mode, keyring and misconfiguration
 - [ ] **CAPT-09**: The delivery decision, the limits (no defence against a same-uid reader) and the owner override are documented and tested; the 18 default manifests and 15 recipes are unchanged
-- [ ] **BOOTP-01**: Each wave 1 host that can run here (claude, codex; others named) is booted through its own CLI against the production stack, and Realm tools are listed or called, with results recorded
-- [ ] **BOOTP-02**: Hosts that cannot be booted (missing CLI, no credentials, archived) have a named gap in docs/integration/host-plugin-gaps.md
+- [x] **BOOTP-01**: Each wave 1 host that can run here (claude, codex; others named) is booted through its own CLI against the production stack, and Realm tools are listed or called, with results recorded
+- [x] **BOOTP-02**: Hosts that cannot be booted (missing CLI, no credentials, archived) have a named gap in docs/integration/host-plugin-gaps.md
 
 ## Carried from v2.0 (not in this milestone)
 
@@ -372,8 +372,8 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | CAPT-07 | Phase 32 | Planned |
 | CAPT-08 | Phase 32 | Planned |
 | CAPT-09 | Phase 32 | Planned |
-| BOOTP-01 | Phase 31 | Planned |
-| BOOTP-02 | Phase 31 | Planned |
+| BOOTP-01 | Phase 31 | Complete |
+| BOOTP-02 | Phase 31 | Complete |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
 | ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |

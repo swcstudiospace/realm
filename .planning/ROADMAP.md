@@ -203,7 +203,7 @@ Plans:
 - [x] **Phase 28: Remove the Anda bridge** - The Anda bridge is removed with a clean cutover: no `andaUrl` key, no `ANDA_UNREACHABLE` or `ANDA_VERSION_MISMATCH` codes, no degraded state, no doctor check or docs for it, and the release carries a breaking-change note. (completed 2026-11-17)
 - [x] **Phase 29: MCP tool annotations** - `realm mcp` advertises MCP tool annotations (read-only, destructive, idempotent, open-world) for every Realm tool, verified against the protocol revisions it serves. (completed 2026-11-17)
 - [x] **Phase 30: Capability token spike** - A bounded spike answers whether a per-session capability token (least privilege and audit attribution for stdio hosts) is worth building, with a recorded build or drop decision; no production code unless the decision is build. (completed 2026-11-18)
-- [ ] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
+- [x] **Phase 31: Production-stack boot rehearsals for wave 1 hosts** - The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded. (completed 2026-11-18)
 - [ ] **Phase 32: Capability tokens for stdio hosts** - Per-session, per-host HMAC capability tokens minted by the daemon and carried by stdio hosts, verified before dispatch and fail-closed together with policy, with per-host profiles, audit attribution, key rotation and a doctor check, and an honest record of what they do not stop (owner override of the Phase 30 outcome, 2026-11-17).
 
 ## Phase Details
@@ -730,11 +730,11 @@ Plans:
 **Goal:** The wave 1 hosts that can run on this account's Podman 5.x stack boot Realm through their own CLI against the production stack, with results or named gaps recorded.
 **Depends on:** Phase 28
 **Requirements**: BOOTP-01, BOOTP-02
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 31-01-PLAN.md: codex session harness, boot matrix, named gaps (wave 1)
-- [ ] 31-02-PLAN.md: live window on the production stack: claude, opencode, codex (wave 2)
+- [x] 31-01-PLAN.md: codex session harness, boot matrix, named gaps (wave 1)
+- [x] 31-02-PLAN.md: live window on the production stack: claude, opencode, codex (wave 2)
 
 ### Phase 32: Capability tokens for stdio hosts
 
