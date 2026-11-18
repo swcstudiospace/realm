@@ -14,7 +14,7 @@ import { BOOT_BOUNDS, equalJitterDelayMs } from "../../src/host/boot.js";
 import { HOST_ALIASES, HOST_RUNTIMES } from "../../src/host/runtimes.js";
 import { HOST_IDS, type HostId } from "../../src/host/types.js";
 import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
-import { callStatus, frame, framesOf, listTools, toolOutcomeOf } from "../support/stdio-host-harness.js";
+import { callStatus, frame, framesOf, listTools, toolOutcomeOf, untilPresence } from "../support/stdio-host-harness.js";
 import {
   adopted,
   finish,
@@ -23,7 +23,9 @@ import {
   newWorld,
   reportsOf,
   startSession,
+  untilAttached,
   untilReply,
+  untilSettled,
   type Session,
   type StartOptions,
   type StdioRig,
@@ -173,6 +175,8 @@ async function readiness(id: HostId, transport: Transport): Promise<void> {
   const session = start({ argv: argvOf(transport, id), world });
   session.input.write(initializeFrame(transport));
   await untilReply(session, 1);
+  // realm mcp answers before the boot settles; the marker is written once a client is adopted.
+  await untilPresence(RIG.stateDir, id);
   const marker = markerOfRig(RIG, id);
   assert.deepEqual(Object.keys(marker).sort(), MARKER_KEYS, `${label}: the marker has the six keys`);
   assert.equal(marker["pid"], process.pid, label);
@@ -203,6 +207,7 @@ async function retryServesAfterTheDaemonComesUp(id: HostId): Promise<void> {
   const world = newWorld();
   world.daemonUp = false;
   const session = start({ argv: argvOf("mcp", id, ["--reattach"]), world, timeoutMs: 30 });
+  await untilSettled(session);
   session.input.write(callStatus(2));
   const refused = await untilReply(session, 2);
   assert.equal(toolOutcomeOf(refused)["outcome"], "refused", label);
@@ -232,6 +237,7 @@ async function retryStopsAtTheCap(id: HostId): Promise<void> {
   const world = newWorld();
   world.daemonUp = false;
   const session = start({ argv: argvOf("mcp", id, ["--reattach"]), world, timeoutMs: 30 });
+  await untilSettled(session);
   session.input.write(callStatus(2));
   await untilReply(session, 2);
   const perAttempt = session.spawns.length;
@@ -276,6 +282,7 @@ async function refusedUpServes(id: HostId): Promise<void> {
   const world = newWorld();
   world.upResult = "PODMAN_MISSING";
   const session = start({ argv: argvOf("mcp", id), world });
+  await untilAttached(session);
   session.input.write(callStatus(2));
   await untilReply(session, 2);
   assert.deepEqual(world.tools, [{ status: {} }], `${label}: the call reached the daemon fake`);
@@ -302,6 +309,7 @@ async function foreignReadbackRefusesLocally(id: HostId): Promise<void> {
   world.upResult = "PODMAN_MISSING";
   world.readbackOther = true;
   const session = start({ argv: argvOf("mcp", id), world });
+  await untilSettled(session);
   session.input.write(callStatus(2));
   const reply = await untilReply(session, 2);
   assert.equal(toolOutcomeOf(reply)["outcome"], "refused", label);
@@ -329,11 +337,18 @@ async function silentDaemonExits(id: HostId, transport: Transport): Promise<void
   const world = newWorld();
   world.daemonUp = false;
   const session = start({ argv: argvOf(transport, id), world, timeoutMs: 50 });
+  if (transport === "mcp") {
+    // realm mcp serves, refuses calls with the code and exits 1 at stdin end; the text is written once when the boot settles.
+    session.input.write(listTools(1));
+    await untilReply(session, 1);
+    await untilSettled(session);
+    session.input.end();
+  }
   const result = await boundedWait(session.result, `${label}: the ensure failure`, 10_000);
   assert.equal(result.exitCode, 1, label);
   assert.equal(result.stdout, "", label);
-  assert.match(result.stderr, /^DAEMON_START_TIMEOUT: /, label);
-  assert.equal(session.output.text(), "", `${label}: no frame`);
+  assert.match(transport === "mcp" ? session.diagnostics.text() : result.stderr, /^DAEMON_START_TIMEOUT: /, label);
+  assert.equal(framesOf(session.output.text()).length, transport === "mcp" ? 1 : 0, `${label}: no frame beyond the handshake reply`);
   assert.equal(world.log.includes("up"), false, `${label}: up was never requested`);
   assert.equal(session.spawns.length > 0, true, `${label}: the daemon was started`);
 }
@@ -353,6 +368,7 @@ async function teardownEndsTheSameWay(id: HostId, transport: Transport): Promise
     const session = start({ argv: argvOf(transport, id), world });
     session.input.write(transport === "mcp" ? listTools(1) : initializeFrame(transport));
     await untilReply(session, 1);
+    await untilPresence(RIG.stateDir, id);
     assert.equal(existsSync(markerPathOfRig(RIG, id)), true, `${label}: the marker exists while serving`);
     if (row.signal === null) {
       session.input.end();

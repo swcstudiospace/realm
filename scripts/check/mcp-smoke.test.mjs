@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXPECTED_ANNOTATIONS, LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeMarker, readMarker } from "./mcp-smoke.mjs";
+import { EXPECTED_ANNOTATIONS, LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeFailedStatus, describeMarker, readMarker, waitForMarker } from "./mcp-smoke.mjs";
 
 // The smoke gate decides whether the built server speaks both protocol eras in the shapes the revisions name. These
 // tests feed it the replies a conforming server gives, and then one broken reply at a time, so a gate that stops
@@ -254,4 +254,28 @@ test("readMarker reads <state>/hosts/<host>-active/<pid>.json, null when absent,
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+// ---- The waits and the failed branch of the cold-attach session (Phase 33) ---------------------------------------------------
+
+test("waitForMarker resolves with a marker that appears late and with null when it never does or the child ends first", async () => {
+  let reads = 0;
+  const late = await waitForMarker(() => {
+    reads += 1;
+    return reads >= 3 ? { attach: "attached" } : null;
+  }, { isEnded: () => false, timeoutMs: 5000, intervalMs: 1 });
+  assert.deepEqual(late, { attach: "attached" });
+  assert.equal(reads, 3, "it polled until the marker appeared");
+  assert.equal(await waitForMarker(() => null, { isEnded: () => false, timeoutMs: 30, intervalMs: 1 }), null, "a marker that never appears");
+  assert.equal(await waitForMarker(() => null, { isEnded: () => true, timeoutMs: 5000, intervalMs: 1 }), null, "a child that ended first");
+  assert.deepEqual(await waitForMarker(() => ({ attach: "failed" }), { isEnded: () => true, timeoutMs: 1, intervalMs: 1 }), { attach: "failed" }, "a marker already there wins");
+});
+
+test("describeFailedStatus accepts a refused tool result with the failure code or REALM_NOT_ACTIVE and rejects anything else", () => {
+  const refused = (code, extra = {}) => ({ isError: true, structuredContent: { outcome: "refused", tool: "status", code, retryable: true }, ...extra });
+  assert.equal(describeFailedStatus(refused("DAEMON_START_TIMEOUT"), "DAEMON_START_TIMEOUT"), null);
+  assert.equal(describeFailedStatus(refused("REALM_NOT_ACTIVE"), "DAEMON_START_TIMEOUT"), null);
+  assert.match(describeFailedStatus(refused("POLICY_DENIED"), "DAEMON_START_TIMEOUT"), /must be refused with DAEMON_START_TIMEOUT/);
+  assert.match(describeFailedStatus(refused("DAEMON_START_TIMEOUT", { isError: false }), "DAEMON_START_TIMEOUT"), /error result/);
+  assert.match(describeFailedStatus({ isError: true, structuredContent: STATUS_OUTCOME }, "DAEMON_START_TIMEOUT"), /must be refused/);
 });

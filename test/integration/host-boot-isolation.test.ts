@@ -37,11 +37,13 @@ import {
   FakeSignals,
   frame,
   framesOf,
+  listTools,
   toolOutcomeOf,
+  untilPresence,
   untilReplyOn,
   type Capture,
 } from "../support/stdio-host-harness.js";
-import { boundedWait } from "../support/timing.js";
+import { boundedWait, pollUntil } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -96,6 +98,8 @@ function project(name: string): string {
 // ---- One host process --------------------------------------------------------------------------------------------------------
 
 interface Host {
+  // The --host id of the process, or "unlabelled": the name of its presence marker directory.
+  readonly label: string;
   readonly result: Promise<CliResult>;
   readonly input: PassThrough;
   readonly output: Capture;
@@ -138,7 +142,8 @@ function bootHost(argv: readonly string[], options: HostOptions = {}): Host {
     diagnostics: diagnostics.stream,
     signals,
   });
-  return { result, input, output, diagnostics, signals, spawns };
+  const labelAt = argv.indexOf("--host");
+  return { label: labelAt < 0 ? "unlabelled" : (argv[labelAt + 1] ?? "unlabelled"), result, input, output, diagnostics, signals, spawns };
 }
 
 const mcpHost = (host: string, workspace: string, options?: HostOptions): Host => bootHost(["mcp", "--host", host, "--workspace", workspace], options);
@@ -165,8 +170,10 @@ function stateOf(outcome: Record<string, unknown>): unknown {
   return snapshot.state;
 }
 
-// One Realm status tool call through an MCP host: the daemon's state for its project, within the control bound.
+// One Realm status tool call through an MCP host: the daemon's state for its project, within the control bound. realm mcp answers
+// before its boot settles and refuses a call until a client is adopted, so the call waits for the host's presence marker.
 async function serveStatus(host: Host, id: number): Promise<unknown> {
+  await untilPresence(stateDir, host.label);
   host.input.write(callStatus(id));
   const reply = await boundedWait(untilReplyOn(host.output, id), `host status call ${String(id)}`, BOUND_MS);
   return stateOf(toolOutcomeOf(reply));
@@ -226,10 +233,11 @@ void test("S1-S3: a hung up, a failed boot and a stdin close leave another host,
   // S1: host A hangs in up; host B boots and serves meanwhile.
   const hostA = mcpHost("claude", projectOne, { connect: hangingUp() });
   const hostB = mcpHost("codex", projectTwo);
-  hostB.input.write(callStatus(1));
-  const first = await boundedWait(untilReplyOn(hostB.output, 1), "host B's first call while host A is pending", BOUND_MS);
-  assert.equal(stateOf(toolOutcomeOf(first)), "active", "host B is active within its bound while A is pending");
-  assert.equal(hostA.output.text(), "", "host A has written no frame: it is still in up");
+  assert.equal(await serveStatus(hostB, 1), "active", "host B is active within its bound while A is pending");
+  hostA.input.write(callStatus(1));
+  const pendingReply = await boundedWait(untilReplyOn(hostA.output, 1), "host A's refused call while it is in up", BOUND_MS);
+  assert.equal(toolOutcomeOf(pendingReply)["code"], "REALM_NOT_ACTIVE", "host A is still in up: its call is refused, not forwarded");
+  assert.equal(existsSync(markerPath("claude")), false, "host A has no marker: no client was adopted");
   hostA.signals.raise("SIGTERM");
   const endedA = await boundedWait(hostA.result, "host A ending on SIGTERM", 10_000);
   assert.equal(endedA.exitCode, 143);
@@ -242,11 +250,14 @@ void test("S1-S3: a hung up, a failed boot and a stdin close leave another host,
   // S2: host C points at a state directory no daemon answers on, with a spawn that starts nothing.
   const nobody = join(base, "state-nobody");
   const hostC = mcpHost("kimi", join(root, "one"), { stateDir: nobody, timeoutMs: 100 });
-  const endedC = await boundedWait(hostC.result, "host C's boot failure", 10_000);
+  hostC.input.write(listTools(1));
+  await boundedWait(untilReplyOn(hostC.output, 1), "host C's handshake-time reply", BOUND_MS);
+  await pollUntil(() => hostC.diagnostics.text() !== "", "host C's boot failure on stderr");
+  const endedC = await end(hostC);
   assert.equal(endedC.exitCode, 1);
   assert.equal(endedC.stdout, "");
-  assert.match(endedC.stderr, /^DAEMON_START_TIMEOUT: /);
-  assert.equal(hostC.output.text(), "", "a failed boot writes no frame");
+  assert.match(hostC.diagnostics.text(), /^DAEMON_START_TIMEOUT: /);
+  assert.equal(framesOf(hostC.output.text()).length, 1, "a failed boot writes the one reply it was asked for and nothing else");
   assert.equal(hostC.spawns.length, 1, "one spawn is attempted before the bounded wait");
   assert.equal(await serveStatus(hostB, 3), "active", "host B is unaffected by C's failure");
 

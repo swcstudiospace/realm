@@ -131,6 +131,8 @@ interface FakeDaemonRecord {
   connects: number;
   closes: number;
   readonly upRoots: string[];
+  // The status reads made after up began: the boot's readback.
+  readbacks: number;
 }
 
 interface FakeDaemon {
@@ -139,13 +141,16 @@ interface FakeDaemon {
 }
 
 function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
-  const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [] };
+  const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [], readbacks: 0 };
   let statusCalls = 0;
   let lastUp: DaemonStatus | undefined;
   const connect: ConnectDaemon = (_socketPath, selection) => {
     record.connects += 1;
     return {
       status: () => {
+        if (record.upRoots.length > 0) {
+          record.readbacks += 1;
+        }
         const answer = options.probes[Math.min(statusCalls, options.probes.length - 1)];
         statusCalls += 1;
         if (answer === "timeout") {
@@ -180,6 +185,15 @@ function captureDiagnostics(): { readonly stream: Writable; readonly text: () =>
     },
   });
   return { stream, text: () => chunks.join("") };
+}
+
+// realm mcp serves before its boot settles (Phase 33): a test that asserts what the boot did, or forwards a call, first waits for
+// the readback that follows up, and one more turn for the driver to adopt (or refuse) the client.
+async function untilBooted(daemon: FakeDaemon): Promise<void> {
+  await pollUntil(() => daemon.record.readbacks > 0, "the boot reading the session back after up");
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 // Waits for runCli to return after stdin closes, failing the test if the server never shuts down,
@@ -536,6 +550,7 @@ void test("realm mcp attaches to the daemon, claims the current directory, and s
     diagnostics: diagnostics.stream,
   });
   input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })}\n`);
+  await untilBooted(daemon);
   input.write(
     `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "status", arguments: {} } })}\n`,
   );
@@ -567,8 +582,7 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
   const daemon = fakeDaemon({ probes: [true] });
   const diagnostics = captureDiagnostics();
   const input = new PassThrough();
-  input.end();
-  const result = await runCli(["mcp", "--workspace", OTHER_WORKSPACE], {
+  const pending = runCli(["mcp", "--workspace", OTHER_WORKSPACE], {
     env: ENV,
     cwd: WORKSPACE,
     spawn: makeSpawn(spawns),
@@ -577,6 +591,9 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
     mcpOutput: new PassThrough(),
     diagnostics: diagnostics.stream,
   });
+  await untilBooted(daemon);
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 0);
   assert.equal(spawns.length, 0);
   assert.deepEqual(daemon.record.upRoots, [OTHER_WORKSPACE]);
@@ -611,6 +628,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
     mcpOutput: output,
     diagnostics: diagnostics.stream,
   });
+  await untilBooted(daemon);
   input.write(
     `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "status", arguments: {} } })}\n`,
   );
@@ -626,7 +644,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
   assert.ok(diagnostics.text().startsWith("SCHEMA_INVALID: "), diagnostics.text());
 });
 
-void test("realm mcp writes an ensure failure code to stderr and exits 1 without serving (CLI-01)", async () => {
+void test("realm mcp serves, writes an ensure failure code to stderr once and exits 1 at stdin end with nothing on stdout (CLI-01)", async () => {
   const spawns: SpawnCall[] = [];
   const daemon = fakeDaemon({ probes: [false] });
   const output = new PassThrough();
@@ -634,21 +652,27 @@ void test("realm mcp writes an ensure failure code to stderr and exits 1 without
   output.on("data", (chunk) => {
     stdout += String(chunk);
   });
-  const result = await runCli(["mcp"], {
+  const input = new PassThrough();
+  const diagnostics = captureDiagnostics();
+  const pending = runCli(["mcp"], {
     env: ENV,
     cwd: WORKSPACE,
     timeoutMs: 50,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
     connect: daemon.connect,
-    mcpInput: new PassThrough(),
+    mcpInput: input,
     mcpOutput: output,
-    diagnostics: captureDiagnostics().stream,
+    diagnostics: diagnostics.stream,
   });
+  await pollUntil(() => diagnostics.text() !== "", "the ensure failure written to diagnostics");
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.ok(result.stderr.startsWith("DAEMON_START_TIMEOUT: "), result.stderr);
-  assert.equal(stdout, "");
+  assert.equal(result.stderr, "", "the text was written when the boot settled");
+  assert.ok(diagnostics.text().startsWith("DAEMON_START_TIMEOUT: "), diagnostics.text());
+  assert.equal(stdout, "", "no frame was answered: none was sent");
   assert.equal(spawns.length, 1);
   assert.deepEqual(daemon.record.upRoots, []);
 });
@@ -802,21 +826,21 @@ void test("a failed realm acp up prints the code and the daemon log path on stde
 void test("a failed realm mcp up writes the code and the daemon log path to stderr and keeps serving (CLI-01)", async () => {
   const daemon = fakeDaemon({ probes: [true], up: () => Promise.reject(new RealmError("PODMAN_MISSING")) });
   const input = new PassThrough();
-  input.end();
   const diagnostics = captureDiagnostics();
-  const result = await untilShutdown(
-    runCli(["mcp", "--workspace", WORKSPACE], {
-      env: ENV,
-      cwd: WORKSPACE,
-      timeoutMs: 500,
-      daemonEntry: DAEMON_ENTRY,
-      spawn: makeSpawn([]),
-      connect: daemon.connect,
-      mcpInput: input,
-      mcpOutput: captureDiagnostics().stream,
-      diagnostics: diagnostics.stream,
-    }),
-  );
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: makeSpawn([]),
+    connect: daemon.connect,
+    mcpInput: input,
+    mcpOutput: captureDiagnostics().stream,
+    diagnostics: diagnostics.stream,
+  });
+  await untilBooted(daemon);
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 0);
   assert.ok(diagnostics.text().startsWith("PODMAN_MISSING: "), diagnostics.text());
   assert.ok(diagnostics.text().includes(`${RUNTIME_STATE_DIR}/daemon.log`), diagnostics.text());
@@ -1051,8 +1075,7 @@ void test("the default daemon spawn targets daemon/main.js beside the compiled C
     const spawns: SpawnCall[] = [];
     const daemon = fakeDaemon({ probes: [false, true] });
     const input = new PassThrough();
-    input.end();
-    const result = await runCli(argv, {
+    const pending = runCli(argv, {
       env: ENV,
       cwd: WORKSPACE,
       spawn: makeSpawn(spawns),
@@ -1064,6 +1087,11 @@ void test("the default daemon spawn targets daemon/main.js beside the compiled C
       mcpOutput: new PassThrough(),
       diagnostics: captureDiagnostics().stream,
     });
+    if (argv[0] === "mcp") {
+      await untilBooted(daemon);
+    }
+    input.end();
+    const result = await pending;
     assert.equal(result.exitCode, 0);
     assert.equal(spawns.length, 1);
     assert.deepEqual(spawns[0]?.args, [join(ROOT, "dist", "src", "daemon", "main.js")]);
@@ -1229,18 +1257,18 @@ void test("realm mcp writes the up notice to diagnostics once, and nothing when 
       up: () => Promise.resolve(notice === undefined ? STATUS : { ...STATUS, notice }),
     });
     const input = new PassThrough();
-    input.end();
     const diagnostics = captureDiagnostics();
-    const result = await untilShutdown(
-      runCli(["mcp", "--workspace", WORKSPACE], {
-        env: ENV,
-        spawn: makeSpawn([]),
-        connect: daemon.connect,
-        mcpInput: input,
-        mcpOutput: new PassThrough(),
-        diagnostics: diagnostics.stream,
-      }),
-    );
+    const pending = runCli(["mcp", "--workspace", WORKSPACE], {
+      env: ENV,
+      spawn: makeSpawn([]),
+      connect: daemon.connect,
+      mcpInput: input,
+      mcpOutput: new PassThrough(),
+      diagnostics: diagnostics.stream,
+    });
+    await untilBooted(daemon);
+    input.end();
+    const result = await untilShutdown(pending);
     assert.equal(result.exitCode, 0);
     assert.equal(diagnostics.text(), notice === undefined ? "" : `${STARTUP_NOTICE}\n`);
   }
@@ -1894,17 +1922,23 @@ void test("CLI-01: a non-RealmError thrown by the dial after attach is one catal
     }
     return daemon.connect(socketPath, selection);
   };
-  const result = await runCli(["mcp", "--workspace", WORKSPACE], {
+  const input = new PassThrough();
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
     cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     connect,
+    mcpInput: input,
+    mcpOutput: new PassThrough(),
     diagnostics: diagnostics.stream,
   });
+  await pollUntil(() => diagnostics.text() !== "", "the dial failure written to diagnostics");
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(dials, 2);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `SCHEMA_INVALID: ${ERROR_CATALOGUE.SCHEMA_INVALID.reason}\n`);
-  assert.equal(diagnostics.text(), "");
+  assert.equal(result.stderr, "", "the line was written when the boot settled");
+  assert.equal(diagnostics.text(), `SCHEMA_INVALID: ${ERROR_CATALOGUE.SCHEMA_INVALID.reason}\n`);
 });

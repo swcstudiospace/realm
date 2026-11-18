@@ -12,7 +12,7 @@ import type { StdioSignal } from "../../src/cli/stdio-host.js";
 import { ERROR_CATALOGUE, RealmError } from "../../src/core/errors.js";
 import type { ControlReply } from "../../src/daemon/channel.js";
 import { sessionIdOfWorkspace, type EnvironmentLike } from "../../src/session/paths.js";
-import { callStatus, frame, framesOf, listTools, toolOutcomeOf } from "../support/stdio-host-harness.js";
+import { callStatus, frame, framesOf, listTools, toolOutcomeOf, untilPresence } from "../support/stdio-host-harness.js";
 import {
   adopted,
   finish,
@@ -20,7 +20,9 @@ import {
   newWorld,
   reportsOf,
   startSession,
+  untilAttached,
   untilReply,
+  untilSettled,
   type Session,
   type StartOptions,
   type StdioRig,
@@ -99,6 +101,8 @@ void test("flag grammar: --workspace, --host and --reattach in any order, each o
     ["acp", "--host", "kimi"],
     ["mcp", "--host", "windsurf", "--workspace", WORKSPACE],
   ];
+  // The good half only asserts that the arguments are accepted (not the usage error): what a session does with its boot is
+  // pinned by the suites below, and a session whose stdin ends at once exits before its boot settles.
   for (const argv of good) {
     const session = start({ argv });
     session.input.end();
@@ -109,21 +113,26 @@ void test("flag grammar: --workspace, --host and --reattach in any order, each o
 
 // ---- (b) the sequence --------------------------------------------------------------------------------------------------------
 
-void test("MCP sequence: probe status, up, readback status, and only then the first stdin read; initialize is answered afterwards", async () => {
+void test("MCP sequence: probe status and up, the handshake is answered and stdin is read while the readback is held, then the call is forwarded", async () => {
   const world = newWorld();
   let release: () => void = () => undefined;
   world.gateAfterUp = new Promise<void>((resolve) => {
     release = resolve;
   });
   const session = start({ argv: ["mcp", "--workspace", WORKSPACE], world });
+  assert.equal(session.input.readableFlowing, true, "stdin is read from the start, before the boot has settled");
   session.input.write(frame(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } }));
+  await untilReply(session, 1);
   await pollUntil(() => world.log.filter((entry) => entry === "status").length >= 2, "the readback status is requested");
   assert.deepEqual(world.log, ["status", "up", "status"], "probe, up, readback");
-  assert.notEqual(session.input.readableFlowing, true, "stdin is not read before the boot settles");
-  assert.equal(session.output.text(), "", "no frame before the boot settles");
+  session.input.write(callStatus(2));
+  assert.equal(toolOutcomeOf(await untilReply(session, 2))["code"], "REALM_NOT_ACTIVE", "refused while the readback is held");
+  assert.deepEqual(world.tools, []);
   release();
-  await untilReply(session, 1);
-  assert.equal(session.input.readableFlowing, true, "stdin is read once the boot has settled");
+  await untilAttached(session);
+  session.input.write(callStatus(3));
+  await untilReply(session, 3);
+  assert.deepEqual(world.tools, [{ status: {} }], "forwarded once the client is adopted");
   const result = await finish(session);
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, "");
@@ -136,6 +145,7 @@ void test("--host claude: a marker with the six keys exists after settle and is 
   const labelled = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE] });
   labelled.input.write(listTools(1));
   await untilReply(labelled, 1);
+  await untilPresence(STATE_DIR, "claude");
   const marker = markerOf("claude");
   assert.deepEqual(Object.keys(marker).sort(), ["attach", "code", "pid", "schemaVersion", "sessionId", "startedAt"]);
   assert.equal(marker["pid"], process.pid);
@@ -150,6 +160,7 @@ void test("--host claude: a marker with the six keys exists after settle and is 
   const unlabelled = start({ argv: ["mcp", "--workspace", WORKSPACE] });
   unlabelled.input.write(listTools(1));
   await untilReply(unlabelled, 1);
+  await untilAttached(unlabelled);
   assert.equal(existsSync(join(STATE_DIR, "hosts")), false, "a session with no --host writes no marker");
   assert.equal((await finish(unlabelled)).exitCode, 0);
   assert.deepEqual(reportsOf(unlabelled.sent).map((report) => report.hostId), ["unlabelled", "unlabelled"]);
@@ -161,6 +172,7 @@ void test("CAPT-06: realm mcp and realm acp attach as their --host id, and an un
   const labelled = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE] });
   labelled.input.write(listTools(1));
   await untilReply(labelled, 1);
+  await untilAttached(labelled);
   assert.deepEqual(adopted(labelled.world).map((client) => client.options), [{ host: "claude" }]);
   assert.equal((await finish(labelled)).exitCode, 0);
 
@@ -174,6 +186,7 @@ void test("CAPT-06: realm mcp and realm acp attach as their --host id, and an un
   const unlabelled = start({ argv: ["mcp", "--workspace", WORKSPACE] });
   unlabelled.input.write(listTools(1));
   await untilReply(unlabelled, 1);
+  await untilAttached(unlabelled);
   assert.deepEqual(adopted(unlabelled.world).map((client) => client.options), [undefined], "no host is passed, not the unlabelled placeholder");
   assert.equal((await finish(unlabelled)).exitCode, 0);
 });
@@ -184,6 +197,7 @@ void test("reports: attached then closed, one boot id, parseable; a rejecting se
   const session = start({ argv: ["mcp", "--host", "codex", "--workspace", WORKSPACE] });
   session.input.write(listTools(1));
   await untilReply(session, 1);
+  await untilAttached(session);
   await finish(session);
   const reports = reportsOf(session.sent);
   assert.deepEqual(reports.map((report) => report.phase), ["attached", "closed"]);
@@ -196,6 +210,7 @@ void test("reports: attached then closed, one boot id, parseable; a rejecting se
   });
   failing.input.write(listTools(1));
   await untilReply(failing, 1);
+  await untilAttached(failing);
   const result = await finish(failing);
   assert.equal(result.exitCode, 0);
   assert.equal(failing.diagnostics.text(), "");
@@ -203,16 +218,24 @@ void test("reports: attached then closed, one boot id, parseable; a rejecting se
 
 // ---- (e) the exit and exposure table -----------------------------------------------------------------------------------------
 
-void test("MCP ensure failure exits 1 with the code and the daemon-log hint on stderr and nothing on stdout", async () => {
+void test("MCP ensure failure serves, refuses calls with the code, writes the code and the daemon-log hint to stderr once and exits 1 at stdin end", async () => {
   const world = newWorld();
   world.daemonUp = false;
   const session = start({ argv: ["mcp", "--workspace", WORKSPACE], world, timeoutMs: 50 });
-  const result = await boundedWait(session.result, "the ensure failure", 10_000);
+  session.input.write(listTools(1));
+  await untilReply(session, 1);
+  await untilSettled(session);
+  session.input.write(callStatus(2));
+  const refused = toolOutcomeOf(await untilReply(session, 2));
+  assert.equal(refused["outcome"], "refused");
+  assert.equal(refused["code"], "DAEMON_START_TIMEOUT");
+  const result = await finish(session);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^DAEMON_START_TIMEOUT: /);
-  assert.ok(result.stderr.includes(`${STATE_DIR}/daemon.log`), "the hint names the daemon log");
-  assert.equal(session.output.text(), "");
+  assert.equal(result.stderr, "", "the text was written to diagnostics when the boot settled");
+  assert.match(session.diagnostics.text(), /^DAEMON_START_TIMEOUT: /);
+  assert.ok(session.diagnostics.text().includes(`${STATE_DIR}/daemon.log`), "the hint names the daemon log");
+  assert.equal(framesOf(session.output.text()).length, 2, "stdout holds the two replies only");
   assert.equal(session.spawns.length, 1);
   assert.equal(world.log.includes("up"), false);
 });
@@ -221,6 +244,7 @@ void test("MCP refused up with a confirming status serves and forwards a call; t
   const world = newWorld();
   world.upResult = "PODMAN_MISSING";
   const session = start({ argv: ["mcp", "--workspace", WORKSPACE], world });
+  await untilAttached(session);
   session.input.write(callStatus(2));
   await untilReply(session, 2);
   assert.deepEqual(world.tools, [{ status: {} }], "the call reached the daemon fake");
@@ -233,6 +257,7 @@ void test("MCP refused up whose status names another session serves, refuses the
   world.upResult = "PODMAN_MISSING";
   world.readbackOther = true;
   const session = start({ argv: ["mcp", "--workspace", WORKSPACE], world });
+  await untilSettled(session);
   session.input.write(callStatus(2));
   const reply = await untilReply(session, 2);
   assert.equal(toolOutcomeOf(reply)["outcome"], "refused");
@@ -283,6 +308,7 @@ void test("--reattach: an MCP boot that fails DAEMON_START_TIMEOUT exposes the t
   const world = newWorld();
   world.daemonUp = false;
   const session = start({ argv: ["mcp", "--host", "claude", "--reattach", "--workspace", WORKSPACE], world, timeoutMs: 30 });
+  await untilSettled(session);
   session.input.write(callStatus(2));
   const refused = await untilReply(session, 2);
   assert.equal(toolOutcomeOf(refused)["outcome"], "refused");
@@ -330,6 +356,7 @@ void test("EOF and each signal end the session the same way: client closed once,
     const session = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE], world });
     session.input.write(listTools(1));
     await untilReply(session, 1);
+    await untilPresence(STATE_DIR, "claude");
     assert.equal(existsSync(join(MARKER_DIR("claude"), `${String(process.pid)}.json`)), true);
     if (row.signal === null) {
       session.input.end();
@@ -378,12 +405,14 @@ void test("default level: a successful session writes nothing to diagnostics; RE
   const quiet = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE] });
   quiet.input.write(listTools(1));
   await untilReply(quiet, 1);
+  await untilAttached(quiet);
   await finish(quiet);
   assert.equal(quiet.diagnostics.text(), "");
 
   const loud = start({ argv: ["mcp", "--host", "claude", "--workspace", WORKSPACE], env: { ...ENV, REALM_LOG_LEVEL: "debug" } });
   loud.input.write(listTools(1));
   await untilReply(loud, 1);
+  await untilAttached(loud);
   await finish(loud);
   const lines = loud.diagnostics
     .text()

@@ -49,6 +49,8 @@ export interface Rig {
   readonly daemon: StartedDaemon;
   readonly socketPath: string;
   readonly policy: Policy;
+  // The fake execution service the daemon runs on: a test holds a create, reads the calls the daemon made, or fails one.
+  readonly exec: FakeExecutionService;
   // Raw tool objects that reached a dispatcher, in order. A refused token never adds one.
   readonly dispatched: unknown[];
   // Argv of every runner call.
@@ -132,11 +134,12 @@ export async function startRig(t: TestContext, options: RigOptions = {}): Promis
     level: "debug",
     now: () => new Date(clock.ms),
   });
+  const exec = new FakeExecutionService();
   const daemonOptions: StartDaemonOptions = {
     runtimeInput: { image: IMAGE, stateDir, workspaceRoot: projects },
     policyPath,
     policy,
-    exec: new FakeExecutionService(),
+    exec,
     clock: () => new Date(clock.ms),
     runOpenShell: (argv) => {
       runs.push(argv);
@@ -224,6 +227,7 @@ export async function startRig(t: TestContext, options: RigOptions = {}): Promis
     daemon,
     socketPath: daemon.socketPath,
     policy,
+    exec,
     dispatched,
     runs,
     docPath: join(workspace, "doc.txt"),
