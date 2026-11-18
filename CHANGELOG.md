@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-11-18
+
+### Added
+- feat(capability): capability-attach frame, gate before dispatch, audit attribution, client and host wiring (32-02) (#150) (3fc89b9)
+
+### Documentation
+- docs(phase-31): wave 1 production rehearsal results, registry and matrix; codex exit-race fix (#149) (6ddaa84)
+
 ## [0.4.9] - 2026-11-18
 
 ### Fixed
