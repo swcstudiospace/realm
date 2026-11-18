@@ -52,7 +52,8 @@ export interface CapabilityGate {
   check(input: { readonly tool: unknown; readonly token: unknown; readonly sessionId: string }): CapabilityVerdict;
 }
 
-// The gate for the policy, or undefined when the mode is off: nothing is minted, checked or logged then.
+// The gate for the policy, or undefined when the mode is off: nothing is minted, checked or logged then. Under enforce
+// it creates the keyring now (see below).
 export function createCapabilityGate(options: CapabilityGateOptions): CapabilityGate | undefined {
   const { stateDir, policy, now, logger } = options;
   const settings = capabilityPolicyOf(policy);
@@ -126,6 +127,15 @@ export function createCapabilityGate(options: CapabilityGateOptions): Capability
     auditRefusal(sessionId, tool, principal);
     return { ok: false, tool };
   };
+
+  // Under enforce the keyring is created when the gate is built (the daemon start), once, so the first attach finds it
+  // and the doctor can read it. A failure never stops the daemon and never lets a token be minted: every attach and every
+  // verify is then refused (fail closed). The line carries the kid on success and nothing else on failure.
+  try {
+    logger.info("capability.keyring_ready", { kid: keyring(true).active });
+  } catch {
+    logger.error("capability.keyring_unavailable");
+  }
 
   return {
     attach: ({ sessionId, host }) => {

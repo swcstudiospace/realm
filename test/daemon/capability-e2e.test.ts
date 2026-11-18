@@ -132,8 +132,8 @@ void test("CAPT-06: after a revoke the same client's next call is POLICY_DENIED 
   assert.equal((await fresh.call(READ)).outcome, "done");
 });
 
-void test("CAPT-07: mode off with the default policy: no keyring, no capability line, and the lines of a client with a host equal the lines of a client with none", testTimeout(60_000), async (t) => {
-  const rig = await startRig(t);
+void test("CAPT-07: mode off by explicit opt-out: no keyring, no capability line, and the lines of a client with a host equal the lines of a client with none", testTimeout(60_000), async (t) => {
+  const rig = await startRig(t, { capabilityTokens: { mode: "off" } });
   await rig.up();
   const run = async (host: HostId | undefined): Promise<Record<string, unknown>[]> => {
     const before = rig.auditLines().length;

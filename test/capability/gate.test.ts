@@ -1,8 +1,8 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AuditEntryInput } from "../../src/audit/log.js";
 import { createCapabilityGate } from "../../src/capability/gate.js";
 import { keyringPathOf, readKeyring, rotateKeyring } from "../../src/capability/keyring.js";
@@ -33,11 +33,12 @@ interface Rig {
   readonly clock: { ms: number };
 }
 
-function rig(t: TestContext, capabilityTokens: unknown, failAudit = false): Rig {
+function rig(t: TestContext, capabilityTokens: unknown, failAudit = false, prepare?: (stateDir: string) => void): Rig {
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "realm-gate-")));
   t.after(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+  prepare?.(stateDir);
   const audit: AuditEntryInput[] = [];
   const raw: string[] = [];
   const clock = { ms: START_MS };
@@ -80,7 +81,6 @@ void test("CAPT-06: with the mode off no gate is built", (t) => {
     rmSync(stateDir, { recursive: true, force: true });
   });
   const options = { stateDir, now: () => START_MS, logger: createLogger({ sink: { write: () => true }, level: "debug", now: () => new Date() }) };
-  assert.equal(createCapabilityGate({ ...options, policy: policyOf(undefined) }), undefined);
   assert.equal(createCapabilityGate({ ...options, policy: policyOf({ mode: "off" }) }), undefined);
   assert.equal(existsSync(keyringPathOf(stateDir)), false);
 });
@@ -123,7 +123,7 @@ void test("CAPT-06: attach refuses a host outside HOST_IDS with POLICY_DENIED an
     deniedWith(() => r.gate.attach({ sessionId: SESSION, host }), "POLICY_DENIED");
   }
   assert.deepEqual(r.audit, []);
-  assert.equal(existsSync(keyringPathOf(r.stateDir)), false, "a refused host creates no keyring");
+  assert.equal(readKeyring(r.stateDir).present, true, "the keyring was created at construction, not by the refused host");
 });
 
 void test("CAPT-07: an attach whose audit line cannot be written is AUDIT_WRITE_FAILED and returns no token", (t) => {
@@ -190,12 +190,74 @@ void test("CAPT-06: check refuses a missing capability, another session and a mi
   assert.equal(JSON.stringify(r.logs()).includes(token), false);
 });
 
-void test("CAPT-06: with no keyring file check refuses every call and creates nothing", (t) => {
+void test("CAPT-06: with the keyring file removed after construction check refuses every call and creates nothing", (t) => {
   const r = rig(t, ENFORCE);
+  rmSync(keyringPathOf(r.stateDir));
   const verdict = r.gate.check({ tool: { status: {} }, token: "rcap1.a.b", sessionId: SESSION });
   assert.deepEqual(verdict, { ok: false, tool: "status" });
   assert.equal(existsSync(keyringPathOf(r.stateDir)), false, "the verify path never creates the keyring");
   assert.equal(r.logs().filter((entry) => entry["event"] === "capability.refused").at(-1)?.["refusal"], "keyring");
+});
+
+void test("D34-1: the gate creates the keyring when it is built, logs capability.keyring_ready with the kid only, and the files have the safe modes", (t) => {
+  const r = rig(t, undefined);
+  const path = keyringPathOf(r.stateDir);
+  assert.ok(existsSync(path), "the keyring exists before any attach");
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assert.equal(statSync(dirname(path)).mode & 0o777, 0o700);
+  const ready = r.logs().filter((line) => line["event"] === "capability.keyring_ready");
+  assert.equal(ready.length, 1);
+  assert.equal(ready[0]?.["kid"], "k1");
+  const raw = readFileSync(path, "utf8");
+  const parsed = JSON.parse(raw) as { keys: { key: string }[] };
+  const logged = JSON.stringify(r.logs());
+  for (const entry of parsed.keys) {
+    assert.equal(logged.includes(entry.key), false, "no log line carries key material");
+  }
+  assert.equal(r.logs().some((line) => line["event"] === "capability.keyring_unavailable"), false);
+});
+
+void test("D34-1: two gates built on one state directory leave one keyring with one active key", (t) => {
+  const first = rig(t, undefined);
+  const logger = createLogger({ sink: { write: () => true }, level: "debug", now: () => new Date(START_MS) });
+  const second = createCapabilityGate({ stateDir: first.stateDir, policy: policyOf(undefined), now: () => START_MS, logger });
+  assert.ok(second !== undefined);
+  const keyring = readKeyring(first.stateDir);
+  assert.ok(keyring.present);
+  assert.equal(keyring.snapshot.active, "k1");
+  const stored = JSON.parse(readFileSync(keyringPathOf(first.stateDir), "utf8")) as { keys: unknown[] };
+  assert.equal(stored.keys.length, 1);
+  const { token } = second.attach({ sessionId: SESSION, host: "claude" });
+  assert.equal(first.gate.check({ tool: { status: {} }, token, sessionId: SESSION }).ok, true, "both gates share one key");
+});
+
+void test("D34-1: a keyring that cannot be created is logged at error level with no detail, the gate is still returned, and every attach and check is refused", (t) => {
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "realm-gate-target-")));
+  t.after(() => {
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+  const r = rig(t, undefined, false, (stateDir) => {
+    mkdirSync(join(elsewhere, "real"), { mode: 0o700 });
+    symlinkSync(join(elsewhere, "real"), join(stateDir, "capability"));
+  });
+  const unavailable = r.logs().filter((line) => line["event"] === "capability.keyring_unavailable");
+  assert.equal(unavailable.length, 1);
+  assert.equal(unavailable[0]?.["level"], "error");
+  assert.deepEqual(Object.keys(unavailable[0] ?? {}).filter((key) => !["ts", "level", "event"].includes(key)), []);
+  assert.equal(r.logs().some((line) => line["event"] === "capability.keyring_ready"), false);
+  deniedWith(() => r.gate.attach({ sessionId: SESSION, host: "claude" }), "POLICY_DENIED");
+  assert.deepEqual(r.gate.check({ tool: { status: {} }, token: "rcap1.a.b", sessionId: SESSION }), { ok: false, tool: "status" });
+  assert.equal(r.audit.some((entry) => entry.tool === "capability.attach"), false, "no token was minted, so no attach line");
+});
+
+void test("D34-1: with the keyring removed after construction a check refuses and the next attach re-creates it and mints", (t) => {
+  const r = rig(t, undefined);
+  rmSync(keyringPathOf(r.stateDir));
+  assert.equal(r.gate.check({ tool: { status: {} }, token: "rcap1.a.b", sessionId: SESSION }).ok, false);
+  assert.equal(existsSync(keyringPathOf(r.stateDir)), false, "the verify path does not create the file");
+  const { token } = r.gate.attach({ sessionId: SESSION, host: "claude" });
+  assert.ok(existsSync(keyringPathOf(r.stateDir)));
+  assert.equal(r.gate.check({ tool: { status: {} }, token, sessionId: SESSION }).ok, true);
 });
 
 void test("CAPT-06: a rotation is noticed on the next request, and a revoke refuses the old token at once", (t) => {

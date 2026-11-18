@@ -360,8 +360,8 @@ void test("CAPT-07: 60 capability lines are the bound: the 61st refusal is still
   assert.equal((await rig.attachReply("claude")).error, undefined, "one second refills one line");
 });
 
-void test("CAPT-06: with the default policy (mode off) a tokenless call is admitted, the attach answers mode off, no keyring is created and no capability line is written", testTimeout(60_000), async (t) => {
-  const rig = await startRig(t);
+void test("CAPT-06: with the explicit opt-out (mode off) a tokenless call is admitted, the attach answers mode off, no keyring is created and no capability line is written", testTimeout(60_000), async (t) => {
+  const rig = await startRig(t, { capabilityTokens: { mode: "off" } });
   await rig.up();
   const attach = await rig.attachReply("claude");
   assert.deepEqual(attach.result, { mode: "off" });

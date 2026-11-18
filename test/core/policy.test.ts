@@ -45,8 +45,21 @@ void test("CORE-03: a missing policy file yields the default policy (fail-closed
       shellEnabled: false,
       startupBudgetMs: 200000,
       toolQueueMs: 2000,
-      capabilityTokens: { mode: "off", ttlSeconds: 3600, profiles: {} },
+      capabilityTokens: { mode: "enforce", ttlSeconds: 3600, profiles: {} },
     });
+  });
+});
+
+void test("D34-1: capabilityTokens loads as enforce for a missing file, an empty object, a bare capabilityTokens object and a partial one; an explicit off loads as off", () => {
+  withTempDir((dir) => {
+    const load = (document: unknown): unknown => loadPolicyFile(writeJson(join(dir, "policy.json"), document)).capabilityTokens;
+    const enforce = { mode: "enforce", ttlSeconds: 3600, profiles: {} };
+    assert.deepEqual(loadPolicyFile(join(dir, "absent.json")).capabilityTokens, enforce);
+    assert.deepEqual(load({}), enforce);
+    assert.deepEqual(load({ capabilityTokens: {} }), enforce);
+    assert.deepEqual(load({ capabilityTokens: { ttlSeconds: 120 } }), { ...enforce, ttlSeconds: 120 });
+    assert.deepEqual(load({ capabilityTokens: { profiles: { claude: ["fs.read"] } } }), { ...enforce, profiles: { claude: ["fs.read"] } });
+    assert.deepEqual(load({ capabilityTokens: { mode: "off" } }), { ...enforce, mode: "off" });
   });
 });
 
