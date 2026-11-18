@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { mintToken } from "../../src/capability/token.js";
 import {
   REDACTED,
   SECRET_VALUE_PATTERNS,
@@ -191,4 +193,87 @@ void test("spec n5 credential leakage: no host secret shape survives a nested to
 void test("a long name run with many credential words keeps its name and redacts only its own value (OBS-01)", () => {
   const name = "key".repeat(5000);
   assert.equal(redactString(`${name}=hunter2 plain=ok`), `${name}=${REDACTED} plain=ok`);
+});
+
+// CAPT-05: the token shape rcap1.PAYLOAD.MAC is redacted in every position, linearly.
+const TOKEN = mintToken(randomBytes(32), {
+  kid: "k1",
+  sid: "11111111-2222-4333-8444-555555555555",
+  host: "cursor",
+  caps: ["fs.read", "fs.list"],
+  iat: 1_700_000_000,
+  exp: 1_700_003_600,
+});
+// The same token with its MAC cut off, and cut short inside the payload (still at least 8 payload characters).
+const TOKEN_NO_MAC = TOKEN.slice(0, TOKEN.lastIndexOf("."));
+const TOKEN_CUT = TOKEN.slice(0, 24);
+
+for (const [name, text] of [
+  ["a full token", TOKEN],
+  ["a token with its MAC cut off", TOKEN_NO_MAC],
+  ["a token cut inside the payload", TOKEN_CUT],
+] as const) {
+  void test(`token shape: ${name} is replaced by redactString and redactValue in every position (CAPT-05)`, () => {
+    assert.equal(redactString(text), REDACTED);
+    assert.equal(redactString(`the host sent ${text} twice`), `the host sent ${REDACTED} twice`);
+    assert.equal(redactString(`Bearer ${text}`), REDACTED);
+    assert.equal(redactString(`Authorization: Bearer ${text}`), `Authorization: ${REDACTED}`);
+    assert.equal(redactString(`${text} and ${text}`), `${REDACTED} and ${REDACTED}`);
+    // Under a key whose name carries no credential word, so only the value layer can catch it.
+    assert.deepEqual(redactValue({ note: text }), { note: REDACTED });
+    assert.deepEqual(redactValue({ outer: { list: [text, "plain"] } }), { outer: { list: [REDACTED, "plain"] } });
+    // An exec argv element, as the audit line of an exec that names a token records it.
+    assert.deepEqual(redactValue({ argv: ["curl", "-H", `X-Cap: ${text}`, "url"] }), {
+      argv: ["curl", "-H", `X-Cap: ${REDACTED}`, "url"],
+    });
+    assert.equal(serialized({ argv: ["echo", text] }).includes(text.slice(6)), false);
+    // The key layer still catches a key named token.
+    assert.deepEqual(redactValue({ token: text }), { token: REDACTED });
+  });
+}
+
+void test("token shape: the pattern is the last of the table, so the existing order is unchanged (CAPT-05)", () => {
+  assert.equal(SECRET_VALUE_PATTERNS.length, 6);
+  const last = SECRET_VALUE_PATTERNS.at(-1);
+  assert.ok(last?.global === true && last.source.startsWith("rcap1"));
+  assert.match(SECRET_VALUE_PATTERNS[0]?.source ?? "", /Bearer/);
+});
+
+void test("token shape: the word rcap1 alone, a short tail and ordinary text are unchanged (CAPT-05)", () => {
+  for (const text of [
+    "rcap1",
+    "rcap1 is the token prefix",
+    "rcap1.",
+    "rcap1.abc",
+    "rcap1.abcdefg",
+    "rcap1.abcdefg and more words",
+    "rcap2.abcdefghijkl",
+    "RCAP1.abcdefghijkl",
+    "list the workspace root",
+  ]) {
+    assert.equal(redactString(text), text);
+    assert.deepEqual(redactValue({ note: text }), { note: text });
+  }
+});
+
+void test("token shape: the minimum, 8 payload characters, is replaced and a trailing dot is kept in the match (CAPT-05)", () => {
+  assert.equal(redactString("rcap1.abcdefgh"), REDACTED);
+  assert.equal(redactString("rcap1.abcdefgh."), REDACTED);
+  assert.equal(redactString("rcap1.abcdefgh.x y"), `${REDACTED} y`);
+});
+
+void test("token shape: redaction is linear in the length of the input (CAPT-05)", () => {
+  // Guards against quadratic behaviour, not a benchmark: the bound is generous.
+  const inputs = [
+    `rcap1.${"a".repeat(100_000)}`,
+    `rcap1.${"a".repeat(100_000)}.${"b".repeat(100_000)}`,
+    ".".repeat(100_000),
+    "rcap1.".repeat(20_000),
+    "rcap1.abcdefg".repeat(10_000),
+  ];
+  for (const input of inputs) {
+    const started = performance.now();
+    redactString(input);
+    assert.ok(performance.now() - started < 500, "redactString took 500 ms or more");
+  }
 });

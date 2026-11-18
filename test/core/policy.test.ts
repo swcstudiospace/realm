@@ -45,6 +45,7 @@ void test("CORE-03: a missing policy file yields the default policy (fail-closed
       shellEnabled: false,
       startupBudgetMs: 200000,
       toolQueueMs: 2000,
+      capabilityTokens: { mode: "off", ttlSeconds: 3600, profiles: {} },
     });
   });
 });

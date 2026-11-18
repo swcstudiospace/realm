@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import fc from "fast-check";
-import { SchemaInvalidError, type ExecParams, type Policy, type PolicyMode } from "../../src/contract/validate.js";
+import type { TokenCapability } from "../../src/capability/token.js";
+import { SchemaInvalidError, type CapabilityTokenMode, type ExecParams, type Policy, type PolicyMode } from "../../src/contract/validate.js";
 import { RealmError } from "../../src/core/errors.js";
 import { checkExecPolicy, decideMutation, loadPolicyFile } from "../../src/core/policy.js";
 import { STATES } from "../../src/core/states.js";
+import type { HostId } from "../../src/host/types.js";
 import { errnoOf } from "../../src/fs/canonicalize.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { assertProperty } from "../support/property.js";
@@ -21,6 +23,10 @@ interface SchemaProperty {
   readonly enum?: readonly string[];
   readonly minimum?: number;
   readonly maximum?: number;
+  // Nested object schemas (capabilityTokens and its profiles).
+  readonly properties?: Readonly<Record<string, SchemaProperty>>;
+  readonly propertyNames?: { readonly enum?: readonly string[] };
+  readonly additionalProperties?: { readonly items?: { readonly enum?: readonly string[] } };
 }
 interface PolicySchema {
   readonly properties: Readonly<Record<string, SchemaProperty>>;
@@ -37,10 +43,22 @@ const POLICY_KEYS = [
   "shellEnabled",
   "startupBudgetMs",
   "toolQueueMs",
+  "capabilityTokens",
 ] as const satisfies readonly (keyof Policy)[];
 const MODES = schema.properties["mode"]?.enum as readonly PolicyMode[];
 const PORT = schema.$defs.egressRule.properties["port"] ?? {};
-const DEFAULTS = Object.fromEntries(Object.entries(schema.properties).map(([key, property]) => [key, property.default]));
+// A property's default as the loader fills it: an object schema with properties fills each member's own default.
+function defaultOf(property: SchemaProperty): unknown {
+  if (property.properties === undefined) {
+    return property.default;
+  }
+  return Object.fromEntries(Object.entries(property.properties).map(([key, member]) => [key, defaultOf(member)]));
+}
+const DEFAULTS = Object.fromEntries(Object.entries(schema.properties).map(([key, property]) => [key, defaultOf(property)]));
+const TOKEN_SCHEMA = schema.properties["capabilityTokens"]?.properties ?? {};
+const TOKEN_MODES = TOKEN_SCHEMA["mode"]?.enum as readonly CapabilityTokenMode[];
+const TOKEN_HOSTS = TOKEN_SCHEMA["profiles"]?.propertyNames?.enum as readonly HostId[];
+const TOKEN_CAPS = TOKEN_SCHEMA["profiles"]?.additionalProperties?.items?.enum as readonly TokenCapability[];
 const MAX_BUDGET = 2 ** 31 - 1;
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "realm-policy-prop-")));
@@ -90,6 +108,17 @@ const policyArb: fc.Arbitrary<Policy> = fc.record(
       max: schema.properties["startupBudgetMs"]?.maximum ?? MAX_BUDGET,
     }),
     toolQueueMs: fc.integer({ min: schema.properties["toolQueueMs"]?.minimum ?? 1, max: MAX_BUDGET }),
+    capabilityTokens: fc.record(
+      {
+        mode: fc.constantFrom(...TOKEN_MODES),
+        ttlSeconds: fc.integer({ min: TOKEN_SCHEMA["ttlSeconds"]?.minimum ?? 60, max: TOKEN_SCHEMA["ttlSeconds"]?.maximum ?? 86400 }),
+        profiles: fc.dictionary(fc.constantFrom(...TOKEN_HOSTS), fc.uniqueArray(fc.constantFrom(...TOKEN_CAPS), { maxLength: TOKEN_CAPS.length }), {
+          maxKeys: 4,
+          noNullPrototype: true,
+        }),
+      },
+      PLAIN,
+    ),
   },
   PLAIN,
 );
@@ -197,6 +226,27 @@ void test("QR-07: a value of the wrong type or outside its range is rejected at 
     fc.constantFrom("true", 0, 1, null, [], {}).map((value) => ["shellEnabled", value] as const),
     notAnInteger.map((value) => ["startupBudgetMs", value] as const),
     notAnInteger.map((value) => ["toolQueueMs", value] as const),
+    fc
+      .constantFrom(
+        "on",
+        0,
+        null,
+        true,
+        [],
+        { mode: "on" },
+        { mode: null },
+        { ttlSeconds: 59 },
+        { ttlSeconds: 86401 },
+        { ttlSeconds: 1.5 },
+        { ttlSeconds: "3600" },
+        { extra: 1 },
+        { profiles: [] },
+        { profiles: { nobody: [] } },
+        { profiles: { cursor: "fs.read" } },
+        { profiles: { cursor: ["net.egress"] } },
+        { profiles: { cursor: ["fs.read", "fs.read"] } },
+      )
+      .map((value) => ["capabilityTokens", value] as const),
   );
   assertProperty(
     fc.property(policyArb, bad, (policy, [key, value]) => {

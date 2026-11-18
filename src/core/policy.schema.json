@@ -39,6 +39,27 @@
       "type": "integer",
       "minimum": 1,
       "default": 2000
+    },
+    "capabilityTokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "enforce"], "default": "off" },
+        "ttlSeconds": { "type": "integer", "minimum": 60, "maximum": 86400, "default": 3600 },
+        "profiles": {
+          "type": "object",
+          "propertyNames": {
+            "enum": ["omp", "claude", "opencode", "kilo", "codex", "copilot", "antigravity", "cursor", "windsurf", "augment", "trae", "qwen", "hermes", "codebuddy", "cline", "kimi", "kimi-code", "zcode", "pi"]
+          },
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "enum": ["daemon.attach", "fs.read", "fs.write", "fs.list", "exec.argv", "exec.shell"] }
+          },
+          "default": {}
+        }
+      },
+      "default": {}
     }
   },
   "$defs": {

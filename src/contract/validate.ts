@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 // export, which NodeNext types correctly and Node's CJS lexer detects. The default
 // import is typed as the module namespace under NodeNext, so it is not used.
 import { Ajv2020, type ErrorObject, type SchemaObject, type ValidateFunction } from "ajv/dist/2020.js";
+import type { TokenCapability } from "../capability/token.js";
 import { RealmError } from "../core/errors.js";
+import type { HostId } from "../host/types.js";
 import { STATES, type State } from "../core/states.js";
 
 // ---- Typed values -----------------------------------------------------------
@@ -27,6 +29,17 @@ export interface EgressRule {
   readonly port: number;
 }
 
+// Whether the daemon mints and checks capability tokens: off changes nothing, enforce turns the feature on.
+export type CapabilityTokenMode = "off" | "enforce";
+
+// The capabilityTokens policy key (CAPT-04): whether the daemon mints and checks capability tokens, how long one
+// lives, and which capabilities each host's token carries. A host with no entry in profiles gets all six.
+export interface CapabilityTokenPolicy {
+  readonly mode: CapabilityTokenMode;
+  readonly ttlSeconds: number;
+  readonly profiles: Readonly<Partial<Record<HostId, readonly TokenCapability[]>>>;
+}
+
 // Output of validating the policy schema: defaults are already applied.
 export interface Policy {
   readonly mode: PolicyMode;
@@ -36,6 +49,9 @@ export interface Policy {
   readonly shellEnabled: boolean;
   readonly startupBudgetMs: number;
   readonly toolQueueMs: number;
+  // Always present on a validated policy (the schema fills the default). Optional in the type only so hand-built
+  // Policy literals keep compiling. Read it through capabilityPolicyOf (src/capability/admit.ts), which applies the default.
+  readonly capabilityTokens?: CapabilityTokenPolicy;
 }
 
 // The arguments of an exec call: an argv, or a shell script.
