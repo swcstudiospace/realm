@@ -1,6 +1,6 @@
 {
   "name": "agent-realm",
-  "version": "0.5.9",
+  "version": "0.6.0",
   "private": true,
   "license": "AGPL-3.0-only",
   "author": "Spectrum Web Co/swcstudiospace",
@@ -63,6 +63,7 @@
     "check:image-digests": "node scripts/check/verify-image-digests.mjs",
     "build:image": "node scripts/image/build-image.mjs",
     "check:gates": "node scripts/check/gate-closure.mjs && node scripts/check/module-size.mjs && node scripts/check/export-usage-gate.mjs && node scripts/check/lockfile-integrity.mjs",
+    "check:breaking": "node scripts/check/breaking-change-guard.mjs",
     "release:next": "node scripts/release/next-version.mjs",
     "release:sync": "node scripts/release/sync-version.mjs",
     "release:changelog": "node scripts/release/changelog.mjs"

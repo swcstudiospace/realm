@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-18
+
+### Added
+- feat(milestone)!: start v6.0, responsiveness, exec kill proof, host ids and evidence debt (release line 0.6.x) (2e59bab)
+
 ## [0.5.9] - 2026-11-18
 
 ### Documentation
