@@ -1,5 +1,6 @@
 // realm host (HOST-07): list, detect, status, install and uninstall for the 19 hosts of the plugin contract
-// (src/host). The commands never need a running daemon and never spawn a process. Arguments are parsed before
+// (src/host), and token status and token rotate for the capability keyring (CAPT-08, D-32-12). The commands never need a
+// running daemon and never spawn a process. Arguments are parsed before
 // any file is read, so a usage error changes nothing. Exit codes follow the other subcommands: 0 success (one
 // JSON line on stdout), 1 a catalogue refusal (the code on stdout, a fixed reason on stderr), 2 a usage error.
 //
@@ -9,8 +10,13 @@
 // actions and byte counts. The environment arrives as a parameter (hostEnvFrom); this module never reads the
 // process environment.
 
+import { lstatSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { capabilityPolicyOf } from "../capability/admit.js";
+import { keyringPathOf, readKeyring, rotateKeyring } from "../capability/keyring.js";
+import type { Policy } from "../contract/validate.js";
 import { ERROR_CATALOGUE, RealmError, type ErrorCode } from "../core/errors.js";
+import { loadPolicyFile } from "../core/policy.js";
 import { packageVersion } from "../core/package-version.js";
 import { readPresence } from "../host/presence.js";
 import { createHostAdapter, type HostAdapterDeps, type RecipeHostAdapter } from "../host/adapter.js";
@@ -23,12 +29,12 @@ import { createFileSink } from "../observe/log-file.js";
 import { createLogger, nullLogger, parseLogLevel, type Logger } from "../observe/logger.js";
 import { loadRuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
-import { resolveConfigPath } from "../runtime/host-paths.js";
+import { defaultPolicyPath, resolveConfigPath } from "../runtime/host-paths.js";
 import type { EnvironmentLike } from "../session/paths.js";
 import type { CliResult } from "./main.js";
 
 const HOST_USAGE =
-  "realm host: usage: realm host list | detect [<host>] | status [<host>] | install <host> [--dry-run] [--config-home <absolute path>] | uninstall <host> [--dry-run] [--config-home <absolute path>]";
+  "realm host: usage: realm host list | detect [<host>] | status [<host>] | install <host> [--dry-run] [--config-home <absolute path>] | uninstall <host> [--dry-run] [--config-home <absolute path>] | token status | token rotate [--revoke-previous]";
 
 // A user-supplied host name is echoed only when it is short and made of these characters.
 const ECHOABLE_NAME = /^[A-Za-z0-9._-]{1,32}$/;
@@ -46,9 +52,11 @@ export interface HostCliDeps {
   readonly hostRuntimes?: Readonly<Record<HostId, HostRuntimeEntry>>;
   // Test seam, no production caller: the shipped adapters/ directory (default: the package's own).
   readonly hostAdaptersDir?: string;
+  // Loads the policy file for realm host token status, which reads only its capabilityTokens mode (default loadPolicyFile).
+  readonly readPolicy?: (path: string) => Policy;
 }
 
-type HostSubcommand = "list" | "detect" | "status" | "install" | "uninstall";
+type HostSubcommand = "list" | "detect" | "status" | "install" | "uninstall" | "token status" | "token rotate";
 
 interface MutateArgs {
   readonly kind: "mutate";
@@ -63,12 +71,19 @@ interface StatusArgs {
   readonly host: HostId | undefined;
 }
 
+interface TokenArgs {
+  readonly kind: "token";
+  readonly op: "status" | "rotate";
+  readonly revokePrevious: boolean;
+}
+
 type HostArgs =
   | { readonly kind: "list" }
   | { readonly kind: "usage"; readonly unknownHost: string | undefined }
   | { readonly kind: "detect"; readonly host: HostId | undefined }
   | StatusArgs
-  | MutateArgs;
+  | MutateArgs
+  | TokenArgs;
 
 const USAGE_ERROR: HostArgs = { kind: "usage", unknownHost: undefined };
 
@@ -122,6 +137,22 @@ function mutatingArgs(op: MutateArgs["op"], rest: readonly string[]): HostArgs {
   return host === undefined ? { kind: "usage", unknownHost: name } : { kind: "mutate", op, host, dryRun, configHome };
 }
 
+// token status takes no argument; token rotate takes the optional --revoke-previous flag at most once.
+function tokenArgs(rest: readonly string[]): HostArgs {
+  const [op, ...flags] = rest;
+  if (op === "status") {
+    return flags.length === 0 ? { kind: "token", op, revokePrevious: false } : USAGE_ERROR;
+  }
+  if (op === "rotate") {
+    const [flag, ...extra] = flags;
+    if (extra.length > 0 || (flag !== undefined && flag !== "--revoke-previous")) {
+      return USAGE_ERROR;
+    }
+    return { kind: "token", op, revokePrevious: flag !== undefined };
+  }
+  return USAGE_ERROR;
+}
+
 // Exactly the accepted forms; anything else is a usage error.
 function parseHostArgs(words: readonly string[]): HostArgs {
   const [sub, ...rest] = words;
@@ -134,6 +165,8 @@ function parseHostArgs(words: readonly string[]): HostArgs {
     case "install":
     case "uninstall":
       return mutatingArgs(sub, rest);
+    case "token":
+      return tokenArgs(rest);
     default:
       return USAGE_ERROR;
   }
@@ -287,6 +320,57 @@ async function runMutation(args: MutateArgs, ports: Ports): Promise<CliResult> {
   });
 }
 
+// The mode the policy sets for capability tokens, or unknown when the policy cannot be loaded: the policy-file doctor item
+// reports that failure, so status never makes it an exit-1 reason.
+function policyModeOf(stateDir: string, deps: HostCliDeps): "off" | "enforce" | "unknown" {
+  try {
+    return capabilityPolicyOf((deps.readPolicy ?? loadPolicyFile)(defaultPolicyPath(stateDir))).mode;
+  } catch {
+    return "unknown";
+  }
+}
+
+// One JSON line of kids, ages in seconds, counts and mode names. Never a key, a token, a policy value or a path.
+function tokenStatus(stateDir: string, deps: HostCliDeps, nowSeconds: () => number): CliResult {
+  const mode = policyModeOf(stateDir, deps);
+  const read = readKeyring(stateDir, { now: nowSeconds });
+  if (!read.present) {
+    return success({ ok: true, mode, keyring: "absent" });
+  }
+  const { active, retired } = read.snapshot;
+  const now = nowSeconds();
+  return success({
+    ok: true,
+    mode,
+    keyring: "present",
+    active,
+    retired: retired.map((key) => ({ kid: key.kid, ageSeconds: Math.max(0, now - key.retiredAt) })),
+    fileMode: (lstatSync(keyringPathOf(stateDir)).mode & 0o777).toString(8),
+  });
+}
+
+// Rotation never needs the daemon: a running daemon notices the changed key file on its next request (D-32-04).
+function runToken(args: TokenArgs, deps: HostCliDeps): CliResult {
+  const sub: HostSubcommand = args.op === "status" ? "token status" : "token rotate";
+  let stateDir: string;
+  try {
+    stateDir = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env))).stateDir;
+  } catch (error: unknown) {
+    return noStateDirResult(sub, error);
+  }
+  const now = deps.now ?? ((): Date => new Date());
+  const nowSeconds = (): number => Math.floor(now().getTime() / 1000);
+  try {
+    if (args.op === "status") {
+      return tokenStatus(stateDir, deps, nowSeconds);
+    }
+    const result = rotateKeyring(stateDir, { revokePrevious: args.revokePrevious }, { now: nowSeconds });
+    return success({ ok: true, active: result.active, retired: result.retired, revoked: result.revoked });
+  } catch (error: unknown) {
+    return refusalResult(sub, error);
+  }
+}
+
 async function runWithStateDir(
   args: MutateArgs | StatusArgs,
   deps: HostCliDeps,
@@ -322,6 +406,9 @@ export async function runHostCommand(words: readonly string[], deps: HostCliDeps
     return usageResult(args.unknownHost);
   }
   const runtimes = deps.hostRuntimes ?? HOST_RUNTIMES;
+  if (args.kind === "token") {
+    return runToken(args, deps);
+  }
   if (args.kind === "list") {
     return success(listRows(runtimes));
   }

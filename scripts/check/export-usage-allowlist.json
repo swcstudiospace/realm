@@ -108,24 +108,14 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
-      "file": "src/capability/keyring.ts",
-      "name": "keyringPathOf",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
-      "file": "src/capability/keyring.ts",
-      "name": "rotateKeyring",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
-    },
-    {
       "file": "src/capability/token.ts",
       "name": "MintClaims",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+      "reason": "Phase 32 test-only seam: the claims type of mintToken, referenced only by the capability tests and the wire harness"
     },
     {
       "file": "src/capability/token.ts",
       "name": "TOKEN_PREFIX",
-      "reason": "Phase 32 plan 32-01 seam: referenced only by tests until plan 32-02 wires it into the daemon gate; plan 32-02 removes this entry"
+      "reason": "Phase 32 test-only seam: the token prefix, referenced only by the capability tests and the wire harness forger"
     },
     {
       "file": "src/cli/anchor.ts",

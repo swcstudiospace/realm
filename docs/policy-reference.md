@@ -327,16 +327,23 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   - Token minting and verification (`mintToken` and `verifyToken`,
     `src/capability/token.ts`), key storage and rotation (`src/capability/keyring.ts`),
     and the mapping and profile functions (`src/capability/admit.ts`).
-  - The daemon and client wiring that turns `enforce` into refusals lands with
-    the daemon change in the same phase (Phase 32). Until that change is
-    released, setting `mode` to `enforce` has no effect.
-- **What it does not do:** it is not an authentication of the host: the
-  daemon cannot tell the real host from a process that says it is that host, so
-  the token is a signed label that is verified on every call. It is no defence
-  against a process of the same user that can read the key file or obtain a
-  token. It does not identify a model or a prompt, and it does not protect the
-  sandbox, which never receives a token. It adds no error code: every token
-  refusal is `POLICY_DENIED`.
+  - The daemon capability gate (`src/capability/gate.ts`, called from the
+    daemon's `tool` and `capability-attach` cases) and the client
+    (`src/daemon/client.ts`). With `enforce`, the daemon mints a per-session,
+    per-host token at `capability-attach`, the host process keeps it in memory,
+    and the daemon verifies it on every `tool` request before the dispatcher
+    runs. A missing, expired, malformed, forged or mismatched token, or one
+    that lacks the capability the call needs, is refused `POLICY_DENIED` and
+    never reaches the dispatcher.
+- **What it does not do:** it gives no defence against a process of the same
+  user that can read the token or the key file: any such process can reach the
+  control socket, attach as any host, or mint a token from the key. It is not
+  an authentication of the host: the daemon cannot tell the real host from a
+  process that says it is that host, so the token is a signed label that is
+  verified on every call. It does not identify a model or a prompt, and it
+  does not protect the sandbox, which never receives a token. It adds no
+  error code: every token refusal is `POLICY_DENIED`. See Q10 of
+  `docs/integration/mcp.md`.
 
 ## What is not a policy key
 

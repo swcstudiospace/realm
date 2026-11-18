@@ -266,3 +266,25 @@ New threat-model rows the phase adds to the design note: token and key custody i
 Open questions: where the host-to-profile mapping lives (a default per host id in code, or in policy); whether the token lifetime follows the session or is capped at 86400 seconds as in the prototype; whether `status` should require a token at all.
 
 The throwaway prototype `scripts/spike/capability-token/` stays in place until the production module lands and is removed in plan 32-03; it is not packaged and is imported by nothing.
+
+## 9. Outcome after the owner override
+
+Written by Phase 32, plan 32-03. Sections 1 to 8 above are unchanged and are not edited here; where they say the prototype stays in place until the production module lands, that is what this section closes.
+
+**The override.** On 2026-11-17 the owner overrode the criteria outcome and directed a BUILD (section 8, D30-1). The frozen rule's outcome stands as measured: DROP, because M1 was not demonstrated and M2 was not met (section 7). Nothing in Phase 32 re-scores either criterion. The owner's stated reason is the value that does not depend on M1: per-host least privilege and verified audit attribution.
+
+**What Phase 32 built (three plans, no new dependency, no new error code).**
+
+| Plan | What it built |
+| --- | --- |
+| 32-01 | The pure core in `src/capability`: the `rcap1` token (mint and verify in a fixed order with deterministic internal refusal classes), the keyring at rest with rotation by key id and an emergency revoke, the tool-to-capability mapping and the per-host profile function, the `capabilityTokens` policy key (mode `off` or `enforce`, `ttlSeconds`, per-host `profiles`) and the redaction pattern for the token shape |
+| 32-02 | The wiring: the `capability-attach` control request and the optional `token` member of a `tool` request, the capability gate that runs before the dispatcher, `host` and `kid` on the audit lines with a bound on attach and refusal lines, the client that keeps the token in memory, and the stdio and Omp hosts that attach. The seeded refusal matrix runs over a real socket |
+| 32-03 | The operator surface and the record: `realm host token status` and `rotate [--revoke-previous]`, the `capability-tokens` doctor item, a guard that the 18 default manifests and 15 install recipes stay bare, `docs/integration/mcp.md` Q10, `docs/integration/host-plugin-contract.md`, D32-1 in `docs/integration/runtime-decision.md`, this section, and the removal of the prototype |
+
+**Delivery channel.** D3, as proposed in section 8: the daemon mints at attach and the host process keeps the token in memory. The default is `off`, so nothing changes until an operator sets `enforce`.
+
+**What was re-measured and what was not.** Re-measured in the production code: the refusal matrix (the E1 rows, with the host-binding rows replaced, and the E2 profile pairs, over a real socket with no dispatcher admission for any refused call) and the no-leak scan (the token and the key text appear in no log, audit file, metrics snapshot, doctor or CLI output, environment variable, argument vector or file). Not re-measured: the token sizes and the mint and verify costs (E6), and the same-user reads of a token file and of the process environment (E3 and E4); those readings of section 5 stand as recorded. The claim that a non-descendant process cannot read the token from process memory under Yama `ptrace_scope` 1 or higher is expected and not proven; the probe needs a non-root user and was not run as part of the build. [INFERENCE]
+
+**The prototype.** The directory `scripts/spike/capability-token/` (`token.mjs`, `gate.mjs`, `run.mjs`) is removed by plan 32-03, now that the production module has landed, as section 8 said it would be. Its results are recorded inline in sections 5 to 7 above, so this note needs nothing from it; the mentions of the path in sections 1 to 8 are history.
+
+**Where to read the decision and the user-facing limits.** D32-1 in `docs/integration/runtime-decision.md`, and the Q10 section of `docs/integration/mcp.md`, whose first paragraph states that a process of the same user that can read the token or the key file is not stopped.

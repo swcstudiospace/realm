@@ -35,6 +35,7 @@ const EXPECTED_IDS: readonly CheckId[] = [
   "kernel-hardening",
   "runtime-roots",
   "host-plugins",
+  "capability-tokens",
 ];
 
 interface Layout {
