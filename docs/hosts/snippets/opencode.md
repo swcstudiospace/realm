@@ -105,10 +105,10 @@ hide these names. A read-only or hidden overlay is an open owner decision (OQ-24
 | Tier | Claim | Result |
 | --- | --- | --- |
 | T1 offline fixture | the recipe on a fixture host in a temporary home: detect, dry-run, install, no-op reinstall, drift, foreign content, JSONC refusal, a sibling `opencode.jsonc` untouched, hostile content, uninstall, doctor, `realm host status`, `XDG_CONFIG_HOME` | covered by the offline tests (`test/host/opencode-recipe.test.ts`) |
-| T2 host validator | `opencode mcp list` parses the entry and launches the registered argv (a stub `realm` on `PATH` records it), in an isolated `HOME` and `XDG_CONFIG_HOME` | gated (`REALM_LIVE_OPENCODE=1`); **not run**: no `opencode` executable on the verification machine. The 1.19.5 observation above was a manual scratch-directory run of a fetched binary, not the gated test and not through `realm host install` |
-| T3 live end to end | the real `realm` on `PATH`, `opencode mcp list` shows the server connected, the daemon is opened for a workspace | gated (`REALM_LIVE_PRODUCTION=1` plus `REALM_LIVE_OPENCODE=1`); **not run**: no executable, and Podman 4.9.3 is below the required 5.x |
+| T2 host validator | `opencode mcp list` parses the entry and launches the registered argv (a stub `realm` on `PATH` records it), in an isolated `HOME` and `XDG_CONFIG_HOME` | gated (`REALM_LIVE_OPENCODE=1`); **ran live on 2026-11-18 with opencode 1.19.5**, 3 of 3 passed, from an owner-approved scratch install outside the repository. The earlier 1.19.5 observation above was a manual scratch-directory run, not the gated test |
+| T3 live end to end | the real `realm` on `PATH`, `opencode mcp list` shows the server connected, the daemon is opened for a workspace | gated (`REALM_LIVE_PRODUCTION=1` plus `REALM_LIVE_OPENCODE=1`); **ran live on 2026-11-18 with opencode 1.19.5** on the production stack (rootless Podman 5.7.1 account, warm session): `opencode mcp list` reported realm connected and the stack was clean before and after. The wire was recorded and the tool listing is not asserted for OpenCode. A cold first attach exceeds OpenCode's 30 s connect timeout (GAP-31-04); evidence is kept outside the repository |
 
-Not shown by any tier: a live Realm session through OpenCode; that a real model turn calls the Realm tools; that a V2
+Not shown by any tier: a Realm tool call through OpenCode; that a real model turn calls the Realm tools; that a V2
 build lists the V1 entry; that OpenCode's start timeout outlasts a cold first boot of up to 230 s (OQ-24-06).
 
 ## Known limits

@@ -209,7 +209,7 @@ function wireText(summary: WireSummary): string {
 
 // One validator-tier session: the real recipe installs into the rig's isolated CODEX_HOME, then `codex exec` runs against a refusing
 // loopback provider. The registered `realm` is the wire recorder, in front of a fake MCP server, so the test sees what Codex sent and
-// what the server was started with. Codex never exits by itself: the run ends as soon as the tools/list response is logged.
+// what the server was started with. The run ends as soon as the tools/list response is logged (Codex may also exit on its own within seconds).
 async function driveCodexSession(t: TestContext, forwardEnv: boolean): Promise<CodexSessionFacts> {
   const rig = rigFor(t);
   const wireDir = rig.path("wire");
