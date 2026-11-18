@@ -1097,10 +1097,20 @@ export interface McpSession {
   stderr(): string;
 }
 
-// Starts `realm mcp --workspace <pinned root>` on the current node binary with the scenario's explicit environment and stdio
-// pipes. Nothing is written until the first request.
+// The host label of every `realm mcp` session the live suites start. Capability tokens are enforced by default, and a session with no
+// host id carries no token, so the daemon refuses its calls POLICY_DENIED. The label is unauthenticated: it only selects the token
+// profile. These suites test the daemon, not a host, so they use one fixed label.
+export const LIVE_MCP_HOST = "claude";
+
+// The argv of `realm mcp` for a live session: the compiled CLI, the host label and the pinned workspace root.
+export function mcpArgvOf(inputs: LiveInputs): readonly string[] {
+  return [inputs.cliPath, "mcp", "--host", LIVE_MCP_HOST, "--workspace", inputs.workspaceRoot];
+}
+
+// Starts `realm mcp --host <LIVE_MCP_HOST> --workspace <pinned root>` on the current node binary with the scenario's explicit
+// environment and stdio pipes. Nothing is written until the first request.
 export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment): McpSession {
-  const child = spawn(process.execPath, [inputs.cliPath, "mcp", "--workspace", inputs.workspaceRoot], {
+  const child = spawn(process.execPath, mcpArgvOf(inputs), {
     env: { ...scenario.cliEnvironment },
     cwd: scenario.root,
     stdio: ["pipe", "pipe", "pipe"],
