@@ -29,6 +29,7 @@ covered_files:
   - "docs/hosts/snippets/codex.md"
   - "docs/hosts/snippets/opencode.md"
   - "docs/hosts/snippets/kimi.md"
+covered_digest: "v3:sha256:78773e8e355a5b2c80c1d412c95f08c049a4e1beb482e641c9900814b13a3382"
 ---
 
 # Phase 31 Verification: production-stack boot rehearsals for wave 1 hosts
