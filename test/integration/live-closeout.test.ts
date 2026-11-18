@@ -69,6 +69,7 @@ import {
   stateOfStatus,
   toolErrorOf,
   waitForActive,
+  waitUntilServed,
   type CommandResult,
   type LiveInputs,
   type ScenarioEnvironment,
@@ -390,6 +391,7 @@ void test(
       session.kill();
     });
     await initializeMcp(session);
+    await waitUntilServed(session);
     const active = await waitForActive(inputs, run.scenario, ACTIVE_TIMEOUT_MS);
     assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
 

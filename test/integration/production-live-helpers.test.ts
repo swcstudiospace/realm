@@ -35,7 +35,10 @@ import {
   statusFieldsOf,
   toolErrorOf,
   unparsedLinesOf,
+  waitUntilServed,
+  SERVED_POLL_INTERVAL_MS,
   type LiveInputs,
+  type McpSession,
   type PollCheck,
   type PollClock,
   type ProductionGateInputs,
@@ -719,4 +722,77 @@ void test("removedCausesOf reads each removal as its container id and cause, and
   );
   assert.ok(startup !== undefined, "the record parses");
   assert.deepEqual(removedCausesOf(startup), [{ containerId: "0a1b", cause: "pids-limit" }]);
+});
+
+// ---- waitUntilServed ------------------------------------------------------------------------------------------------------
+
+const NOT_ACTIVE_REFUSAL = { isError: true, structuredContent: { code: "REALM_NOT_ACTIVE", retryable: true } };
+const SERVED_RESULT = { isError: false, structuredContent: { outcome: "done", tool: "status", value: {} } };
+
+// A session whose tools/call answers come from a script, one per call; the last answer repeats. The calls are recorded.
+function scriptedSession(answers: readonly unknown[]): { readonly session: Pick<McpSession, "request" | "stderr">; readonly calls: { readonly method: string; readonly params: unknown }[] } {
+  const calls: { readonly method: string; readonly params: unknown }[] = [];
+  return {
+    calls,
+    session: {
+      request: (method, params) => {
+        calls.push({ method, params });
+        const answer = answers[Math.min(calls.length, answers.length) - 1];
+        return Promise.resolve(answer);
+      },
+      stderr: () => "child stderr text",
+    },
+  };
+}
+
+void test("waitUntilServed polls status through the refusals and returns on the first call that is not refused", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([NOT_ACTIVE_REFUSAL, NOT_ACTIVE_REFUSAL, SERVED_RESULT]);
+  await waitUntilServed(session, { clock: fake.clock });
+  assert.equal(calls.length, 3, "two refusals, then the served call");
+  for (const call of calls) {
+    assert.equal(call.method, "tools/call");
+    assert.deepEqual(call.params, { name: "status", arguments: {} });
+  }
+  assert.deepEqual(fake.sleeps, [SERVED_POLL_INTERVAL_MS, SERVED_POLL_INTERVAL_MS], "a 2 s interval between the calls");
+});
+
+void test("waitUntilServed makes one call and no sleep when the session is already served", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([SERVED_RESULT]);
+  await waitUntilServed(session, { clock: fake.clock });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(fake.sleeps, []);
+});
+
+void test("waitUntilServed fails after its bound with the last refusal and the child's stderr", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([NOT_ACTIVE_REFUSAL]);
+  await assert.rejects(
+    waitUntilServed(session, { clock: fake.clock, timeoutMs: 10_000 }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /within 10 s of the handshake/);
+      assert.match(error.message, /the last: REALM_NOT_ACTIVE retryable true/);
+      assert.match(error.message, /child stderr text/);
+      return true;
+    },
+  );
+  assert.ok(calls.length > 1, "it kept polling until the bound");
+});
+
+void test("waitUntilServed fails at once on a tool error other than REALM_NOT_ACTIVE, naming it", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([{ isError: true, structuredContent: { code: "POLICY_DENIED", retryable: false } }]);
+  await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /not REALM_NOT_ACTIVE.*POLICY_DENIED/s);
+  assert.equal(calls.length, 1);
+});
+
+void test("waitUntilServed lets a request failure through, such as a child that ended", async () => {
+  const fake = fakeClock();
+  const session: Pick<McpSession, "request" | "stderr"> = {
+    request: () => Promise.reject(new Error("MCP tools/call: realm mcp ended before it answered")),
+    stderr: () => "",
+  };
+  await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /realm mcp ended before it answered/);
 });

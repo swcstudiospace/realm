@@ -104,6 +104,7 @@ import {
   toolErrorOf,
   unparsedLinesOf,
   waitForActive,
+  waitUntilServed,
   waitForNoContainers,
   waitForNoResidue,
   RESIDUE_TIMEOUT_MS,
@@ -635,6 +636,7 @@ void test("production live 5: after the daemon is killed, the next realm up keep
   const primed = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(primed);
+    await waitUntilServed(primed);
     await callTool(primed, "status", {});
   } finally {
     primed.closeInput();
@@ -848,6 +850,8 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   // 3. The attach must be active before the first call.
   const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
   assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+  // The handshake is answered at once and tool calls are refused REALM_NOT_ACTIVE until the daemon adopts the client: wait until served.
+  await waitUntilServed(session);
 
   // 4. exec in argv form: the marker comes back on stdout, which the daemon's exec runner captures.
   const marker = `realm-live-${randomBytes(6).toString("hex")}`;
@@ -963,6 +967,7 @@ void test("production live 7: an exec that outlives the per-call bound fails wit
   const session = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(session);
+    await waitUntilServed(session);
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
     assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
 
