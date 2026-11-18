@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { OpenShellRunnerError } from "../../src/runtime/openshell.js";
 import { type ErrorCode, makeRealmError } from "../../src/core/errors.js";
 import type { State } from "../../src/core/states.js";
 import { createEventBus } from "../../src/core/events.js";
@@ -324,3 +325,33 @@ function auditIds(text: string): string[] {
     .filter((line) => line.length > 0)
     .map((line) => (JSON.parse(line) as { correlationId?: string }).correlationId ?? "");
 }
+
+void test("EXEC-03: the audit lines of an argv exec name the caller's argv and carry no watchdog text, while the runner got the wrapper", async (t) => {
+  const h = makeHarness(t);
+  expectDone(await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } }), "exec");
+  const text = h.auditText();
+  assert.ok(text.includes("/usr/bin/agent") && text.includes("--serve"), "the audit lines carry the caller's argv");
+  assert.doesNotMatch(text, /\/usr\/bin\/timeout|--kill-after/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-6), ["/usr/bin/timeout", "--kill-after=1.5", "--", "28.5", ...WORKLOAD]);
+});
+
+void test("EXEC-03: the audit line of a shell exec carries the script's size and hash and no wrapper text, and the run ends with the shell and the script", async (t) => {
+  const h = makeHarness(t, { policy: { ...ADVISORY, shellEnabled: true } });
+  expectDone(await h.dispatcher.call({ exec: { shell: true, script: "echo hi" } }), "exec");
+  const text = h.auditText();
+  assert.match(text, /"scriptBytes":7/);
+  assert.match(text, /"sha256":"[0-9a-f]{64}"/);
+  assert.doesNotMatch(text, /\/usr\/bin\/timeout|--kill-after|echo hi/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-7), ["/usr/bin/timeout", "--kill-after=1.5", "--", "28.5", "/bin/sh", "-c", "echo hi"]);
+});
+
+void test("EXEC-03: a runner that rejects as timed out still gives the retryable TOOL_TIMEOUT refusal with no cause code, audited admission then result", async (t) => {
+  const h = makeHarness(t);
+  h.setRunner(() => Promise.reject(new OpenShellRunnerError("timed-out")));
+  const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
+  assert.deepEqual(outcome, refusal("exec", "TOOL_TIMEOUT", true));
+  assert.equal("causeCode" in outcome, false);
+  assert.deepEqual(h.phases(), ["admission", "result"]);
+  assert.equal(h.auditLines()[1]?.["outcome"], "TOOL_TIMEOUT");
+  assert.equal(h.runs[0]?.options.timeoutMs, 28000);
+});

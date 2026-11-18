@@ -38,6 +38,7 @@ import { attachRuntimeEvidence } from "./create-evidence.js";
 import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
 import { readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
+import { watchdogWorkload } from "./exec-watchdog.js";
 import {
   buildExecArgv,
   deleteSandbox,
@@ -744,22 +745,35 @@ export function productionOpenShellRunner(source: EnvironmentLike): OpenShellRun
 // Runs one workload in a session's running sandbox through the injected runner (D-92, D-94). The argv is the
 // pinned exec form from buildExecArgv, and output is captured and bounded per stream. A non-zero exit is a
 // successful call carrying exitCode. A runner rejection maps to REALM_NOT_ACTIVE and a deadline expiry to
-// TOOL_TIMEOUT; neither error carries child text. The runner stops the process at timeoutMs (D-91), so a
-// timed-out call keeps nothing running.
+// TOOL_TIMEOUT; neither error carries child text.
+// At timeoutMs the runner kills the local OpenShell client and its process group (D-91). That does not reach the
+// workload inside the sandbox: OpenShell does not signal it when a client goes away or its own timeout expires
+// (39-CONTEXT E-39-04). The workload therefore runs under the in-sandbox watchdog of exec-watchdog.ts, which ends
+// its process group shortly after the reply (the deadline plus 0.5 s, SIGKILL 1.5 s later). The exit code of a
+// call that resolves before timeoutMs is the command's own. A run that resolves at or after timeoutMs (the client
+// timer fired late and the watchdog's exit 124 or 137 arrived first) is TOOL_TIMEOUT whatever its exit code.
+// `now` is a monotonic clock in milliseconds.
 export async function runSandboxExec(
   runner: OpenShellRunner,
   sessionId: string,
   workload: readonly string[],
   timeoutMs: number,
+  now: () => number = () => performance.now(),
 ): Promise<OpenShellRunOutcome> {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const argv = buildExecArgv(sessionId, workload);
+  const argv = buildExecArgv(sessionId, watchdogWorkload(workload, timeoutMs));
+  const startedAt = now();
+  let outcome: OpenShellRunOutcome;
   try {
-    return await runner(argv, { timeoutMs, captureOutput: true });
+    outcome = await runner(argv, { timeoutMs, captureOutput: true });
   } catch (error) {
     const timedOut = error instanceof OpenShellRunnerError && error.kind === "timed-out";
     throw makeRealmError(timedOut ? "TOOL_TIMEOUT" : "REALM_NOT_ACTIVE");
   }
+  if (now() - startedAt >= timeoutMs) {
+    throw makeRealmError("TOOL_TIMEOUT");
+  }
+  return outcome;
 }

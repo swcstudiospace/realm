@@ -231,12 +231,14 @@ export class ToolDispatcher {
   }
 
   // exec runs only while active, in both modes (D-89, D-109). The argv form and the shell form both
-  // reach the runner through buildExecArgv and runSandboxExec. The dispatcher also bounds the call with
-  // TOOL_CALL_TIMEOUT_MS, so a runner that ignores its own deadline still returns TOOL_TIMEOUT.
+  // reach the runner through runSandboxExec, which runs the workload under the in-sandbox watchdog and
+  // builds the pinned exec argv. The audit summary below comes from the caller's params, so the watchdog
+  // never appears in an audit line. The dispatcher also bounds the call with TOOL_CALL_TIMEOUT_MS, so a
+  // runner that ignores its own deadline still returns TOOL_TIMEOUT.
   async #exec(params: ExecParams, scope: CallScope): Promise<ToolOutcome> {
     checkExecPolicy(this.deps.policy, params);
     const workload: readonly string[] = "argv" in params ? params.argv : ["/bin/sh", "-c", params.script];
-    // Refuses a malformed argv before admission. runSandboxExec builds the same argv again.
+    // Refuses a malformed workload before admission. runSandboxExec adds the watchdog prefix and builds the argv.
     buildExecArgv(this.deps.sessionId, workload);
     let state = this.deps.controller.snapshot().state;
     if (state === "connecting") {
