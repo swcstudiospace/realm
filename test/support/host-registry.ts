@@ -89,18 +89,18 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "claude-code.md",
     live: "claude",
     t2: { date: "2026-11-17", version: "2.1.322", result: "3 of 3 passed, run twice", command: "claude mcp get, claude mcp list" },
-    t3: { status: "not-run", note: "no dated production result yet; the root account's Podman is 4.9.3 and the production run uses the realmlive account's Podman 5.7.1" },
+    t3: { status: "rehearsed", note: "Claude Code 2.1.322, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): claude mcp list connected through server/discover then tools/list, the six Realm tools on the wire, realm status active, clean before and after; the validator tier passed 3 of 3 the same day; evidence kept outside the repository" },
     deferral: null,
   }),
-  // Source: contract page, Phase 24 table: T2 not run (no opencode executable on the verification machine). T3: the production tier exists; no executable and no approved scratch install (31-CONTEXT OQ-31-01).
+  // Source: contract page, Phase 24 table: T2 ran live 2026-11-18 with a scratch install of 1.19.5 (3 of 3 passed). T3: the production tier ran live 2026-11-18 (Phase 31 window 7).
   opencode: record({
     id: "opencode",
     family: "json-merge",
     suites: ["test/host/opencode-recipe.test.ts"],
     snippet: "opencode.md",
     live: "opencode",
-    t2: null,
-    t3: { status: "not-run", note: "no opencode executable on the verification machine; the tier exists and needs a scratch install the owner has not approved (OQ-31-01)" },
+    t2: { date: "2026-11-18", version: "1.19.5", result: "3 of 3 passed (scratch install outside the repository, owner approved)", command: "opencode mcp list" },
+    t3: { status: "rehearsed", note: "opencode 1.19.5, 2026-11-18, production stack (realmlive account, Podman 5.7.1, warm session, GAP-31-04): opencode mcp list reported realm connected, wire recorded and tools not asserted, clean before and after; evidence kept outside the repository" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: kilo mcp list, no result recorded) and OQ-25-09.
@@ -119,7 +119,7 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "5 passed, 0 failed, 2 skipped (production tiers), after the header-owned recipe",
       command: "codex mcp get, codex mcp list (parse only)",
     },
-    t3: { status: "not-run", note: "session tier written in Phase 31 (codex exec against a refusing loopback provider, no credential); no dated production result yet" },
+    t3: { status: "not-run", note: "session rehearsal only: codex-cli 0.154.0, 2026-11-17, validator-tier session tests 2 of 2 passed against a refusing loopback provider; the production tier ran on 2026-11-18 and the wire showed the handshake and the six tools, but the test's ready observation raced the host's exit (fixed, no passing run yet); the row becomes rehearsed only after a passing run" },
     deferral: null,
   }),
   // Source: contract page, Phase 25 table (T2: copilot mcp get realm and list, parse only, no result recorded) and OQ-25-09.

@@ -838,9 +838,12 @@ const DOWN_TIMEOUT_MS = 120_000;
 const WARM_UP_TIMEOUT_MS = 240_000;
 const POLL_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 2_000;
+// A host that exits on its own: the warm session is already up, so `realm status` should answer active at once.
+const EXIT_STATUS_TIMEOUT_MS = 60_000;
 
-// The session drive: the host command is the host binary run with `args` (a session that never exits by itself, ended once the boot
-// is observed) against `provider`, a loopback provider that refuses every request. The default drive (no `drive`) runs `<host> mcp list`.
+// The session drive: the host command is the host binary run with `args` against `provider`, a loopback provider that refuses every
+// request. The session is ended once the boot is observed, or judged from the wire and `realm status` when the host exits on its own.
+// The default drive (no `drive`) runs `<host> mcp list`.
 export interface HostSessionDrive {
   readonly kind: "session";
   readonly provider: RefusingProvider;
@@ -1058,7 +1061,11 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     assert.doesNotMatch(joined, /\bfailed\b/i, `${host} must not report realm failed: ${describeRun(listed)}`);
     t.diagnostic(`${host} mcp list reported: ${JSON.stringify(joined.trim())}`);
   } else {
-    // A session never exits by itself: poll for the boot evidence and end the process group once it holds.
+    // A session may or may not outlive its handshake. While it runs, poll for the boot evidence (the recorder shows the tool listing,
+    // `realm status` answers active and the daemon counts an attached boot report) and end the process group once it holds. A host that
+    // finishes its turn and exits on its own (codex-cli 0.154.0 against the refusing provider exits within seconds, observed 2026-11-18)
+    // takes its `realm mcp` child with it, but the session (the sandbox) persists until `realm down`, so the ready observation can race
+    // the exit. The exit is then judged from the wire and from `realm status`, below.
     const bootSeen = async (): Promise<boolean> => {
       if (!wireSummary(readWireLog(wireLog)).answered) {
         return false;
@@ -1071,7 +1078,26 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
       return metrics.exitCode === 0 && attachedBootsOf(metrics.stdout, host) >= 1;
     };
     const session = await runHostUntil(options.bin, drive.args, env, projectDir, { ready: bootSeen, timeoutMs: scaledMs(REAL_HOST_TIMEOUT_MS), pollMs: POLL_INTERVAL_MS });
-    assert.equal(session.endedBy, "ready", `${host} session ended by ${session.endedBy} before the boot was observed; wire: ${wireText()}; ${describeRun(session)}`);
+    if (session.endedBy === "exit") {
+      // The host ended on its own. That is a boot only when the wire shows the handshake and the six tools and the warm session answers
+      // active; the attached boot report is asserted only for a host that was still alive.
+      const exited = wireSummary(readWireLog(wireLog));
+      const handshook = exited.hostMethods.includes("initialize") || exited.hostMethods.includes("server/discover");
+      const sixTools = exited.answered && [...exited.toolNames].join(",") === [...REALM_TOOL_NAMES].join(",");
+      assert.ok(handshook && sixTools, `${host} session ended by exit before the boot was observed; wire: ${wireText()}; ${describeRun(session)}`);
+      const stillActive = await pollUntil(
+        async () => {
+          const status = await realmStatus();
+          const state = status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
+          return state === "active" ? { done: true } : { done: false, detail: `realm status: ${describeResult(status)}` };
+        },
+        { timeoutMs: scaledMs(EXIT_STATUS_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+      );
+      assert.ok(stillActive.ok, `${host} session ended by exit and realm status never answered active; wire: ${wireText()}; ${stillActive.detail}; ${describeRun(session)}`);
+      t.diagnostic(`${host} session ended by exit after the handshake and the six tools; realm status answered active (the attached boot report is asserted only while the host is alive)`);
+    } else {
+      assert.equal(session.endedBy, "ready", `${host} session ended by ${session.endedBy} before the boot was observed; wire: ${wireText()}; ${describeRun(session)}`);
+    }
   }
   const elapsedMs = Date.now() - startedAt;
 
