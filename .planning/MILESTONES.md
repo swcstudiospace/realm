@@ -1,5 +1,20 @@
 # Milestones
 
+## v5.0 Cold attach, enforced capability tokens and evidence (Shipped: 2026-11-18)
+
+**Phases completed:** 5 phases, 13 plans, 0 tasks
+
+**Requirements:** 14 audited (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), all Complete (ENF-04 with a recorded partial). Audit: `milestones/v5.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- `realm mcp` answers the MCP handshake and `tools/list` at once and boots behind a not-active gate (calls refused `REALM_NOT_ACTIVE`, retryable, until ready; the same connection serves afterwards): the first answer came in 500 ms where it took 35 to 60 s, and claude 2.1.322, opencode 1.19.5 and codex-cli 0.154.0 connected cold within the bound with the warm-up removed (GAP-31-04 and GAP-23-02 closed). Release line 0.5.x.
+- Capability tokens enforce by default, a breaking change with a documented opt-out (`"mode": "off"`): every shipped client attaches under enforce (a test per client class), a stale or unlabelled client is refused `POLICY_DENIED` with the cause and the fix on every text channel, and two real stale binaries were refused live. Muse Code, Prime Agent and Grok Build have no host id and stay refused (GAP-34-01); ENF-04 is partial (the 34-03 squash title lacks the `!` marker; the flip commit is in the changelog).
+- The token claims were measured: Set A of the capability tests ran twice as a regular user on a `ptrace_scope` 1 host (494 of 494), a non-descendant same-uid process was denied at the memory open (descendant and root controls found the secrets), and a live enforce proof on the production stack showed claude cold to active with audit lines carrying host and kid, using a scripted loopback provider and no real model. Tokens give no defence against a same-uid reader.
+- The v1.0 live items this host can run were re-verified or carried with a named reason, and all 14 open items have a final label; OI-13 closed by the owner (Q11), the Anda items dropped (D-27-01), and OI-11 (Omp responsiveness) recorded as a loaded-host run that failed its thresholds, carried with finding F-3 into a v5.1 candidate phase.
+- `docs/specs/realm-spec.xml` no longer describes the Anda bridge, `andaUrl`, the `ANDA_` codes or the degraded state (five states), with history kept and marked retired, on the owner's instruction of 2026-11-18. Owner decisions of 2026-11-18: complete v5.0; OI-13 accepted; OI-11 accepted as a loaded-host run; F-3 and OI-11 planned for v5.1, not built.
+
+---
+
 ## v4.0 Anda removal, MCP hardening and production boot proof (Shipped: 2026-11-18)
 
 **Phases completed:** 6 phases, 14 plans, 0 tasks

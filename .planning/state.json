@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v5.0 — Cold attach, enforced capability tokens and evidence",
+  "milestone": "v5.0",
   "phases": [
     {
       "number": "1",
@@ -225,9 +225,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start a new milestone",
-    "reason": "All phases complete — start a new milestone"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-18T12:00:37.198Z"
+  "updated_at": "2026-11-18T12:13:47.104Z"
 }

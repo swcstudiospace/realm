@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v5.0
-milestone_name: Cold attach, enforced capability tokens and evidence
-current_phase: 35
-status: completed
-stopped_at: Phase 35 complete — all phases complete
-last_updated: "2026-11-18T12:00:37.092Z"
+status: Awaiting next milestone
+stopped_at: Phase 37 complete — all phases complete
+last_updated: "2026-11-18T12:13:47.032Z"
 last_activity: 2026-11-18
-last_activity_desc: Phase 35 complete
-state_head: 7f70e18033d080f12ed9c3780c74b72484383534
+last_activity_desc: Milestone v5.0 completed and archived
+state_head: 1528fb6426d5780f83bf69a9efaba2942fd59777
 progress:
-  total_phases: 26
-  completed_phases: 44
+  total_phases: 5
+  completed_phases: 5
   total_plans: 13
   completed_plans: 13
   percent: 100
+milestone_name: Cold attach, enforced capability tokens and evidence (Shipped 2026-11-18)
+current_phase: 37
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-18)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v5.0, Cold attach, enforced capability tokens and evidence (phases 33 to 37, release line 0.5.x). Phase 33 (cold attach) is first; 34 depends on 33, 35 on 34; 36 and 37 are independent. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`.
+**Current focus:** Milestone v5.0, Cold attach, enforced capability tokens and evidence (phases 33 to 37, release line 0.5.x), is complete and archived (2026-11-18); the next milestone is not started. Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`.
 
 ## Current Position
 
-Phase: 35
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-11-18 — Phase 35 complete
+Phase: Milestone v5.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-18 — Milestone v5.0 completed and archived
 
 ## Current Recovery Boundaries
 
@@ -237,7 +237,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 35 complete — all phases complete
+Stopped at: Phase 37 complete — all phases complete
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
