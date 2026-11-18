@@ -178,14 +178,19 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     t3: WAVE2_T3,
     deferral: null,
   }),
-  // Source: contract page, Phase 25 table: hermes mcp list and hermes mcp test realm, no result recorded; the CLI failed --version on the verification machine.
+  // Source: contract page, Phase 25 table: hermes mcp list and hermes mcp test realm; passed 2026-11-18 (Phase 36) after the gate bootstraps a fresh data root (a fresh root fails --version until bootstrapped).
   hermes: record({
     id: "hermes",
     family: "yaml-map",
     suites: ["test/host/hermes-recipe.test.ts"],
     snippet: "hermes-agent.md",
     live: "hermes",
-    t2: null,
+    t2: {
+      date: "2026-11-18",
+      version: "0.23.1",
+      result: "PASS; covers 0.23.1 only",
+      command: "hermes mcp list, hermes mcp test realm (launches), gated wave 2 validator tier, REALM_LIVE_HERMES=1",
+    },
     t3: WAVE2_T3,
     deferral: null,
   }),
