@@ -702,3 +702,55 @@ void test("fileSha256, stripAnsi, ownedTableOf and refusalReasonOf", (t) => {
   assert.equal(refusalReasonOf({ exitCode: 1, stdout: "", stderr: "realm host uninstall: drifted: changed\n" }), "drifted");
   assert.equal(refusalReasonOf({ exitCode: 0, stdout: "{}\n", stderr: "" }), undefined);
 });
+
+// ---- The Hermes version root (36-CONTEXT E-36-07) ------------------------------------------------------------------------------
+
+// A fake `hermes` for the version probe. Its data root is the directory HERMES_HOME names: `--version` fails with the sentence of a fresh
+// install until the root holds a marker, and the command `mcp list` creates the marker only when `bootstraps` is true.
+function writeFakeHermes(dir: string, bootstraps: boolean): string {
+  const path = join(dir, bootstraps ? "hermes-fresh" : "hermes-never");
+  const create = bootstraps ? 'mkdir -p "$HERMES_HOME" && : > "$HERMES_HOME/bootstrapped"; ' : "";
+  const script = [
+    "#!/bin/sh",
+    `if [ "$1" = "mcp" ]; then ${create}echo realm; exit 0; fi`,
+    'if [ -n "$HERMES_HOME" ] && [ -f "$HERMES_HOME/bootstrapped" ]; then echo "Hermes Agent v0.23.1 (2026.9.24)"; exit 0; fi',
+    "echo 'hermes: no dependency environment is committed for this install; run hermes pm repair' >&2",
+    "exit 1",
+    "",
+  ].join("\n");
+  writeFileSync(path, script);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+void test("V1LIVE-01 the version probe bootstraps a fresh Hermes data root, and a Hermes that never bootstraps still skips", async (t) => {
+  const dir = tempDir(t);
+  const cli = join(dir, "main.js");
+  writeFileSync(cli, "");
+  const fresh = writeFakeHermes(dir, true);
+  const repaired = await collectHostLiveGate("hermes", "validator", { env: { REALM_LIVE_HERMES: "1", REALM_HERMES_BIN: fresh }, platform: "linux", cliPath: cli });
+  assert.deepEqual([repaired.skip, repaired.bin, repaired.version], [false, fresh, "0.23.1"]);
+  const never = writeFakeHermes(dir, false);
+  const broken = await collectHostLiveGate("hermes", "validator", { env: { REALM_LIVE_HERMES: "1", REALM_HERMES_BIN: never }, platform: "linux", cliPath: cli });
+  assert.match(String(broken.skip), /--version did not run to a successful exit/, "the repair does not turn a broken Hermes into a pass");
+  assert.equal(broken.version, undefined);
+});
+
+void test("V1LIVE-01 only the hermes record carries a version root, and the hermes validators bound a cold bootstrap", () => {
+  assert.deepEqual(HOST_LIVE.hermes.versionRoot, { variable: "HERMES_HOME", prepare: ["mcp", "list"] });
+  for (const host of LIVE_HOST_IDS) {
+    if (host !== "hermes") {
+      assert.equal(Object.hasOwn(HOST_LIVE[host], "versionRoot"), false, `${host} has no version root`);
+    }
+  }
+  for (const validator of WAVE2_LIVE.hermes.validators) {
+    assert.ok((validator.timeoutMs ?? 0) >= 300_000, `hermes ${validator.args.join(" ")} bounds a cold bootstrap`);
+  }
+  const explicit: Record<string, number[]> = {};
+  for (const host of WAVE2_LIVE_IDS) {
+    if (host !== "hermes") {
+      explicit[host] = WAVE2_LIVE[host].validators.flatMap((validator) => (validator.timeoutMs === undefined ? [] : [validator.timeoutMs]));
+    }
+  }
+  assert.deepEqual(explicit, { qwen: [], pi: [], cursor: [60_000], kilo: [], copilot: [], augment: [120_000], codebuddy: [120_000, 120_000], cline: [] });
+});
