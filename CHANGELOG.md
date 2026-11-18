@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-11-18
+
+### Documentation
+- docs(phase-34): close phase 34, capability tokens enforce by default (#182) (b3606bd)
+- docs(phase-35): record EVID-03, D35-1, spike section 10, summaries and verification (#181) (9208a7b)
+- docs(phase-34): record the stale-client live result, summaries and verification; correct the doctor item description (#180) (0fb9b2a)
+- docs(phase-36,37): close phases 36 and 37 (#179) (98743dd)
+
 ## [0.5.7] - 2026-11-18
 
 ### Maintenance
