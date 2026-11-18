@@ -296,7 +296,7 @@ function inspectPage(text: string): string[] {
       }
       if (drive === "host-driven" && status === "recorded") {
         const result = cell(evid03, row, "Result");
-        if (!result.includes("tools/list") || !result.includes("tools/call") || !/provider[^|]*\d/.test(result)) {
+        if (!result.includes("tools/list") || !result.includes("tools/call") || !/provider requests \d+/.test(result)) {
           findings.push("EVID-03: a recorded host-driven row needs the wire methods and the provider counts in its Result");
         }
         if (!cell(evid03, row, "Tier").includes("scripted provider")) {
@@ -387,14 +387,23 @@ void test("EVID: the real page keeps every rule", () => {
   assert.deepEqual(inspectPage(PAGE_TEXT), []);
 });
 
-void test("EVID: the live enforce proof rows of the real page stay not-run until its window", () => {
+void test("EVID-03: the real page records both drives and the probe observation with their tiers, and the summary is recorded", () => {
   const findings: string[] = [];
   const lines = proseLines(PAGE_TEXT);
-  for (const table of tablesOf(sectionLines(lines, EVID03), EVID03, findings)) {
-    for (const row of table.rows) {
-      assert.equal(cell(table, row, "Status"), "not-run", `${EVID03}: ${row[0] ?? ""} is not-run until a window fills it`);
-    }
+  const [table] = tablesOf(sectionLines(lines, EVID03), EVID03, findings);
+  assert.ok(table !== undefined, "the EVID-03 table exists");
+  const byDrive = new Map(table.rows.map((row) => [row[0] ?? "", row] as const));
+  for (const drive of ["launcher-driven", "host-driven", "live probe observation"]) {
+    const row = byDrive.get(drive);
+    assert.ok(row !== undefined, `the ${drive} row exists`);
+    assert.equal(cell(table, row, "Status"), "recorded", `${drive} is recorded`);
+    assert.match(cell(table, row, "Date"), ISO_DATE);
   }
+  const host = byDrive.get("host-driven");
+  assert.ok(host !== undefined);
+  assert.ok(cell(table, host, "Tier").includes("scripted provider"), "the host-driven tier names the scripted provider");
+  assert.ok(cell(table, host, "Tier").includes("no real model"), "and says there was no real model");
+  assert.ok(PAGE_TEXT.includes("| EVID-03 | recorded |"), "the summary row is recorded");
   assert.deepEqual(findings, []);
 });
 
@@ -497,49 +506,46 @@ void test("EVID guard: a first-run row with a commit, a Node version and a date 
   );
 });
 
-// ---- EVID-03 structure (plan 35-03 Task 8 pins; they fire only once a row left not-run) ---------------------------------------
+// ---- EVID-03 structure (plan 35-03 Task 8 pins; seeded from the real recorded page) --------------------------------------------
 
-const EVID03_SUMMARY = "| EVID-03 | not-run | - | - | - | EVID-03: the live enforce proof |";
-const LAUNCHER_ROW = "| launcher-driven | not-run | - | not-run | - | not-run | not-run | - |";
-const HOST_ROW = "| host-driven | not-run | - | not-run | - | not-run | not-run | - |";
+const EVID03_SUMMARY = PAGE_TEXT.split("\n").find((line) => line.startsWith("| EVID-03 | recorded |")) ?? "";
+const LAUNCHER_ROW = PAGE_TEXT.split("\n").find((line) => line.startsWith("| launcher-driven |")) ?? "";
+const HOST_ROW = PAGE_TEXT.split("\n").find((line) => line.startsWith("| host-driven |")) ?? "";
+const NOT_RUN_LAUNCHER = "| launcher-driven | not-run | - | not-run | - | not-run | not-run | - |";
+const NOT_RUN_HOST = "| host-driven | not-run | - | not-run | - | not-run | not-run | - |";
+
+void test("EVID-03 guard: the real rows are found, and the real page passes", () => {
+  assert.ok(EVID03_SUMMARY !== "" && LAUNCHER_ROW !== "" && HOST_ROW !== "");
+  assert.deepEqual(inspectPage(PAGE_TEXT), []);
+});
 
 void test("EVID-03 guard: a partial status without the sentence that claude did not itself issue a tool call is rejected, with it the page passes", () => {
-  const summary = "| EVID-03 | partial | scripted client | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
-  const launcher = "| launcher-driven | scripted client | claude 2.1.322 | cold start ok | 1 attach, 6 call lines | clean (12 sinks) | recorded | 2026-11-18 |";
-  const without = seeded(EVID03_SUMMARY, summary).replace(LAUNCHER_ROW, launcher);
-  const findings = inspectPage(without);
+  const partial = seeded(EVID03_SUMMARY, EVID03_SUMMARY.replace("| recorded |", "| partial |")).replace(HOST_ROW, NOT_RUN_HOST);
+  const findings = inspectPage(partial);
   assert.ok(
     findings.some((finding) => finding.includes(`a partial status needs the sentence: ${CLAUDE_DID_NOT_CALL}`)),
     findings.join("\n"),
   );
-  const withSentence = without.replace("## Not shown", `The registered host command was driven by a script; ${CLAUDE_DID_NOT_CALL}.\n\n## Not shown`);
-  assert.ok(withSentence !== without);
-  assert.deepEqual(
-    inspectPage(withSentence).filter((finding) => !finding.startsWith("Not shown")),
-    [],
-  );
+  const withSentence = partial.replace("## Not shown", `The registered host command was driven by a script; ${CLAUDE_DID_NOT_CALL}.\n\n## Not shown`);
+  assert.deepEqual(inspectPage(withSentence), []);
 });
 
 void test("EVID-03 guard: a recorded host-driven row needs the wire methods, the provider counts and the scripted provider tier", () => {
-  const summary = "| EVID-03 | recorded | scripted provider | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
-  const launcher = "| launcher-driven | scripted client | claude 2.1.322 | cold start ok | 1 attach, 6 call lines | clean (12 sinks) | recorded | 2026-11-18 |";
-  const goodHost = "| host-driven | scripted provider | claude 2.1.322 | wire initialize, tools/list, tools/call; provider requests 2 | 2 attach, 8 call lines | clean (14 sinks) | recorded | 2026-11-18 |";
-  const base = seeded(EVID03_SUMMARY, summary).replace(LAUNCHER_ROW, launcher);
-  assert.deepEqual(inspectPage(base.replace(HOST_ROW, goodHost)).filter((finding) => !finding.startsWith("Not shown")), []);
-  const noWire = base.replace(HOST_ROW, goodHost.replace("wire initialize, tools/list, tools/call; ", ""));
-  assert.ok(inspectPage(noWire).some((finding) => finding.includes("needs the wire methods and the provider counts")), inspectPage(noWire).join("\n"));
-  const noCounts = base.replace(HOST_ROW, goodHost.replace("; provider requests 2", ""));
-  assert.ok(inspectPage(noCounts).some((finding) => finding.includes("needs the wire methods and the provider counts")));
-  const wrongTier = base.replace(HOST_ROW, goodHost.replace("| scripted provider |", "| production |"));
-  assert.ok(inspectPage(wrongTier).some((finding) => finding.includes("names the scripted provider in its Tier")));
+  const noWire = inspectPage(seeded(HOST_ROW, HOST_ROW.replace("tools/list (all six tools), ", "")));
+  assert.ok(noWire.some((finding) => finding.includes("needs the wire methods and the provider counts")), noWire.join("\n"));
+  const noCounts = inspectPage(seeded(HOST_ROW, HOST_ROW.replace("; provider requests 2, 0 rejected", "")));
+  assert.ok(noCounts.some((finding) => finding.includes("needs the wire methods and the provider counts")), noCounts.join("\n"));
+  const wrongTier = inspectPage(seeded(HOST_ROW, HOST_ROW.replace("| scripted provider, no credential, no real model |", "| production |")));
+  assert.ok(wrongTier.some((finding) => finding.includes("names the scripted provider in its Tier")), wrongTier.join("\n"));
 });
 
 void test("EVID-03 guard: recorded needs both drives, a ran row needs a tier, and the page never says claude used Realm with a model", () => {
-  const summary = "| EVID-03 | recorded | scripted provider | 2026-11-18 | claude 2.1.322, commit 1a2b3c4 | EVID-03: the live enforce proof |";
-  const base = seeded(EVID03_SUMMARY, summary);
-  assert.ok(inspectPage(base).some((finding) => finding.includes("only when the host-driven row is recorded")));
-  const bareTier = seeded(LAUNCHER_ROW, "| launcher-driven | - | claude 2.1.322 | cold start ok | 1 attach | clean | recorded | 2026-11-18 |");
-  assert.ok(inspectPage(bareTier).some((finding) => finding.includes("launcher-driven is recorded without a Tier")));
+  const noHost = inspectPage(seeded(HOST_ROW, NOT_RUN_HOST));
+  assert.ok(noHost.some((finding) => finding.includes("only when the host-driven row is recorded")), noHost.join("\n"));
+  const noLauncher = inspectPage(seeded(LAUNCHER_ROW, NOT_RUN_LAUNCHER));
+  assert.ok(noLauncher.some((finding) => finding.includes("only when the launcher-driven row ran too")), noLauncher.join("\n"));
+  const bareTier = inspectPage(seeded(LAUNCHER_ROW, LAUNCHER_ROW.replace("| scripted client driving the registered command |", "| - |")));
+  assert.ok(bareTier.some((finding) => finding.includes("launcher-driven is recorded without a Tier")), bareTier.join("\n"));
   const claims = inspectPage(seeded("## Not shown", "Claude used Realm with a real model.\n\n## Not shown"));
   assert.ok(claims.includes("EVID-03: the section says claude used Realm with a model"), claims.join("\n"));
 });

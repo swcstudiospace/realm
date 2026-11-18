@@ -371,3 +371,49 @@ void test("EVID-02: the first paragraph of Q10 keeps the same-user limit whateve
   assert.ok(first !== undefined, "Q10 has a first paragraph");
   assert.ok(first.includes("same user"), "the first paragraph states the same-user limit");
 });
+
+// EVID-03 and the closure records (plan 35-03 Task 8): the pins that depend on the recorded results.
+void test("EVID-03: Q10 states the live enforce proof with its tier, its date and the scripted-provider limit once the page records it", () => {
+  const page = read("docs/integration/capability-token-evidence.md");
+  const status = /^\| EVID-03 \| ([a-z-]+) \|/m.exec(page)?.[1];
+  assert.ok(status !== undefined, "the evidence page has an EVID-03 summary row");
+  const paragraph = q10Section()
+    .split("\n")
+    .find((line) => line.startsWith("**Evidence limits.**"));
+  assert.ok(paragraph !== undefined, "the Evidence limits paragraph exists");
+  if (status === "not-run") {
+    assert.ok(!paragraph.includes("Live enforce proof"), "no live proof is recorded, so Q10 states none");
+    return;
+  }
+  assert.ok(paragraph.includes("Live enforce proof, recorded on 20"), "Q10 dates the live proof");
+  assert.ok(paragraph.includes("capability-token-evidence.md"), "Q10 links the evidence page");
+  assert.ok(paragraph.includes("no credential and no real model"), "Q10 states the scripted-provider limit");
+  assert.ok(paragraph.includes("no model decided to use Realm"), "Q10 does not claim a model used Realm");
+  assert.ok(!/claude used realm with a (?:real )?model/i.test(paragraph), "Q10 never claims claude used Realm with a model");
+});
+
+void test("D35-1: the decision record holds D35-1, and D32-1 and D34-1 stand", () => {
+  const text = read(FILES.decision);
+  const line = text.split("\n").find((candidate) => candidate.startsWith("**D35-1 (2026-11-18)."));
+  assert.ok(line !== undefined, "D35-1 with its date");
+  assert.ok(line.includes("D32-1 and D34-1 stand unchanged"), "D35-1 changes no earlier decision");
+  assert.ok(text.includes("**EVID-02, recorded, verdict settled.**"), "D35-1 records the memory verdict");
+  assert.ok(text.includes("not a model deciding to use Realm"), "D35-1 states the scripted-provider limit");
+  assert.ok(text.includes("**D32-1 (2026-11-17)."), "D32-1 is still there");
+  assert.ok(text.includes("**D34-1 (2026-11-18)."), "D34-1 is still there");
+});
+
+void test("EVID-02: the spike note has section 10 after section 9, linking the evidence page and the decision", () => {
+  const text = read(FILES.spike);
+  const nine = text.indexOf("\n## 9. Outcome after the owner override");
+  const ten = text.indexOf("\n## 10. Measurement in Phase 35");
+  assert.ok(nine >= 0 && ten > nine, "section 10 follows section 9");
+  const section = text.slice(ten);
+  assert.ok(section.includes("capability-token-evidence.md"), "section 10 links the evidence page");
+  assert.ok(section.includes("D35-1"), "section 10 points at D35-1");
+  assert.ok(section.includes("channel D1") && section.includes("D3"), "section 10 says E4 used environment delivery, which production does not use");
+});
+
+void test("EVID-03: hosts.md links the evidence page", () => {
+  assert.ok(read("docs/integration/hosts.md").includes("(capability-token-evidence.md)"), "hosts.md links the evidence page");
+});
