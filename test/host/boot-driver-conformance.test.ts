@@ -9,8 +9,8 @@ import { driverFactoryOf } from "../support/host-boot-mutants.js";
 // Every mcp-config host, taken from the table and not typed: the driver is host-neutral, so each runs the same nine cases.
 const HOSTS: readonly HostId[] = HOST_IDS.filter((id) => HOST_RUNTIMES[id].integration === "mcp-config");
 
-void test("the driver runs for the 18 mcp-config hosts, every host of the table but omp", () => {
-  assert.equal(HOSTS.length, 18);
+void test("the driver runs for the 21 mcp-config hosts, every host of the table but omp", () => {
+  assert.equal(HOSTS.length, 21);
   assert.deepEqual(
     HOST_IDS.filter((id) => !HOSTS.includes(id)),
     ["omp"],

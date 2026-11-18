@@ -360,7 +360,7 @@ test("runCheck probes the shipped host runtime table and default manifests, and 
     assert.match(probe[1], /agent-realm\/dist\/src\/host\/runtimes\.js/);
     assert.match(probe[1], /agent-realm\/dist\/src\/host\/manifest\.js/);
     assert.match(probe[1], /defaultManifestFor/);
-    assert.match(probe[1], /!== 19/);
+    assert.match(probe[1], /!== 22/);
     assert.match(out.join(""), new RegExp(`host modules: ${String(HOST_MODULE_FILES.length)} present`));
   }));
 
@@ -559,8 +559,8 @@ function runMilestoneFixture(options = {}) {
       bin: { realm: "./dist/src/cli/main.js" }, omp: { extensions: ["./dist/src/omp/extension.js"] },
     }));
     writeFixture(packageRoot, "dist/src/contract/validate.js", "export function validate() { return { ok: true }; }\n");
-    // The probe also imports the host runtime table and manifest module: stand-ins with the exports it reads (19 hosts).
-    writeFixture(packageRoot, "dist/src/host/runtimes.js", 'export const HOST_RUNTIMES = Object.fromEntries(Array.from({ length: 19 }, (_, index) => [`host${index}`, {}]));\n');
+    // The probe also imports the host runtime table and manifest module: stand-ins with the exports it reads (22 hosts).
+    writeFixture(packageRoot, "dist/src/host/runtimes.js", 'export const HOST_RUNTIMES = Object.fromEntries(Array.from({ length: 22 }, (_, index) => [`host${index}`, {}]));\n');
     writeFixture(
       packageRoot,
       "dist/src/host/manifest.js",

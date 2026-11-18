@@ -16,18 +16,18 @@ binary first, or give the absolute path to it in place of `realm` below.
 The documented form is `prime-agent mcp add <name> [--cwd] [--env CHILD=SOURCE] -- <command> [args]`:
 
 ```bash
-prime-agent mcp add realm -- realm mcp
+prime-agent mcp add realm -- realm mcp --host prime-agent
 ```
 
 This writes the `mcpServers` block of the Prime Agent `settings.json` (medium
 confidence). To test without touching the live configuration, run it from a
 scratch project directory with the project-local form in the next section.
 
-Prime Agent has no host id, so this launcher stays `realm mcp` with no host flag and carries no capability token. Realm
-enforces capability tokens by default, so the default refuses this session with `POLICY_DENIED` (`GAP-34-01` in
-`docs/integration/host-plugin-gaps.md`). Either set the policy value `capabilityTokens.mode` to `off` (the opt-out, which
-`realm doctor` flags with a warning), or end the command with `--host ID`, using the id of a host family you accept as the
-attribution label (`realm host list` names the ids). The migration steps are in Q10 of `docs/integration/mcp.md`.
+The launcher carries the host label `--host prime-agent`, so the default (capability tokens enforced) admits the session and
+the audit names the host. `realm host install prime-agent` registers the same entry. `GAP-34-01` in
+`docs/integration/host-plugin-gaps.md` is closed by Phase 40. An older entry added as `realm mcp` with no host flag is refused
+under the default: run `prime-agent mcp remove realm` first, then add the labelled entry. The migration steps are in Q10 of
+`docs/integration/mcp.md`.
 
 ## Skill package
 
@@ -50,6 +50,28 @@ Expected result: the package is listed under "Project packages".
 
 Installing without `--local` writes to the live Prime Agent directory. That is
 a separate step and is not part of this snippet.
+
+## Existing installs
+
+An entry added earlier as `prime-agent mcp add realm -- realm mcp` has no host flag and is refused under the default. Run
+`prime-agent mcp remove realm`, then `realm host install prime-agent`; or run
+`prime-agent mcp add realm -- realm mcp --host prime-agent`. `realm host uninstall prime-agent` removes only the entry the
+install wrote. The table of every case is in Q10 of `docs/integration/mcp.md`.
+
+## Evidence reached
+
+Tier: `config-only`. The recipe (`json-merge`, file `settings.json` in the agent directory, key `mcpServers.realm`) is proven on
+fixtures (`test/host/prime-agent-recipe.test.ts`) and observed against Prime Agent 0.10.2 (2026-11-18, isolated homes):
+`prime-agent mcp add` writes the same entry shape, and a later `prime-agent mcp add` or `mcp remove` of another server leaves the
+entry value-identical. The validator tier is the wave 2 entry `prime-agent` of `test/integration/host-live-wave2.test.ts`
+(gate `REALM_LIVE_PRIME_AGENT=1`, executable override `REALM_PRIME_AGENT_BIN`): `realm host install prime-agent` in an isolated
+agent directory (`PRIME_AGENT_CODING_AGENT_DIR`), then `prime-agent mcp list` and `prime-agent mcp get realm` (each prints the name
+and the transport only, so the registered label is proven by the bytes the test reads back), then `prime-agent mcp add` of a
+second server and `realm host uninstall prime-agent`. The dated result is recorded in the registry
+(`test/support/host-registry.ts`) when the run has been made.
+
+Not shown: a Prime Agent boot against the production stack, and a model-driven tool call. No production tier is defined for
+this host (`GAP-40-01` in `docs/integration/host-plugin-gaps.md`).
 
 ## Not documented
 

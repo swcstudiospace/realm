@@ -1,4 +1,4 @@
-// realm host (HOST-07): list, detect, status, install and uninstall for the 19 hosts of the plugin contract
+// realm host (HOST-07): list, detect, status, install and uninstall for the 22 hosts of the plugin contract
 // (src/host), and token status and token rotate for the capability keyring (CAPT-08, D-32-12). The commands never need a
 // running daemon and never spawn a process. Arguments are parsed before
 // any file is read, so a usage error changes nothing. Exit codes follow the other subcommands: 0 success (one

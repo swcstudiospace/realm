@@ -13,7 +13,7 @@ There are two integration kinds, defined in the table of the contract page:
 | Kind | What it means | Hosts today |
 | --- | --- | --- |
 | `extension` | the host loads a JavaScript entry in process | `omp` only |
-| `mcp-config` | a user-level configuration entry makes the host launch `realm mcp --host ID` over stdio | the other 18 |
+| `mcp-config` | a user-level configuration entry makes the host launch `realm mcp --host ID` over stdio | the other 21 |
 
 Most new hosts are `mcp-config` and config-only: one table row, one recipe that edits one entry in one user-level file, no new code. Adding a host means adding facts (a row, a recipe value, a registry record, a snippet, goldens) and the tests that hold those facts, not a new feature. A new recipe kind or a new engine behavior is a different change and is out of scope here.
 
@@ -96,7 +96,7 @@ The engine supports five recipe kinds. The contract page has the full rules; the
 
 | Kind | What is written | Ownership | Drift rule |
 | --- | --- | --- | --- |
-| `json-merge` | one value at a key path in a JSON file | the canonical value at the key path, and any parent object Realm created | a changed owned value is drift; an edit elsewhere is not |
+| `json-merge` | one value at a key path in a JSON file; optionally `seed` (top-level members written only into a file Realm creates, for a host that rejects a file without them) and `refuseIfPresent` (a rival top-level key whose presence refuses the install) | the canonical value at the key path, and any parent object Realm created | a changed owned value is drift; an edit elsewhere is not |
 | `toml-table` | one TOML table, no marker | the table text, located by its exact header | a changed table is drift; an absent table is `missing` |
 | `yaml-map` | one block-style entry `parent.child` in a YAML file, no marker | the entry, by key and by parsed value | a changed entry is drift; an absent entry is `missing` |
 | `bundle-copy` | the files of a shipped `adapters` directory under a destination in the host home | every copied file and every directory Realm created | any changed or missing copied file is drift |
@@ -164,7 +164,7 @@ All of these run on fixtures and fakes. They prove the contract, not a real host
 | `boot driver (ID)` conformance cases | a driver or manifest change broke one of the nine cases for that host | `src/host/boot-driver.ts`; the case is in `test/support/host-boot-conformance.ts` |
 | `TEST-HOST-05 ID` and `TEST-HOST-06 ID` | the boot of that id differs from the others: readiness, retry, failure isolation, teardown or a `down` request on a boot path | `src/cli/stdio-host.ts`; `test/host/boot-no-down.test.ts` pins that no boot source sends `down` |
 | the recipe suite of the host | the golden, the entry value or the format rules disagree with what the engine writes | `test/support/host-config-goldens.ts`; the row in `src/host/runtimes.ts` |
-| `test/host/runtimes.test.ts` | a pin differs from the row, or the 16 and 3 split changed | update the pin in that file when the change is intended |
+| `test/host/runtimes.test.ts` | a pin differs from the row, or the 19 and 3 split changed | update the pin in that file when the change is intended |
 
 ## Step 6: the docs
 

@@ -16,7 +16,7 @@ export type HostBootPhase = (typeof HOST_BOOT_PHASES)[number];
 export const HOST_BOOT_TRANSPORTS = Object.freeze(["extension", "mcp", "acp"] as const);
 export type HostBootTransport = (typeof HOST_BOOT_TRANSPORTS)[number];
 
-// The 19 host ids plus the label of a session started with no `--host`.
+// The 22 host ids plus the label of a session started with no `--host`.
 export const BOOT_REPORT_HOSTS = Object.freeze([...HOST_IDS, "unlabelled"] as const);
 export type BootReportHost = (typeof BOOT_REPORT_HOSTS)[number];
 

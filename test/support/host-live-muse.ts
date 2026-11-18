@@ -1,15 +1,20 @@
-// Pure helpers of the Muse Code validator-tier live test (V1LIVE-01, 36-CONTEXT D-36-04). Muse Code has no recipe, registry record or
-// `--host` id: the documented settings entry (docs/hosts/snippets/muse-code.md) is written verbatim into an isolated settings file and
-// the real `muse` binary reads it. This module holds the checks of that entry, of what `muse mcp list --json` and `muse mcp get realm
+// Pure helpers of the Muse Code validator-tier live test (V1LIVE-01, 36-CONTEXT D-36-04). Since Phase 40 Muse Code has the host id
+// `muse-code`, a recipe and a registry record (the recipe value is pinned equal to this entry, 40-CONTEXT D-40-04): the documented
+// settings entry (docs/hosts/snippets/muse-code.md) is written verbatim into an isolated settings file and the real `muse` binary reads it. This module holds the checks of that entry, of what `muse mcp list --json` and `muse mcp get realm
 // --json` print about it, the gate reason and the isolated environment.
 //
 // Nothing here reads the process environment, reads a clock or starts a process at import time. The hermetic test is
 // test/integration/host-live-muse-helpers.test.ts; the gated test is test/integration/host-live-muse.test.ts.
 //
+// Since plan 40-03 the live test installs through the real `realm host install muse-code` and uses three more helpers: the comparison of
+// the installed file with the snippet document, the expectation of what uninstall leaves, and a count of processes by name.
+//
 // Exports: MUSE_OPT_IN, MUSE_BIN_VARIABLE, MUSE_RECORDED_VERSION, MUSE_PLUGIN_VALID_PATTERN, parseMuseVersion, museSettingsText,
-// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv.
+// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv, museInstalledProblem, museUninstallExpectation, countProcessesNamed.
 
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { HostVersionProbe } from "./host-live.js";
 import { isRecord } from "./omp-live.js";
@@ -35,7 +40,7 @@ export function parseMuseVersion(stdout: string): string | undefined {
 }
 
 // The one documented entry, field by field.
-const EXPECTED_ENTRY: Readonly<Record<string, unknown>> = Object.freeze({ transport: "stdio", command: "realm", args: Object.freeze(["mcp"]), enabled: true, mode: "required" });
+const EXPECTED_ENTRY: Readonly<Record<string, unknown>> = Object.freeze({ type: "stdio", command: "realm", args: Object.freeze(["mcp", "--host", "muse-code"]), required: true });
 
 // Parses the snippet text and requires exactly the documented shape; returns the settings text to write (two-space indent, final
 // newline). Throws an Error that names the first difference.
@@ -53,17 +58,17 @@ export function museSettingsText(snippetText: string): string {
   if (parsed["schema_version"] !== 1) {
     throw new Error("schema_version differs: expected 1");
   }
-  const extra = keys.filter((key) => key !== "schema_version" && key !== "mcp_servers");
+  const extra = keys.filter((key) => key !== "schema_version" && key !== "mcpServers");
   if (extra.length > 0) {
     throw new Error(`the snippet has an unexpected top-level key: ${extra[0] ?? ""}`);
   }
-  const servers = parsed["mcp_servers"];
+  const servers = parsed["mcpServers"];
   if (!isRecord(servers)) {
-    throw new Error("mcp_servers is missing or not an object");
+    throw new Error("mcpServers is missing or not an object");
   }
   const names = Object.keys(servers);
   if (names.length !== 1 || names[0] !== "realm") {
-    throw new Error(`mcp_servers must hold exactly the server realm, found ${names.join(",") === "" ? "none" : names.join(",")}`);
+    throw new Error(`mcpServers must hold exactly the server realm, found ${names.join(",") === "" ? "none" : names.join(",")}`);
   }
   const entry = servers["realm"];
   if (!isRecord(entry)) {
@@ -105,8 +110,8 @@ export function museEntryProblem(entry: unknown): string | undefined {
     }
   }
   const args = entry["args"];
-  if (!Array.isArray(args) || args.at(-1) !== "mcp") {
-    return "the server field args does not end with mcp";
+  if (!Array.isArray(args) || JSON.stringify(args) !== JSON.stringify(["mcp", "--host", "muse-code"])) {
+    return "the server field args is not mcp, --host, muse-code";
   }
   return undefined;
 }
@@ -174,4 +179,66 @@ export function museIsolatedEnv(root: string, pathValue: string): Record<string,
     LANG: "C.UTF-8",
     TERM: "dumb",
   };
+}
+
+// What the real recipe wrote against the shipped snippet: both parse to the same document (the snippet, the recipe and the live run are one
+// entry, 40-CONTEXT D-40-04). Undefined when they are equal, else one sentence.
+export function museInstalledProblem(installedText: string, snippetText: string): string | undefined {
+  let installed: unknown;
+  try {
+    installed = JSON.parse(installedText);
+  } catch {
+    return "the installed settings file is not JSON";
+  }
+  let snippet: unknown;
+  try {
+    snippet = JSON.parse(museSettingsText(snippetText));
+  } catch {
+    return "the shipped snippet is not a valid Muse settings document";
+  }
+  return isDeepStrictEqual(installed, snippet) ? undefined : "the installed settings document differs from the shipped snippet document";
+}
+
+// What `realm host uninstall muse-code` leaves of a settings file that holds the realm entry: the file is removed when nothing but the seed
+// (`schema_version`) and the realm entry would remain, and kept when the host or the operator put anything else in it. `unreadable` for text
+// that is not a JSON object.
+export function museUninstallExpectation(settingsText: string): "file-removed" | "file-kept" | "unreadable" {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(settingsText);
+  } catch {
+    return "unreadable";
+  }
+  if (!isRecord(parsed)) {
+    return "unreadable";
+  }
+  const extra = Object.keys(parsed).filter((key) => key !== "schema_version" && key !== "mcpServers");
+  const servers = parsed["mcpServers"];
+  if (extra.length > 0 || !isRecord(servers)) {
+    return "file-kept";
+  }
+  const others = Object.keys(servers).filter((name) => name !== "realm");
+  return others.length === 0 ? "file-removed" : "file-kept";
+}
+
+// The number of live processes whose command name (`comm`) is `name`, read from /proc; 0 where /proc does not exist. The live test compares the
+// count before and after a run: a host process the run left behind raises it.
+export function countProcessesNamed(name: string): number {
+  if (!existsSync("/proc/self/comm")) {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+    try {
+      if (readFileSync(join("/proc", entry, "comm"), "utf8").trim() === name) {
+        count += 1;
+      }
+    } catch {
+      // The process ended between the listing and the read.
+    }
+  }
+  return count;
 }

@@ -1,12 +1,14 @@
 // Gate, isolation and runner pieces of the host live rehearsals (ADPT-08; decisions D-24-07 and D-24-08 of phase 24; BOOTP-01 of phase 31).
 //
-// Thirteen hosts are in the table. Four have a gated live file of their own: claude, codex, opencode and kimi. Each file has a validator
-// tier (the host's own commands parse, and for three hosts launch, what the real recipe wrote into an isolated home) and, for claude,
-// codex and opencode, a production tier. The production tier of claude and opencode is the host's own health check (`<host> mcp list`),
-// which performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The production tier of codex is a session
-// drive (`codex exec` against a refusing loopback provider, no credential; 31-CONTEXT D-31-02) that makes Codex launch the registered
-// server and list its tools. In every production run the registered `realm` is a wire recorder (test/support/host-live-session.ts) that
-// logs method names and tool names. The nine wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline) share one
+// Sixteen hosts are in the table. Five have a gated live file of their own: claude, codex, opencode, kimi and kimi-code. The two Kimi
+// products share the command name `kimi`, so the gate tells them apart by the installed version (the legacy Python CLI is 1.x, Kimi Code
+// is 2.x or newer). Each file has a validator tier (the host's own commands parse, and for some hosts launch, what the real recipe wrote
+// into an isolated home) and a production tier. The production tier of claude and opencode is the host's own health check
+// (`<host> mcp list`), which performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the
+// production stack; that of kimi is a command drive (`kimi mcp test realm`, 43-CONTEXT). The production tier of codex and kimi-code is a
+// session drive (`codex exec`, `kimi -p` against a refusing loopback provider; 31-CONTEXT D-31-02, and for kimi-code one fixed non-secret
+// key) that makes the host launch the registered server and list its tools. In every production run the registered `realm` is a wire
+// recorder (test/support/host-live-session.ts) that logs method names and tool names. The eleven wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline, prime-agent, grok-build) share one
 // table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08).
 // Antigravity has no live file at all (ANTIGRAVITY_GAP).
 //
@@ -16,7 +18,8 @@
 //   3. the host executable exists: REALM_<HOST>_BIN (an absolute path) or the default name on PATH
 //   4. `<bin> --version` runs and prints an x.y.z version (a broken install, such as the Hermes one of E-HM2, fails here)
 //   5. the host has a minimum version (`minVersion`, pi 1.3.0) and the installed one is older
-//   6. kimi only: the installed kimi is not the archived Python stub
+//   6. kimi and kimi-code only: the installed kimi is not the archived Python stub, and it is the product the row covers (kimi needs a
+//      major version below 2, kimi-code a major version of 2 or more)
 //   7. the built CLI dist/src/cli/main.js exists
 //   8. production tier only: the host has a production tier, then productionSkipReason (Podman, image, driver, sockets), then
 //      no Realm receipt for the host in the shared state directory
@@ -26,7 +29,7 @@
 // are covered by test/integration/host-live-helpers.test.ts, which always runs without a host CLI, Podman or a network.
 //
 // Exports (the live files and the helper test import exactly these names):
-//   HOST_LIVE, LIVE_HOST_IDS, type LiveHostId          the frozen per-host table (KIMI_CODE_GAP, ANTIGRAVITY_GAP, CONFIG_ONLY_GAP: its fixed gap sentences)
+//   HOST_LIVE, LIVE_HOST_IDS, type LiveHostId          the frozen per-host table (ANTIGRAVITY_GAP, CONFIG_ONLY_GAP: its fixed gap sentences)
 //   hostLiveSkipReason, collectHostLiveGate            the pure gate and the probe-and-decide wrapper the live files call
 //   parseHostVersion, compareVersions, resolveExecutable   version parsing and comparison, and executable lookup
 //   writeStubRealm, readStubArgv                       the stub `realm` that records its argv, and the reader of that record
@@ -34,7 +37,7 @@
 //   runHost, describeRun, requireReturned              the bounded process-group runner and its result helpers
 //   Capture, signalGroup, shellQuote, the two grace constants   the runner pieces test/support/host-live-session.ts reuses
 //   createHostRig                                      one isolated root with the stub, a state directory and the realm CLI
-//   runHostProduction                                  the shared production-tier scenario of claude, codex and opencode
+//   runHostProduction                                  the shared production-tier scenario of claude, codex, opencode, kimi and kimi-code
 //   bootPhaseCountsOf                                  the per-phase boot report counts of one host in `realm metrics` output
 //   fileSha256, stripAnsi, cliJson, refusalReasonOf, ownedTableOf, processAlive   small helpers of the live files
 
@@ -79,8 +82,8 @@ import { scaledMs } from "./timing.js";
 
 // ---- The per-host table ----------------------------------------------------------------------------------------------------
 
-export type LiveHostId = "claude" | "codex" | "opencode" | "kimi" | "qwen" | "pi" | "hermes" | "cursor" | "kilo" | "copilot" | "augment" | "codebuddy" | "cline";
-export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline"] as const);
+export type LiveHostId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code" | "qwen" | "pi" | "hermes" | "cursor" | "kilo" | "copilot" | "augment" | "codebuddy" | "cline" | "prime-agent" | "grok-build";
+export const LIVE_HOST_IDS: readonly LiveHostId[] = Object.freeze(["claude", "codex", "opencode", "kimi", "kimi-code", "qwen", "pi", "hermes", "cursor", "kilo", "copilot", "augment", "codebuddy", "cline", "prime-agent", "grok-build"] as const);
 export type HostLiveTier = "validator" | "production";
 
 export interface HostLiveSpec {
@@ -185,8 +188,22 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
     recordedVersion: "1.51.0",
     minVersion: null,
     launchesOnValidate: true,
-    productionTier: false,
-    productionGap: "the Python Kimi CLI is archived: its last release is a deprecation stub, so no session can run",
+    productionTier: true,
+    productionGap: null,
+  }),
+  // Kimi Code (the 2.x product) shares the command name `kimi` with the legacy Python CLI; hostLiveSkipReason tells them apart by version.
+  // It documents no command that launches a registered server (43-CONTEXT E-43-06), so its validator tier proves the session instead.
+  "kimi-code": Object.freeze({
+    optIn: "REALM_LIVE_KIMI_CODE",
+    binOverride: "REALM_KIMI_CODE_BIN",
+    defaultBinary: "kimi",
+    displayName: "Kimi Code",
+    versionArgs: Object.freeze(["--version"]),
+    recordedVersion: "2.6.3",
+    minVersion: null,
+    launchesOnValidate: false,
+    productionTier: true,
+    productionGap: null,
   }),
   qwen: wave2Spec({ optIn: "REALM_LIVE_QWEN", binOverride: "REALM_QWEN_BIN", defaultBinary: "qwen", displayName: "Qwen Code", recordedVersion: "0.22.0", launchesOnValidate: true }),
   // pi below 1.3.0 has no MCP and ignores mcp.json (E-PI2): the floor skips it.
@@ -198,10 +215,11 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
   augment: wave2Spec({ optIn: "REALM_LIVE_AUGMENT", binOverride: "REALM_AUGMENT_BIN", defaultBinary: "auggie", displayName: "Augment (Auggie)", recordedVersion: "1.2.1", launchesOnValidate: false }),
   codebuddy: wave2Spec({ optIn: "REALM_LIVE_CODEBUDDY", binOverride: "REALM_CODEBUDDY_BIN", defaultBinary: "codebuddy", displayName: "CodeBuddy Code", recordedVersion: "2.185.0", launchesOnValidate: true }),
   cline: wave2Spec({ optIn: "REALM_LIVE_CLINE", binOverride: "REALM_CLINE_BIN", defaultBinary: "cline", displayName: "Cline CLI", recordedVersion: "3.0.74", launchesOnValidate: false }),
+  // Phase 40 (40-CONTEXT D-40-07): `prime-agent mcp list|get` print the name and the transport only and start nothing (E-40-06); `grok mcp doctor`
+  // starts the registered server (E-40-08), `grok mcp list` does not.
+  "prime-agent": wave2Spec({ optIn: "REALM_LIVE_PRIME_AGENT", binOverride: "REALM_PRIME_AGENT_BIN", defaultBinary: "prime-agent", displayName: "Prime Agent", recordedVersion: "0.10.2", launchesOnValidate: false }),
+  "grok-build": wave2Spec({ optIn: "REALM_LIVE_GROK_BUILD", binOverride: "REALM_GROK_BUILD_BIN", defaultBinary: "grok", displayName: "Grok Build", recordedVersion: "1.0.77", launchesOnValidate: true }),
 });
-
-// The sentence of the Kimi Code gap, written once so the live file and the helper test agree.
-export const KIMI_CODE_GAP = "Kimi Code documents no validator command and no listing command (24-CONTEXT E-K5); its recipe is proven on a fixture host only";
 
 // The sentence of the Antigravity gap: no live file exists for it, because `agy` was never observed.
 export const ANTIGRAVITY_GAP =
@@ -228,13 +246,15 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-// A product word only for a host whose `--version` prints another x.y.z before the product's own; none of the nine wave-2 hosts does
+// A product word only for a host whose `--version` prints another x.y.z before the product's own; none of the eleven wave-2 hosts does
 // (a date or a commit hash follows the version: `2026.11.13-eacade1`, `v0.23.2 (2026.11.13)`).
 const PRODUCT_WORDS: Readonly<Record<LiveHostId, RegExp | undefined>> = Object.freeze({
   claude: /Claude Code/i,
   codex: /codex-cli/i,
   opencode: undefined,
   kimi: /kimi/i,
+  // `kimi --version` of Kimi Code prints a bare version (2.6.3, no product word; 43-CONTEXT E-43-08).
+  "kimi-code": undefined,
   qwen: undefined,
   pi: undefined,
   hermes: undefined,
@@ -244,6 +264,9 @@ const PRODUCT_WORDS: Readonly<Record<LiveHostId, RegExp | undefined>> = Object.f
   augment: undefined,
   codebuddy: undefined,
   cline: undefined,
+  "prime-agent": undefined,
+  // `grok --version` prints `grok 1.0.77 (50ca579fa996) [stable]`: the first x.y.z is the product's own, the commit hash has no dots.
+  "grok-build": undefined,
 });
 
 // The first x.y.z of `<bin> --version`: the one on the line that names the product when there is one (`2.1.322 (Claude Code)`,
@@ -313,8 +336,16 @@ export function hostLiveSkipReason(host: LiveHostId, tier: HostLiveTier, inputs:
   if (spec.minVersion !== null && compareVersions(parsed, spec.minVersion) < 0) {
     return `${spec.displayName} ${parsed} is below ${spec.minVersion}, the first release with built-in MCP; a recipe for it would be silently ignored (25-CONTEXT E-PI2)`;
   }
-  if (host === "kimi" && inputs.versionProbe.stdout.includes(KIMI_STUB_MARKER)) {
+  if ((host === "kimi" || host === "kimi-code") && inputs.versionProbe.stdout.includes(KIMI_STUB_MARKER)) {
     return "the installed kimi is the archived Python stub, which writes no configuration and answers no subcommand";
+  }
+  // The two Kimi products share the command name: the major version says which one is installed.
+  const major = Number.parseInt(parsed.split(".")[0] ?? "", 10);
+  if (host === "kimi" && major >= 2) {
+    return `the installed kimi is Kimi Code (${parsed}), not the legacy Python CLI this row covers; point ${spec.binOverride} at the pinned legacy package kimi-cli 1.51.0`;
+  }
+  if (host === "kimi-code" && major < 2) {
+    return `the installed kimi is the legacy Python CLI (${parsed}), not Kimi Code; point ${spec.binOverride} at the npm package @moonshot-ai/kimi-code`;
   }
   if (!inputs.cliBuilt) {
     return "the built CLI dist/src/cli/main.js is missing; run npm run build first";
@@ -520,6 +551,7 @@ export const HOST_OVERRIDE_VARIABLES: Readonly<Record<LiveHostId, readonly strin
   codex: Object.freeze(["CODEX_HOME"]),
   opencode: Object.freeze([] as string[]),
   kimi: Object.freeze(["KIMI_SHARE_DIR"]),
+  "kimi-code": Object.freeze(["KIMI_CODE_HOME"]),
   qwen: Object.freeze(["QWEN_HOME"]),
   pi: Object.freeze(["PI_CODING_AGENT_DIR"]),
   hermes: Object.freeze(["HERMES_HOME"]),
@@ -530,6 +562,9 @@ export const HOST_OVERRIDE_VARIABLES: Readonly<Record<LiveHostId, readonly strin
   augment: Object.freeze(["AUGMENT_CACHE_DIR"]),
   codebuddy: Object.freeze(["CODEBUDDY_CONFIG_DIR"]),
   cline: Object.freeze(["CLINE_DIR"]),
+  "prime-agent": Object.freeze(["PRIME_AGENT_CODING_AGENT_DIR"]),
+  // Grok Build documents no relocation variable (40-CONTEXT E-40-08): its isolated runs set HOME, which the isolated environment always does.
+  "grok-build": Object.freeze([] as string[]),
 });
 
 export interface IsolatedHostEnvOptions {
@@ -874,17 +909,36 @@ export interface HostSessionDrive {
   readonly kind: "session";
   readonly provider: RefusingProvider;
   readonly args: readonly string[];
+  // Variables added to the host command's environment only, never to the realm commands the runner runs (Kimi Code needs a key variable
+  // and a base URL to define a provider at all; 43-CONTEXT E-43-08).
+  readonly env?: Readonly<Record<string, string>>;
+  // none (the default): the host must send no Authorization header. fixed-key: the host may send the one fixed non-secret key the provider
+  // was started with (`startRefusingProvider({ expectedKey })`) and every header it sends must carry exactly that key.
+  readonly credential?: "none" | "fixed-key";
 }
 
+// The command drive: the host command is the host binary run with `args` (a health check that launches the registered server and exits,
+// `kimi mcp test realm`). `restore` names the scenario variables the host does not forward to a stdio server (the legacy Kimi CLI
+// forwards HOME and PATH only, 43-CONTEXT E-43-09): the wire recorder gives them back to the server and logs the names, never a value.
+export interface HostCommandDrive {
+  readonly kind: "command";
+  readonly args: readonly string[];
+  readonly restore: readonly string[];
+}
+
+export type HostDrive = HostSessionDrive | HostCommandDrive;
+
+export type HostProductionId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code";
+
 export interface HostProductionOptions {
-  readonly host: "claude" | "codex" | "opencode";
+  readonly host: HostProductionId;
   // The resolved absolute host executable and the compiled CLI beside the compiled tests.
   readonly bin: string;
   readonly cliPath: string;
   readonly env: EnvironmentLike;
   // The operator's real host configuration file: its sha256 must be equal before and after the run.
   readonly realFile: (home: string) => string;
-  readonly drive?: HostSessionDrive;
+  readonly drive?: HostDrive;
 }
 
 // The line(s) of a host listing that name the realm server.
@@ -926,12 +980,44 @@ function presenceEntries(stateDir: string, host: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-// The production-tier scenario of claude, codex and opencode. The default drive is the real host's own health check (`<host> mcp list`):
-// it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The session drive (codex) runs the host as a
+// The host's own configuration home inside the scenario, created here: Claude a `cfg` directory named by CLAUDE_CONFIG_DIR, Codex a
+// `codex` directory named by CODEX_HOME, OpenCode the `opencode` directory beside the scenario's realm/config.json (both tools read
+// their own subdirectory of one XDG_CONFIG_HOME), Kimi a `kimi` directory named by KIMI_SHARE_DIR, Kimi Code a `kimi-code` directory named
+// by KIMI_CODE_HOME. Returns the override variables to add to the scenario environment. A host that is none of these is a programming error.
+export function productionOverrides(host: HostProductionId, scenarioRoot: string, configHome: string): Record<string, string> {
+  const overrides: Record<string, string> = {};
+  switch (host) {
+    case "claude":
+      overrides["CLAUDE_CONFIG_DIR"] = join(scenarioRoot, "cfg");
+      break;
+    case "codex":
+      overrides["CODEX_HOME"] = join(scenarioRoot, "codex");
+      break;
+    case "opencode":
+      mkdirSync(join(configHome, "opencode"), { recursive: true });
+      break;
+    case "kimi":
+      overrides["KIMI_SHARE_DIR"] = join(scenarioRoot, "kimi");
+      break;
+    case "kimi-code":
+      overrides["KIMI_CODE_HOME"] = join(scenarioRoot, "kimi-code");
+      break;
+    default:
+      throw new Error(`no production configuration home is defined for host ${String(host)}`);
+  }
+  for (const dir of Object.values(overrides)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  return overrides;
+}
+
+// The production-tier scenario of claude, codex, opencode, kimi and kimi-code. The default drive is the real host's own health check (`<host> mcp list`):
+// it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The session drive (codex, kimi-code) runs the host as a
 // session against a refusing loopback provider and ends it once the daemon shows the boot and the recorder shows the tool listing. The
+// command drive (kimi) runs `kimi mcp test realm` and gives the recorder the scenario variables the legacy CLI does not forward. The
 // registered `realm` is a wire recorder: it forwards the stream to the real CLI and logs method names and tool names. The gate has
-// already passed. The host's configuration home is isolated (CLAUDE_CONFIG_DIR, CODEX_HOME, or the scenario's own XDG_CONFIG_HOME for
-// opencode); HOME stays the account's, because the daemon the host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile
+// already passed. The host's configuration home is isolated (CLAUDE_CONFIG_DIR, CODEX_HOME, KIMI_SHARE_DIR, KIMI_CODE_HOME, or the
+// scenario's own XDG_CONFIG_HOME for opencode); HOME stays the account's, because the daemon the host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile
 // HOME). The operator's real host file must be byte-equal afterwards. No model turn happens and no credential is used.
 export async function runHostProduction(t: TestContext, options: HostProductionOptions): Promise<void> {
   const { host } = options;
@@ -1010,29 +1096,26 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     }
   });
 
-  // The host's own configuration home. Claude: a directory of the scenario named by CLAUDE_CONFIG_DIR. Codex: a directory of the
-  // scenario named by CODEX_HOME. OpenCode: the `opencode` directory beside the scenario's realm/config.json, so both tools read their
-  // own subdirectory of one XDG_CONFIG_HOME.
-  const overrides: Record<string, string> = {};
-  if (host === "claude") {
-    const claudeDir = join(scenario.root, "cfg");
-    mkdirSync(claudeDir);
-    overrides["CLAUDE_CONFIG_DIR"] = claudeDir;
-  } else if (host === "codex") {
-    const codexDir = join(scenario.root, "codex");
-    mkdirSync(codexDir);
-    overrides["CODEX_HOME"] = codexDir;
-  } else {
-    mkdirSync(join(configHome, "opencode"), { recursive: true });
-  }
+  // The host's own configuration home (productionOverrides).
+  const overrides = productionOverrides(host, scenario.root, configHome);
   const shimDir = join(scenario.root, "shim");
   const wireLog = join(scenario.root, "wire.log");
-  writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog });
   // The production PATH stays ahead of the host binary's directory: the host spawns `realm mcp`, which probes `podman --version`, and
   // the production Podman 5 sits early on that PATH while the host's own directory (for example /usr/bin) may hold Podman 4.
   const productionPath = inputs.hostEnvironment["PATH"];
   const pathValue = [shimDir, productionPath, dirname(options.bin)].filter((entry): entry is string => entry !== undefined && entry !== "").join(delimiter);
   const env: Readonly<Record<string, string>> = { ...scenario.cliEnvironment, PATH: pathValue, ...overrides };
+  // The names a command drive gives back to the server: each must exist in the scenario environment, else the drive is wrong.
+  const { drive } = options;
+  const restoreEnv: Record<string, string> = {};
+  for (const name of drive?.kind === "command" ? drive.restore : []) {
+    const value = env[name];
+    if (value === undefined) {
+      throw new Error(`the command drive restores ${name}, which the scenario environment does not define`);
+    }
+    restoreEnv[name] = value;
+  }
+  writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog, ...(drive?.kind === "command" ? { restoreEnv } : {}) });
 
   const realmHost = (words: readonly string[]): Promise<CliResult> => runCli(["host", ...words], { env, now: () => new Date() });
   const realmStatus = (): Promise<CommandResult> => realmCliWithWorkspace(inputs, scenario, ["status"], projectDir, REALM_COMMAND_TIMEOUT_MS);
@@ -1064,7 +1147,6 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   // Podman 5 must come first). A health check connects, lists the tools and leaves before the realm is ready, and that is correct: the
   // host tiers assert the connect within COLD_CONNECT_BOUND_MS and the six tools on the wire, not readiness. The recorder's wire summary
   // is what the tool listing is asserted from; the ready transition on one connection is proved by the cold attach probe.
-  const { drive } = options;
   const wireText = (): string => {
     const summary = wireSummary(readWireLog(wireLog));
     return `host methods [${summary.hostMethods.join(", ")}], tools [${summary.toolNames.join(", ")}]`;
@@ -1084,6 +1166,23 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     const connectMs = Date.now() - startedAt;
     t.diagnostic(`${host} mcp list returned after ${String(connectMs)} ms (the cold connect bound is ${String(COLD_CONNECT_BOUND_MS)} ms)`);
     assert.ok(connectMs < COLD_CONNECT_BOUND_MS, `${host} mcp list must return below ${String(COLD_CONNECT_BOUND_MS)} ms on a cold attach; it took ${String(connectMs)} ms`);
+  } else if (drive.kind === "command") {
+    // The host's own command (`kimi mcp test realm`): it launches the registered server through the recorder, connects, lists the tools
+    // and returns. The legacy CLI's success wording is not known in advance (43-CONTEXT OQ-43-02), so no connected word is asserted:
+    // the exit code, the elapsed time and the wire carry the proof, and the first line of its output is recorded.
+    const ran = await runHost(options.bin, drive.args, env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
+    const label = `${host} ${drive.args.join(" ")}`;
+    requireReturned(ran, label);
+    assert.equal(ran.exitCode, 0, `${label}: ${describeRun(ran)}`);
+    const commandMs = Date.now() - startedAt;
+    const firstLine =
+      stripAnsi(`${ran.stdout}\n${ran.stderr}`)
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line !== "") ?? "";
+    t.diagnostic(`${label} printed: ${JSON.stringify(firstLine.slice(0, 200))}`);
+    t.diagnostic(`${label} returned after ${String(commandMs)} ms; the recorder restored [${wireSummary(readWireLog(wireLog)).restoredNames.join(", ")}]`);
+    assert.ok(commandMs < COLD_CONNECT_BOUND_MS, `${label} must return below ${String(COLD_CONNECT_BOUND_MS)} ms on a cold attach; it took ${String(commandMs)} ms`);
   } else {
     // A session may or may not outlive its handshake. While it runs, poll for the boot evidence (the recorder shows the tool listing,
     // `realm status` answers active and the daemon counts an attached boot report) and end the process group once it holds. A host that
@@ -1101,7 +1200,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
       const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
       return metrics.exitCode === 0 && attachedBootsOf(metrics.stdout, host) >= 1;
     };
-    const session = await runHostUntil(options.bin, drive.args, env, projectDir, { ready: bootSeen, timeoutMs: scaledMs(REAL_HOST_TIMEOUT_MS), pollMs: POLL_INTERVAL_MS });
+    const session = await runHostUntil(options.bin, drive.args, { ...env, ...drive.env }, projectDir, { ready: bootSeen, timeoutMs: scaledMs(REAL_HOST_TIMEOUT_MS), pollMs: POLL_INTERVAL_MS });
     if (session.endedBy === "exit") {
       // The host ended on its own, typically before the realm was ready: a health-check style exit must not need a started sandbox, so
       // this is a boot attach when the wire shows the handshake and tools/list with the six names. Readiness is not asserted (the
@@ -1130,13 +1229,22 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   assert.equal(summary.answered, true, `the host must have listed the Realm tools through the recorder: ${wireText()}`);
   assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools: ${wireText()}`);
 
-  if (drive !== undefined) {
-    // The provider saw no credential and no foreign peer. Counts, flags and addresses only: never a header value.
+  if (drive?.kind === "session") {
+    // The provider saw no foreign credential and no foreign peer. Counts, flags and addresses only: never a header value.
     const requests = drive.provider.requests();
     const peers = [...new Set(requests.map((request) => request.peer))];
     const withAuthorization = requests.filter((request) => request.authorization).length;
-    t.diagnostic(`${host} provider: ${String(requests.length)} request(s), ${String(withAuthorization)} with an Authorization header, peers [${peers.join(", ")}]`);
-    assert.equal(withAuthorization, 0, `the refusing provider must never see an Authorization header (${String(withAuthorization)} request(s) carried one)`);
+    if (drive.credential === "fixed-key") {
+      // The one fixed non-secret key of the rehearsal: every header a host sends must carry exactly that literal.
+      const matched = requests.filter((request) => request.matchesKey === true).length;
+      const mismatched = requests.filter((request) => request.matchesKey === false).length;
+      t.diagnostic(`${host} provider: ${String(requests.length)} request(s), ${String(withAuthorization)} with an Authorization header, ${String(matched)} with the fixed key, peers [${peers.join(", ")}]`);
+      assert.equal(withAuthorization, matched + mismatched, "the refusing provider must have been started with the fixed key (expectedKey) to judge the Authorization headers");
+      assert.equal(mismatched, 0, `every credential-bearing request must carry the fixed non-secret key (${String(mismatched)} request(s) carried another one)`);
+    } else {
+      t.diagnostic(`${host} provider: ${String(requests.length)} request(s), ${String(withAuthorization)} with an Authorization header, peers [${peers.join(", ")}]`);
+      assert.equal(withAuthorization, 0, `the refusing provider must never see an Authorization header (${String(withAuthorization)} request(s) carried one)`);
+    }
     for (const peer of peers) {
       assert.ok(isLoopbackPeer(peer), `the refusing provider must only see loopback peers; saw ${peer}`);
     }

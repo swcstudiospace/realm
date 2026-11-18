@@ -310,7 +310,7 @@
     {
       "file": "src/host/boot-report.ts",
       "name": "BOOT_REPORT_HOSTS",
-      "reason": "D-1306 test-only seam: the closed host vocabulary (the 19 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
+      "reason": "D-1306 test-only seam: the closed host vocabulary (the 22 ids plus unlabelled), pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived BootReportHost type"
     },
     {
       "file": "src/host/boot-report.ts",
@@ -714,11 +714,6 @@
     },
     {
       "file": "src/runtime/libpod-client.ts",
-      "name": "FORCE_REMOVE_STOP_GRACE_SECONDS",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/libpod-client.ts",
       "name": "LibpodInfo",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -891,11 +886,6 @@
       "file": "src/tools/dispatch.ts",
       "name": "TOOL_CALL_TIMEOUT_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/runtime/libpod-client.ts",
-      "name": "DEFAULT_REQUEST_TIMEOUT_MS",
-      "reason": "D-1306 test-only seam: the libpod client's default per-request bound, pinned by the libpod client tests; its only other importer was the removed Anda bridge"
     }
   ]
 }

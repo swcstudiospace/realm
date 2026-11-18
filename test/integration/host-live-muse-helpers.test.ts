@@ -8,15 +8,18 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
+  countProcessesNamed,
   MUSE_BIN_VARIABLE,
   MUSE_OPT_IN,
   MUSE_PLUGIN_VALID_PATTERN,
   museEntryProblem,
   museGateReason,
   type MuseGateInputs,
+  museInstalledProblem,
   museIsolatedEnv,
   museListProblem,
   museSettingsText,
+  museUninstallExpectation,
   parseMuseVersion,
 } from "../support/host-live-muse.js";
 
@@ -31,7 +34,7 @@ function snippetObject(): Record<string, unknown> {
 
 // The entry object of a freshly parsed snippet, for a mutant to change.
 function realmEntry(settings: Record<string, unknown>): Record<string, unknown> {
-  const servers = settings["mcp_servers"] as Record<string, Record<string, unknown>>;
+  const servers = settings["mcpServers"] as Record<string, Record<string, unknown>>;
   const entry = servers["realm"];
   assert.ok(entry !== undefined);
   return entry;
@@ -56,13 +59,22 @@ void test("V1LIVE-01 museSettingsText accepts the adapter snippet and refuses ev
   const mutants: readonly (readonly [string, (settings: Record<string, unknown>) => void, RegExp])[] = [
     ["command changed", (s) => { realmEntry(s)["command"] = "/usr/bin/realm"; }, /command/],
     ["args empty", (s) => { realmEntry(s)["args"] = []; }, /args/],
-    ["args with an extra element", (s) => { realmEntry(s)["args"] = ["mcp", "--host", "muse"]; }, /args/],
-    ["mode removed", (s) => { delete realmEntry(s)["mode"]; }, /lacks mode/],
-    ["enabled false", (s) => { realmEntry(s)["enabled"] = false; }, /enabled/],
-    ["transport streamable_http", (s) => { realmEntry(s)["transport"] = "streamable_http"; }, /transport/],
+    ["args without the host flag", (s) => { realmEntry(s)["args"] = ["mcp"]; }, /args/],
+    ["args with a changed label", (s) => { realmEntry(s)["args"] = ["mcp", "--host", "claude"]; }, /args/],
+    ["args with an extra element", (s) => { realmEntry(s)["args"] = ["mcp", "--host", "muse-code", "--x"]; }, /args/],
+    ["required removed", (s) => { delete realmEntry(s)["required"]; }, /lacks required/],
+    ["required false", (s) => { realmEntry(s)["required"] = false; }, /required/],
+    ["type changed", (s) => { realmEntry(s)["type"] = "streamable_http"; }, /type/],
+    ["the old transport member", (s) => { realmEntry(s)["transport"] = "stdio"; }, /unexpected key: transport/],
+    ["the old enabled member", (s) => { realmEntry(s)["enabled"] = true; }, /unexpected key: enabled/],
+    ["the old mode member", (s) => { realmEntry(s)["mode"] = "required"; }, /unexpected key: mode/],
     ["schema_version 2", (s) => { s["schema_version"] = 2; }, /schema_version/],
-    ["a second server", (s) => { (s["mcp_servers"] as Record<string, unknown>)["other"] = { transport: "stdio", command: "other", args: [], enabled: true, mode: "required" }; }, /exactly the server realm/],
+    ["schema_version missing", (s) => { delete s["schema_version"]; }, /schema_version/],
+    ["the old spelling of the list", (s) => { s["mcp_servers"] = s["mcpServers"]; delete s["mcpServers"]; }, /unexpected top-level key: mcp_servers/],
+    ["both spellings", (s) => { s["mcp_servers"] = {}; }, /unexpected top-level key: mcp_servers/],
+    ["a second server", (s) => { (s["mcpServers"] as Record<string, unknown>)["other"] = { type: "stdio", command: "other", args: [] }; }, /exactly the server realm/],
     ["an extra key on the entry", (s) => { realmEntry(s)["env"] = {}; }, /unexpected key: env/],
+    ["an extra top-level key", (s) => { s["theme"] = "dark"; }, /unexpected top-level key: theme/],
   ];
   for (const [name, mutate, message] of mutants) {
     const settings = snippetObject();
@@ -86,7 +98,7 @@ void test("V1LIVE-01 the first json block of the Muse Code snippet page is the a
 // The object `muse mcp list --json` printed for the snippet on 2026-11-18 (Muse Code 1.4.23), plus keys the checks ignore.
 function measuredEntry(): Record<string, unknown> {
   return {
-    args: ["mcp"],
+    args: ["mcp", "--host", "muse-code"],
     auth: "none",
     command: "realm",
     cwd: null,
@@ -115,6 +127,8 @@ void test("V1LIVE-01 museEntryProblem and museListProblem accept the measured ob
     ["status", "disabled"],
     ["command", "/usr/bin/realm"],
     ["args", []],
+    ["args", ["mcp"]],
+    ["args", ["mcp", "--host", "claude"]],
     ["args", ["mcp", "--other"]],
   ];
   for (const [field, value] of fields) {
@@ -123,7 +137,7 @@ void test("V1LIVE-01 museEntryProblem and museListProblem accept the measured ob
     assert.ok(problem !== undefined && problem.includes(field), `${field}=${JSON.stringify(value)}: ${String(problem)}`);
     assert.notEqual(museListProblem({ servers: [entry] }), undefined, `${field} in a list`);
   }
-  assert.ok(museEntryProblem({ ...measuredEntry(), args: ["--x", "mcp"] }) === undefined, "args end with mcp");
+  assert.notEqual(museEntryProblem({ ...measuredEntry(), args: ["--x", "mcp", "--host", "muse-code"] }), undefined, "the argument list is exact, not a suffix");
   assert.notEqual(museListProblem({ servers: [] }), undefined);
   assert.match(String(museListProblem({ servers: [measuredEntry(), measuredEntry()] })), /2 servers/);
   assert.notEqual(museListProblem({}), undefined);
@@ -168,4 +182,36 @@ void test("V1LIVE-01 museIsolatedEnv holds exactly the isolated keys, all paths 
   assert.equal(env["LANG"], "C.UTF-8");
   assert.equal(env["TERM"], "dumb");
   assert.equal(Object.keys(env).filter((name) => /TOKEN|KEY|SECRET|PASSWORD|MUSE/.test(name)).length, 0);
+});
+
+void test("40-03 museInstalledProblem accepts the document of the snippet in any formatting and names a difference", () => {
+  assert.equal(museInstalledProblem(SNIPPET_TEXT, SNIPPET_TEXT), undefined);
+  assert.equal(museInstalledProblem(JSON.stringify(snippetObject()), SNIPPET_TEXT), undefined, "formatting is not part of the document");
+  const withoutSeed = snippetObject();
+  delete withoutSeed["schema_version"];
+  assert.match(String(museInstalledProblem(JSON.stringify(withoutSeed), SNIPPET_TEXT)), /differs from the shipped snippet/);
+  const relabelled = snippetObject();
+  realmEntry(relabelled)["args"] = ["mcp", "--host", "claude"];
+  assert.match(String(museInstalledProblem(JSON.stringify(relabelled), SNIPPET_TEXT)), /differs/);
+  const extra = snippetObject();
+  (extra["mcpServers"] as Record<string, unknown>)["other"] = { type: "stdio", command: "other-cmd", args: [] };
+  assert.match(String(museInstalledProblem(JSON.stringify(extra), SNIPPET_TEXT)), /differs/);
+  assert.equal(museInstalledProblem("{not json", SNIPPET_TEXT), "the installed settings file is not JSON");
+  assert.equal(museInstalledProblem(SNIPPET_TEXT, "{not json"), "the shipped snippet is not a valid Muse settings document");
+});
+
+void test("40-03 museUninstallExpectation says the file goes only when nothing but the seed and the realm entry are in it", () => {
+  assert.equal(museUninstallExpectation(SNIPPET_TEXT), "file-removed");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, mcpServers: { realm: {} } })), "file-removed");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, mcpServers: { realm: {}, other: {} } })), "file-kept");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1, theme: "dark", mcpServers: { realm: {} } })), "file-kept");
+  assert.equal(museUninstallExpectation(JSON.stringify({ schema_version: 1 })), "file-kept");
+  assert.equal(museUninstallExpectation("[]"), "unreadable");
+  assert.equal(museUninstallExpectation("{not json"), "unreadable");
+});
+
+void test("40-03 countProcessesNamed counts the processes of a command name from /proc and is 0 for a name nobody runs", { skip: process.platform !== "linux" }, () => {
+  assert.equal(countProcessesNamed("rlh-no-such-command"), 0);
+  const own = readFileSync("/proc/self/comm", "utf8").trim();
+  assert.ok(countProcessesNamed(own) >= 1, "this test process counts under its own command name");
 });

@@ -9,7 +9,7 @@ import type { ErrorCode, RealmError } from "../core/errors.js";
 import type { State } from "../core/states.js";
 import type { EnvironmentLike } from "../session/paths.js";
 
-// The 19 hosts: the Omp reference plus the 18 GSD Core installer flags.
+// The 22 hosts: the Omp reference, the 18 GSD Core installer flags and the three Realm-only hosts of Phase 40 (muse-code, prime-agent, grok-build).
 export const HOST_IDS = Object.freeze([
   "omp",
   "claude",
@@ -30,6 +30,9 @@ export const HOST_IDS = Object.freeze([
   "kimi-code",
   "zcode",
   "pi",
+  "muse-code",
+  "prime-agent",
+  "grok-build",
 ] as const);
 export type HostId = (typeof HOST_IDS)[number];
 
@@ -53,7 +56,17 @@ export interface HostHomeSpec {
 // Declared here, implemented by the installer. `file` and `dest` are relative to the resolved
 // home of role `homeRole` (default "config"); `source` is relative to the package adapters/ dir.
 export type InstallRecipe =
-  | { readonly kind: "json-merge"; readonly file: string; readonly keyPath: readonly string[]; readonly value: unknown; readonly homeRole?: HostHomeSpec["role"] }
+  | {
+      readonly kind: "json-merge";
+      readonly file: string;
+      readonly keyPath: readonly string[];
+      readonly value: unknown;
+      readonly homeRole?: HostHomeSpec["role"];
+      // Top-level members written ahead of the entry only when the install creates the file; an existing file never receives them.
+      readonly seed?: Readonly<Record<string, unknown>>;
+      // Top-level keys whose presence in the document refuses an install or reinstall (the host reads a rival spelling of the entry).
+      readonly refuseIfPresent?: readonly string[];
+    }
   | {
       readonly kind: "text-block";
       readonly file: string;

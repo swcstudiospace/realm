@@ -21,7 +21,7 @@ import { makeRealmError, type ErrorCode } from "../core/errors.js";
 import { packageVersion } from "../core/package-version.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { StateSnapshot } from "../core/state-machine.js";
-import { sleep, withTimeout } from "../core/timeout.js";
+import { sleep } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { bindRoot, type PinnedRoot } from "../fs/root.js";
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/bounds.js";
@@ -33,6 +33,7 @@ import { readHostProcStatus } from "../runtime/kernel-caps.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import { deleteSandbox } from "../runtime/openshell.js";
 import { readHostOciConfig } from "../runtime/seccomp-evidence.js";
+import { SANDBOX_DELETE_DEADLINE_MS } from "../runtime/teardown-stages.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -82,6 +83,7 @@ import {
   type SocketProbe,
   type StatusResult,
 } from "./seams.js";
+import { stopSessions } from "./teardown.js";
 import {
   catalogueCode,
   codeOf,
@@ -197,6 +199,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
     exec,
     clock,
     runOpenShell,
+    ...(options.teardownTimeoutMs !== undefined ? { teardownTimeoutMs: options.teardownTimeoutMs } : {}),
   });
 }
 
@@ -206,6 +209,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
 // anything is served.
 export async function startDaemon(options: StartDaemonOptions): Promise<StartedDaemon> {
   const timeoutMs = options.timeoutMs ?? SOCKET_TIMEOUT_MS;
+  const teardownBoundMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
   const libpod = libpodOf(options);
   // One supervisor per session: the caller's, or one built over the driver. A session's handle and the doctor probe share
   // its supervisor, so each session's supervision state is one object.
@@ -481,7 +485,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (entry !== null) {
       if (waiter) {
         const remaining = clientBoundMs("down") - (performance.now() - dispatchedAt) - replyAllowanceMs;
-        if (remaining < TEARDOWN_TIMEOUT_MS + replyAllowanceMs) {
+        if (remaining < teardownBoundMs + replyAllowanceMs) {
           throw makeRealmError("TOOL_TIMEOUT");
         }
       }
@@ -552,21 +556,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     downRequested = true;
     draining = true;
     await drainOthers();
-    let failure: ErrorCode | undefined;
-    let failedTeardowns = 0;
-    for (const entry of registry.values()) {
-      entry.health.dispose();
-      try {
-        // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
-        // reports for its own teardown bound; the catalogue has no teardown-timeout code.
-        await withTimeout(entry.handle.controller.stop(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
-      } catch (error: unknown) {
-        // Callers that stop the daemon without awaiting the stop discard its result; daemon.stopped carries the first failure code and the count.
-        const code = codeOf(error);
-        failedTeardowns += 1;
-        failure ??= code;
-      }
-    }
+    const { failure, failedTeardowns } = await stopSessions(registry.values(), teardownBoundMs);
     // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
     logger.info("daemon.stopped", { ...(failure === undefined ? {} : { code: failure }), failedTeardowns });
     server.close();
@@ -914,9 +904,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // The reap's container seams over the libpod client, and the adoption verdict each session record is judged by (startup.ts,
   // D-1409). The verdict resolves a record's workspace by the rules of a selection, so it is given resolveTarget.
   // The gateway sandbox of a container the startup reap removes is deleted with the production OpenShell runner, under the
-  // stop path's deadline (session-execution.ts SANDBOX_DELETE_DEADLINE_MS).
+  // stop path's deadline (SANDBOX_DELETE_DEADLINE_MS in runtime/teardown-stages.ts).
   const gatewayRunner = productionOpenShellRunner(options.env ?? {});
-  const gatewaySandboxDeadlineMs = 15_000;
   const reapSeams: StartupReapSeams = startupReapSeamsOver(
     libpod,
     adoptionVerdictOver({
@@ -930,7 +919,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       readProcStatus: options.readProcStatus ?? readHostProcStatus,
       resolve: resolveTarget,
     }),
-    (sandboxName: string) => deleteSandbox(gatewayRunner, sandboxName, gatewaySandboxDeadlineMs),
+    (sandboxName: string) => deleteSandbox(gatewayRunner, sandboxName, SANDBOX_DELETE_DEADLINE_MS),
   );
 
   // Hydrates one adopted session on the pin its workspace entry recorded at create, so a replaced directory is refused.

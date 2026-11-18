@@ -48,7 +48,7 @@ void test("BOOT-06: the vocabulary lists are the documented closed sets", () => 
   assert.deepEqual([...HOST_BOOT_PHASES], ["attached", "refused", "failed", "link-lost", "reattached", "closed"]);
   assert.deepEqual([...HOST_BOOT_TRANSPORTS], ["extension", "mcp", "acp"]);
   assert.deepEqual([...BOOT_REPORT_HOSTS], [...HOST_IDS, "unlabelled"]);
-  assert.equal(BOOT_REPORT_HOSTS.length, 20);
+  assert.equal(BOOT_REPORT_HOSTS.length, 23);
   assert.equal(isBootPhase("attached"), true);
   assert.equal(isBootPhase("nope"), false);
   assert.equal(isBootPhase(1), false);

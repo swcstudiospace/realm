@@ -309,7 +309,7 @@ void test(
     mkdirSync(join(stateDir, "real-hosts"));
     symlinkSync(join(stateDir, "real-hosts"), join(stateDir, "hosts"));
     const reports = await readAllPresence(stateDir);
-    assert.equal(reports.length, 19);
+    assert.equal(reports.length, 22);
     assert.ok(reports.every((report) => "error" in report && report.error === "PATH_ESCAPE"));
   }),
 );

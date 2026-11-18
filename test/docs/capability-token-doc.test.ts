@@ -141,7 +141,7 @@ void test("CAPT-09: the Q10 policy table equals the schema: defaults, bounds, ho
 
   assert.deepEqual(codeItems((byMember.get("profiles keys") ?? [])[1] ?? "").sort(), [...hosts].sort());
   assert.deepEqual(codeItems((byMember.get("profiles values") ?? [])[1] ?? "").sort(), [...capabilities].sort());
-  assert.equal(hosts.length, 19);
+  assert.equal(hosts.length, 22);
   assert.equal(capabilities.length, 6);
 });
 
@@ -252,15 +252,55 @@ void test("ENF-04: Q10 has the migration subsection between the unlabelled hosts
     "a missing policy file all enforce",
     "Who is affected",
     "Who is not affected",
-    "the 18 default manifests and the 15 install recipes",
+    "the 21 default manifests and the 18 install recipes",
     "No CLI command issues a tool call",
     "The stale-daemon note",
     "`capability.refused`",
     "the wire carries no reason",
     "Muse Code, Prime Agent and Grok Build",
+    "`muse-code`, `prime-agent`, `grok-build`",
     "GAP-34-01",
+    "GAP-40-01",
+    "realm host install grok-build",
   ]) {
     assert.ok(migration.includes(phrase), `the migration subsection says: ${phrase}`);
+  }
+});
+
+void test("HOSTID-03: the Q10 migration table tells an existing install of each of the three hosts the one command to run", () => {
+  const section = q10Section();
+  const migration = section.slice(section.indexOf("**Migrating to the enforced default.**"), section.indexOf("**Audit.**"));
+  const rows = migration.split("\n").filter((line) => line.startsWith("| "));
+  assert.ok(rows.length >= 8, `the migration table has its header, its delimiter and six rows: ${String(rows.length)} table lines`);
+  for (const phrase of [
+    "`realm host install muse-code`",
+    "`realm host install prime-agent`",
+    "`realm host install grok-build`",
+    "`muse mcp remove realm`",
+    "`prime-agent mcp remove realm`",
+    "`ambiguous_user_key`",
+    "`foreign-content`",
+    "`mcp_servers`",
+    "`mcpServers`",
+    "`profiles`",
+    "`realm host uninstall` removes only what the install wrote",
+  ]) {
+    assert.ok(migration.includes(phrase), `the migration table says: ${phrase}`);
+  }
+  const prose = proseOf(migration);
+  assert.ok(!/[<>]/.test(prose.replace(/^\|[- |]+\|$/gm, "")), "no raw angle token in the migration text outside code");
+});
+
+void test("HOSTID-03: each of the three snippet pages names the install command of its own id and no other host id in a launcher", () => {
+  const ids = ["muse-code", "prime-agent", "grok-build"] as const;
+  for (const id of ids) {
+    const page = read(`docs/hosts/snippets/${id}.md`);
+    assert.ok(page.includes(`realm host install ${id}`), `${id}: the page names its own install command`);
+    for (const other of ids.filter((candidate) => candidate !== id)) {
+      assert.ok(!page.includes(`--host ${other}`), `${id}: the page carries no launcher labelled ${other}`);
+    }
+    assert.ok(page.includes("`config-only`"), `${id}: the page states the tier`);
+    assert.ok(page.includes("GAP-40-01") || page.includes("GAP-34-01"), `${id}: the page names the gap row`);
   }
 });
 
@@ -289,16 +329,27 @@ void test("ENF-03: the Evidence limits paragraph names the observation date of t
   );
 });
 
-void test("ENF-03: GAP-34-01 is on the gaps page as an accepted residual naming the three hosts with no id", () => {
+void test("ENF-03: GAP-34-01 is closed on the gaps page, names the three hosts that gained an id and cites repository evidence", () => {
   const page = read("docs/integration/host-plugin-gaps.md");
   const row = page.split("\n").find((line) => line.startsWith("| GAP-34-01 |"));
   assert.ok(row !== undefined, "GAP-34-01 exists");
   const cells = cellsOf(row);
   assert.equal(cells[3], "accepted-residual");
-  assert.equal(cells[4], "accepted");
+  assert.equal(cells[4], "closed");
   for (const host of ["Muse Code", "Prime Agent", "Grok Build"]) {
     assert.ok((cells[2] ?? "").includes(host), `the row names ${host}`);
   }
+});
+
+void test("ENF-03: GAP-40-01 is an accepted residual naming Grok Build and the shared Claude configuration", () => {
+  const page = read("docs/integration/host-plugin-gaps.md");
+  const row = page.split("\n").find((line) => line.startsWith("| GAP-40-01 |"));
+  assert.ok(row !== undefined, "GAP-40-01 exists");
+  const cells = cellsOf(row);
+  assert.equal(cells[3], "accepted-residual");
+  assert.equal(cells[4], "accepted");
+  assert.ok((cells[2] ?? "").includes("Grok Build"), "the row names Grok Build");
+  assert.ok((cells[2] ?? "").includes("Claude"), "the row names the Claude configuration");
 });
 
 void test("ENF-03: the migration documents claim no advisory default, hold no host path and no raw angle-bracket token outside code", () => {
@@ -333,13 +384,16 @@ void test("ENF-03: the migration documents claim no advisory default, hold no ho
   }
 });
 
-void test("ENF-03: the README says which hosts are unlabelled and links Q10", () => {
+void test("ENF-03: the README names the three host ids, the opt-out, the same-user limit and links Q10", () => {
   const readme = read("README.md");
   const at = readme.indexOf("### Capability tokens are on by default");
   assert.ok(at >= 0, "the README has the subsection");
   const paragraph = readme.slice(at, readme.indexOf("## Documentation", at));
   assert.ok(paragraph.includes("`capabilityTokens.mode` set to `off`"), "the opt-out");
-  assert.ok(paragraph.includes("Muse Code, Prime Agent and Grok Build"), "the unlabelled hosts");
+  for (const id of ["muse-code", "prime-agent", "grok-build"]) {
+    assert.ok(paragraph.includes(`\`${id}\``), `the subsection names ${id}`);
+  }
+  assert.ok(!paragraph.includes("unlabelled hosts"), "no host is left unlabelled");
   assert.ok(paragraph.includes("does not stop a process of the same user"), "the same-user limit, no stronger than Q10");
   assert.ok(paragraph.includes("docs/integration/mcp.md"), "the link to Q10");
 });

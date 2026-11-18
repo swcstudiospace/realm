@@ -2,7 +2,7 @@
 // throwaway consumer, loads every JSON schema through the shipped validator, asserts that every host adapter file, every
 // compiled host plugin module (dist/src/host and the realm host command) and every file under adapters/ and licenses/ shipped
 // in the tarball, that the consumer can import the host runtime table and manifest modules and builds the default manifest of
-// all 19 hosts, and with --expect-version that the installed package and adapter manifests carry the release version.
+// all 22 hosts, and with --expect-version that the installed package and adapter manifests carry the release version.
 // The schemas are read at runtime from <package root>/src/..., so a tarball that
 // omits them fails here with ENOENT. Run `npm run build` first; check:pack does not build.
 //
@@ -67,7 +67,7 @@ export const HOST_MODULE_FILES = [
 // validate() compiles a schema on first use and throws if its file is missing.
 // Calling it with {} exercises all three schemas, and the result is never
 // inspected beyond its shape, since only the load matters here.
-// The host probe imports the runtime table and the manifest module, expects the 19 hosts, and builds each host's default
+// The host probe imports the runtime table and the manifest module, expects the 22 hosts, and builds each host's default
 // manifest (defaultManifestFor parses it through the strict manifest parser before it returns).
 const PROBE_SOURCE = `import { validate } from "agent-realm/dist/src/contract/validate.js";
 import { HOST_RUNTIMES } from "agent-realm/dist/src/host/runtimes.js";
@@ -82,8 +82,8 @@ for (const schema of ["policy", "tools", "sessionRecord"]) {
 console.log("schemas loaded: policy, tools, sessionRecord");
 
 const hostIds = Object.keys(HOST_RUNTIMES);
-if (hostIds.length !== 19) {
-  throw new Error("expected 19 hosts, found " + hostIds.length);
+if (hostIds.length !== 22) {
+  throw new Error("expected 22 hosts, found " + hostIds.length);
 }
 for (const id of hostIds) {
   if (parseHostPluginManifest(defaultManifestFor(id, "1.0.0")).hostId !== id) {

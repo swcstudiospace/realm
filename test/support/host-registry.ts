@@ -207,26 +207,44 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   }),
   // Source: contract page, Phase 25 table (T2: cline config mcp --json, parse only, no result recorded) and OQ-25-09.
   cline: record({ id: "cline", family: "json-merge", suites: [WAVE2_SUITE], snippet: "cline.md", live: "cline", t2: null, t3: WAVE2_T3, deferral: null }),
-  // Source: contract page, Phase 24 table: T2 not run (no kimi executable, the only published release is an inert stub); T3 gap (the Python CLI is archived; 31-CONTEXT E-31-9).
+  // Source: the Phase 43 live window of 2026-11-18 (43-02): the legacy Python Kimi CLI 1.51.0 from a scratch install outside the repository. T2 ran (2 of 2 passed).
+  // T3 ran and FAILED (the recorder saw no tool names): the note starts with "rehearsal failed", which the wave 1 page test reads as the failed disposition.
   kimi: record({
     id: "kimi",
     family: "json-merge",
     suites: ["test/host/kimi-recipe.test.ts"],
     snippet: "kimi.md",
     live: "kimi",
-    t2: null,
-    t3: { status: "gap", note: "the Python Kimi CLI is archived, its last release is a deprecation stub" },
+    t2: {
+      date: "2026-11-18",
+      version: "1.51.0",
+      result: "2 of 2 passed (validator 1 of 1: kimi mcp list prints realm, kimi mcp test launches the registered argv, kimi mcp remove leaves status drifted; validator session 1 of 1: kimi mcp test against a fake MCP server saw initialize, notifications/initialized and tools/list and the six tools; scratch install outside the repository, the archived legacy product)",
+      command: "kimi mcp list, kimi mcp test, kimi mcp remove",
+    },
+    t3: {
+      status: "gap",
+      note: "rehearsal failed: kimi 1.51.0 (the archived legacy Python CLI; Kimi Code is the supported product), 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: kimi mcp test realm exited 0 after 18225 ms, below the 25000 ms bound, and the wire shows initialize, notifications/initialized and tools/list but no tool names answered through the recorder, so the six-tools assertion failed; the cause is not established (GAP-43-03); kimi forwards only HOME and PATH to a stdio server, so the recorder restored XDG_RUNTIME_DIR, XDG_CONFIG_HOME and REALM_DRIVER_SOCKET for the server (GAP-43-01); the validator tier passed 2 of 2 the same day; the network use of the CLI is not measured (GAP-43-02); evidence kept outside the repository",
+    },
     deferral: null,
   }),
-  // Source: contract page, Phase 24 table: T2 not available (no validator command is documented); T3 gap (not run, none attempted). HOST_LIVE has no entry (KIMI_CODE_GAP).
+  // Source: the Phase 43 live window of 2026-11-18 (43-02): Kimi Code 2.6.3 from an npm scratch install outside the repository. No host validator command exists
+  // (`kimi mcp` is an unknown command, pinned by the validator test), so T2 is a session proof; T3 ran and passed.
   "kimi-code": record({
     id: "kimi-code",
     family: "json-merge",
     suites: ["test/host/kimi-recipe.test.ts"],
     snippet: "kimi.md",
-    live: null,
-    t2: null,
-    t3: { status: "gap", note: "functional product, not installed here, no MCP validator command documented (31-CONTEXT E-31-9)" },
+    live: "kimi-code",
+    t2: {
+      date: "2026-11-18",
+      version: "2.6.3",
+      result: "2 of 2 passed, as a session proof because no host validator command exists (validator 1 of 1: kimi doctor exits 0 and kimi mcp is an unknown command; validator session 1 of 1: kimi -p against a refusing loopback provider launched the registered server, which saw initialize, notifications/initialized and tools/list and the six tools, session ready after 12005 ms, the provider saw 0 requests; scratch install outside the repository)",
+      command: "kimi -p session, kimi doctor",
+    },
+    t3: {
+      status: "rehearsed",
+      note: "Kimi Code 2.6.3, 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: a kimi -p session against a loopback provider that refuses every request launched realm mcp --host kimi-code, the wire shows initialize, notifications/initialized and tools/list and the six Realm tools; the host command took 37405 ms because Kimi Code keeps retrying its model request, so the drive ended it after the boot was observed (the 25000 ms bound applies to the command drive of kimi only); the provider saw 6 requests, all carrying the one fixed placeholder key and from loopback peers; Kimi Code forwards its whole environment to the server, so the name of the placeholder key reaches realm mcp; the validator tier passed 2 of 2 the same day; no model turn and no tool call (GAP-31-02); the network use of the CLI is not measured (GAP-43-02); evidence kept outside the repository",
+    },
     deferral: null,
   }),
   // Deferred, owner-approved 2026-11-17 (25-CONTEXT D-25-02, OQ-25-03): deferred-hosts.md, "zcode".
@@ -242,6 +260,12 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   }),
   // Source: contract page, Phase 25 table (T2: pi mcp list, launches, skips below pi 1.3.0, no result recorded) and OQ-25-09.
   pi: record({ id: "pi", family: "json-merge", suites: [WAVE2_SUITE], snippet: "pi.md", live: "pi", t2: null, t3: WAVE2_T3, deferral: null }),
+  // Source: 40-CONTEXT D-40-02 and D-40-07 (the Phase 40 evidence E-40-02 to E-40-05). T2 is recorded by plan 40-03; no production tier is defined (D-40-06).
+  "muse-code": record({ id: "muse-code", family: "json-merge", suites: ["test/host/muse-code-recipe.test.ts"], snippet: "muse-code.md", live: null, t2: null, t3: WAVE2_T3, deferral: null }),
+  // Source: 40-CONTEXT D-40-02 (E-40-06). Its live tier is the wave-2 table (D-40-07); T2 is recorded by plan 40-03.
+  "prime-agent": record({ id: "prime-agent", family: "json-merge", suites: ["test/host/prime-agent-recipe.test.ts"], snippet: "prime-agent.md", live: "prime-agent", t2: null, t3: WAVE2_T3, deferral: null }),
+  // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). Its live tier is the wave-2 table (D-40-07); T2 is recorded by plan 40-03.
+  "grok-build": record({ id: "grok-build", family: "toml-table", suites: ["test/host/grok-build-recipe.test.ts"], snippet: "grok-build.md", live: "grok-build", t2: null, t3: WAVE2_T3, deferral: null }),
 });
 
 // The source text without block comments and without full-line double-slash comments, so a source check never matches a comment (a lesson of
