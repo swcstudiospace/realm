@@ -37,7 +37,7 @@ Which generation Realm targets is not decided here. Phase 5 decides and records 
 
 Sourced answer (v2 transports page, https://agentclientprotocol.com/protocol/v2/transports; v1 transports page is the same in substance):
 
-1. **stdio** (defined): the client launches the agent as a subprocess; newline-delimited JSON-RPC on stdin/stdout. Messages MUST NOT contain embedded newlines. The agent MUST NOT write anything to stdout that is not a valid ACP message. Stderr is for logs. Agents and clients SHOULD support stdio whenever possible.
+1. **stdio** (defined): the client launches the agent as a subprocess; newline-delimited JSON-RPC on stdin/stdout. Messages MUST NOT contain embedded newlines. The agent MUST NOT write anything to stdout that is not a valid ACP message. Stderr is for logs. Agents and clients SHOULD support stdio whenever possible. Realm's trust in the stdin of `realm acp` (and of `realm mcp`) is stated in Q11 of `docs/integration/mcp.md`.
 2. **Streamable HTTP** (not defined): listed as "draft proposal in progress". No normative binding exists in the pages read.
 3. **Custom transports**: permitted, if they preserve the JSON-RPC message format and lifecycle requirements.
 

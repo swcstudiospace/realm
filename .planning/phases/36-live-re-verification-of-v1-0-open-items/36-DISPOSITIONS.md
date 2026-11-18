@@ -2,7 +2,7 @@
 
 Recorded 2026-11-18 by Plans 36-02 and 36-03 (the date of every run below). Every row is final; Part C reconciles the list.
 
-Status vocabulary (36-CONTEXT D-36-08): Dropped (owner decision D-27-01); Closed: moot, not resolved (OI-04 only, no legal determination); Re-verified (dated run, command, commit); Closed by test (hermetic, dated); Re-verified, current contract form (OI-09 only); Closed: owner decision (accepted) (OI-13 only, if the owner accepts); Carried (named reason); Needs the owner (decision text proposed). No interim label remains.
+Status vocabulary (36-CONTEXT D-36-08): Dropped (owner decision D-27-01); Closed: moot, not resolved (OI-04 only, no legal determination); Re-verified (dated run, command, commit); Closed by test (hermetic, dated); Re-verified, current contract form (OI-09 only); Closed: owner decision (accepted) (OI-13 only, if the owner accepts); Carried (named reason); Re-verified (loaded host, thresholds failed) (OI-11 only: a mechanics run under load that failed its latency thresholds; owner decision of 2026-11-18, not a quiet-host measurement); Needs the owner (decision text proposed). No interim label remains.
 
 Evidence tiers (36-CONTEXT): O observed by reading a repository file or by command, R a recorded owner statement or verification record, M measured on this host in a run, I inference (also marked as such).
 
@@ -22,9 +22,9 @@ No label is stronger than its evidence: a result that rests on a record and not 
 | OI-08 | 06 row 11 | `Human Verification 5, Hermes Agent ~/.hermes/config.yaml entry` | Re-verified (dated run, command, commit) | M: the Plan 36-01 gate repair and the wave 2 hermes scenario of `test/integration/host-live-wave2.test.ts`, 1 passed (the other 8 hosts skipped by their unset opt-ins), 2026-11-18, Hermes Agent 0.23.1, base commit e32bb05, `REALM_LIVE_HERMES=1`. Run record in `36-01-SUMMARY.md`; the scenario was skipped before the repair because a fresh Hermes data root fails `--version`. |
 | OI-09 | 04 Human Verification 3 | `Live crash reap on the next start (SC1)` | Re-verified, current contract form | M: `production live 5` (`test/integration/production-driver.test.ts`), 1 of 1 passed, 2026-11-18, window run 3, main at 04ca807 (runs 1 and 2 failed in the harness first, findings F-1 and F-2); `production live 11`, 1 of 1 passed, 2026-11-18, window run 1, main at dbdbf23. The Phase 04 wording (remove everything at the next start) was superseded by decision D5; the checks are scenarios 5 and 11. Hermetic half in Part B. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
 | OI-10 | 04 Human Verification 5 | `Live policy acceptance and hung-exec timeout (SC2, SC4)` | Re-verified (dated run, command, commit) | M: `live closeout C`, 1 of 1 passed, 2026-11-18, window run 3, main at 04ca807 (runs 1 and 2 failed in the harness first, findings F-1 and F-2). The exec of `sleep 47` through `realm mcp` answered `TOOL_TIMEOUT` after 28083 ms, the sleeper was seen in flight (positive control), and none remained at the 14th poll after the reply; observation F-3 records that the sleeper was still present at the 13 polls before. The policy-acceptance half is cited from earlier production runs (scenario 3), not rerun. Window of 2026-11-18 (production stack, account realmlive, rootless Podman 5.7.1, shared live lock, one test at a time; Part B, section The window). |
-| OI-11 | 05 re-verification 1b | `The session UI stays responsive during startup (handler returned without awaiting)` (UI-01) | Carried (named reason) | Not measured: the cold-attach test refused to run because the host was not quiet, on all three tries of the window (1.67, 0.76 and 1.47 load per CPU, the bound is 0.5). The earlier mechanics run of Plan 36-01 was labelled LOADED (41 probes, 0 unanswered, maximum 114 ms) and is not a measurement. Lift condition: a quiet slot on the production stack. UI-01 stays the owner's call. |
+| OI-11 | 05 re-verification 1b | `The session UI stays responsive during startup (handler returned without awaiting)` (UI-01) | Re-verified (loaded host, thresholds failed) | M: loaded-host run of 2026-11-18 about 12:01 UTC, `test/integration/omp-responsiveness.test.ts` cold-attach test, 1 test, 0 pass, 1 fail (the thresholds): host load 8.16 on 8 CPUs before the baseline (1.02 per CPU, quiet ceiling 0.5), labelled loaded. Baseline (loaded): 41 probes, 0 unanswered, maximum 271 ms, median 6 ms, 95th percentile 201 ms, longest gap 514 ms. Cold attach (load 9.00 before the extension session): 97 probes over 24001 ms, 6 unanswered, maximum 9868 ms, median 18 ms, 95th percentile 8910 ms, longest gap 11369 ms, `realm active` reached. Not a quiet-host measurement; the cause (load or a blocking attach in the Omp path) is not established. Earlier on the same date the test refused to run on three tries (host not quiet). Carried as a finding into the candidate v5.1 phase "Omp responsiveness during cold attach". UI-01 stays the owner's call. Details in Part B. |
 | OI-12 | 07 re-verification row 7 | `Human item 3 (MCP half): "notifications take no reply, unusable ids diagnose only"` (security review 5.8) | Closed by test (hermetic, dated) | M: the two tests of `test/mcp/server.test.ts`, 2 of 2 passed on 2026-11-18, base commit e32bb057a9f6. Details in Part B. |
-| OI-13 | 07 row 10 | `Human item 3: "stdin-writer trust boundary (5.8 residual) accepted or mitigated"` | Needs the owner (decision text proposed) | No owner answer in this run (OQ-36-01). No docs file was changed. The proposed text and the lift condition are in Part B. |
+| OI-13 | 07 row 10 | `Human item 3: "stdin-writer trust boundary (5.8 residual) accepted or mitigated"` | Closed: owner decision (accepted), 2026-11-18 | R: the owner accepted the proposed text as proposed (option a) on 2026-11-18 (OQ-36-01). Recorded as Q11. Stdin trust boundary in `docs/integration/mcp.md`, with a pointer in Q2 of `docs/integration/acp.md`. Details in Part B. |
 | OI-14 | 07 row 12 | `Human item 4: "npm audit signatures, recompute each direct tarball SHA-512 against the lockfile integrity"` | Re-verified (dated run, command, commit) | M: scratch run of 2026-11-18, base commit e32bb057a9f6: `npm ci` exit 0, 145 verified registry signatures, 39 verified attestations, 10 of 10 direct tarballs equal. Details in Part B. |
 
 Anda bridge checks (tier O, run 2026-11-18 on the base commit, for OI-01 to OI-04). Nothing Anda was run and no Anda behaviour is claimed:
@@ -32,11 +32,11 @@ Anda bridge checks (tier O, run 2026-11-18 on the base commit, for OI-01 to OI-0
 - The directory `src/anda` does not exist (`test ! -e src/anda` holds).
 - A case-insensitive word-boundary search of `src` for `anda` and for the codes `ANDA_UNREACHABLE` and `ANDA_VERSION_MISMATCH` (generated protocol files excluded) finds no bridge code. The only hit is `src/runtime/config.ts` line 53, a refusal message for the removed config key `andaUrl`: "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json".
 
-Count: 14 rows, all final; none Pending. By label: Dropped 3 (OI-01 to OI-03), Closed: moot 1 (OI-04), Re-verified (dated run, command, commit) 6 (OI-05, OI-06, OI-07, OI-08, OI-10, OI-14), Re-verified, current contract form 1 (OI-09), Closed by test 1 (OI-12), Carried 1 (OI-11), Needs the owner 1 (OI-13).
+Count: 14 rows, all final; none Pending. By label: Dropped 3 (OI-01 to OI-03), Closed: moot 1 (OI-04), Re-verified (dated run, command, commit) 6 (OI-05, OI-06, OI-07, OI-08, OI-10, OI-14), Re-verified, current contract form 1 (OI-09), Closed by test 1 (OI-12), Re-verified (loaded host, thresholds failed) 1 (OI-11), Closed: owner decision (accepted) 1 (OI-13).
 
 ### Class notes
 
-Why OI-13 has its own possible label: a decision is recorded, not re-verified, so if the owner accepts the proposal the row reads Closed: owner decision (accepted). This label exists for OI-13 only.
+Why OI-13 has its own possible label: a decision is recorded, not re-verified, so the owner accepted the proposal on 2026-11-18, so the row reads Closed: owner decision (accepted). This label exists for OI-13 only.
 
 Methods of the live rows, copied in short from 36-CONTEXT D-36-02 to D-36-06 so that this file alone says what will be run:
 
@@ -81,14 +81,15 @@ Plan 36-02 filled OI-12, OI-14, OI-13 and the OI-09 hermetic half. Plan 36-03 re
 ### OI-13
 
 - Item (07 re-verification row 10): "stdin-writer trust boundary (5.8 residual) accepted or mitigated". The Phase 07 security review records it as a residual: the trust boundary is the process that launches the server. No later record states an acceptance or a mitigation.
-- Owner answer: none in this run (option d of the checkpoint; this is OQ-36-01). The executor decides nothing. No docs file was changed: `docs/integration/mcp.md` has no Q11 and `docs/integration/acp.md` is unchanged.
-- Proposed text, for the owner to accept, change or decline:
+- Owner answer: accepted as proposed (option a), 2026-11-18 (OQ-36-01). Until that answer no docs file was changed. The proposed text below is now the text of Q11 in `docs/integration/mcp.md`.
+- Proposed text, accepted by the owner on 2026-11-18 (now Q11 in `docs/integration/mcp.md`):
 
   The stdin of `realm mcp` and `realm acp` is trusted exactly as far as the process that launches the server. Whatever can write to that pipe is the client: Realm adds no authentication on the pipe. Where the capability token is checked, it limits what a labelled stdio host may call, but it is not a defence against another process of the same user that can write to the pipe, read the process environment or read the key file. This is the same-user limit already stated for capability tokens. Mitigation is outside the pipe: the launching host and the file modes of the control socket and state directories.
 
 - Options: (a) accept as proposed; (b) accept with changes (the owner supplies the text); (c) decline (the owner wants a mitigation, which becomes a requirement and a later phase, not part of this one); (d) no answer.
 - On (a) or (b): add subsection Q11. Stdin trust boundary to `docs/integration/mcp.md` after Q10 and before the Blocked module heading, with a line naming the date and the decision (owner decision of this phase, OQ-36-01) and the sources (Phase 07 security review item 5.8, Phase 07 re-verification row 10); add one sentence to the stdio paragraph of Q2 in `docs/integration/acp.md` pointing to it; no policy default or mode stated; then set the row to Closed: owner decision (accepted) with the date.
-- Lift condition for the carry: the owner accepts, or states a mitigation as a requirement.
+- Done on 2026-11-18 after the owner's answer: subsection Q11. Stdin trust boundary was added to `docs/integration/mcp.md` after Q10 and before the Blocked module heading, with the date, the decision and the sources; one sentence was added to the stdio item of Q2 in `docs/integration/acp.md` pointing to it; no policy default or mode is stated.
+- Status: Closed: owner decision (accepted), 2026-11-18. A decision is recorded, not re-verified; no run backs it.
 
 ### The window (Plan 36-03)
 
@@ -105,7 +106,8 @@ Plan 36-02 filled OI-12, OI-14, OI-13 and the OI-09 hermetic half. Plan 36-03 re
 - F-1 (run 1). The live suites called `tools/call` before the serve-early session was ready (Phase 33: `realm mcp` answers the handshake at once and refuses calls with `REALM_NOT_ACTIVE`, retryable, until the realm is active). `production live 5`: `tools/call status returned a tool error ... REALM_NOT_ACTIVE`. `live closeout C`: `the probe must see the sleeper while the exec runs, or the absence check below proves nothing: no sleep 47 process in the sandbox yet`, after 47.5 s. Fixed by PR 172 (`waitUntilServed`). No product change.
 - F-2 (run 2). With PR 172 the status call waited for the served session and then got `POLICY_DENIED`: the live `realm mcp` session carried no host label, and a session with no label is refused when capability tokens are enforced (Phase 34, GAP-34-01 class). Both `live closeout C` and `production live 5` failed on it. Fixed by PR 174 (`--host claude` in `startMcpSession`). No product change.
 - F-3 (run 3, observation on OI-10). After the `TOOL_TIMEOUT` reply (28083 ms) the poll saw the `sleep 47` process present on 13 consecutive polls, then none. The test passes when the sleeper is gone within its 30 s bound. [INFERENCE] The sleeper may have ended by its own 47 s run time and not because the timeout killed it; the test as written cannot tell the two apart. This is recorded as a limit of the evidence, not as a defect.
-- F-4 (run 1 to 3, OI-11). The host was never quiet during the window: 1.67, 0.76 and 1.47 load per CPU against the bound of 0.5.
+- F-4 (runs 1 to 3, OI-11). The host was never quiet during the window: 1.67, 0.76 and 1.47 load per CPU against the bound of 0.5, so the cold-attach test refused to run each time.
+- F-5 (run 4, OI-11). A later loaded-host run of the cold-attach test (the owner accepted a loaded-host mechanics run, 2026-11-18) failed its thresholds: `get_state` went unanswered for about 11 s during the cold attach (see section OI-11). The Omp extension path still attaches before it answers: Phase 33's serve-early applies to `realm mcp`, not to the Omp extension. Under load this is not shown to be a blocking attach, and the cause is not established.
 
 ### OI-05 and OI-06 (live closeout A and B)
 
@@ -136,9 +138,17 @@ Plan 36-02 filled OI-12, OI-14, OI-13 and the OI-09 hermetic half. Plan 36-03 re
 
 ### OI-11 (Omp responsiveness, cold attach)
 
-- Test: `test/integration/omp-responsiveness.test.ts`, cold-attach test, run in all three runs of the window. Result each time: failed before starting Omp, assertion `the host is not quiet: N load per cpu, above 0.5; run in a quiet slot or set REALM_OMP_RESPONSIVENESS_ALLOW_LOADED=1 ...`, code `ERR_ASSERTION`, run time under 1 s. Load before the baseline: run 1 13.39 on 8 CPUs (1.67 per CPU), run 2 6.08 (0.76), run 3 11.79 (1.47). No probe was sent; no latency was measured; nothing was set to override the refusal.
-- Earlier, in Plan 36-01 (2026-11-18, Omp 18.22.2, no extension, no production stack), the baseline mechanics ran with `REALM_OMP_RESPONSIVENESS_ALLOW_LOADED=1`: LOADED (load 9.97 on 8 CPUs), 41 probes, 0 unanswered, maximum 114 ms, median 5 ms, 95th percentile 14 ms, longest gap 265 ms. It proves the mechanics and is not a measurement of an extension attach and not an unloaded measurement.
-- Status: Carried (named reason: the host was not quiet, so the cold-attach responsiveness was not measured). Lift condition: a quiet slot (one-minute load per CPU at most 0.5, no realm daemon of the account running) on the production stack. UI-01 stays the owner's call (Phase 27, D-27-08).
+- Test: `test/integration/omp-responsiveness.test.ts`, cold-attach test.
+- Runs 1 to 3 of the window (host not quiet): failed before starting Omp, assertion `the host is not quiet: N load per cpu, above 0.5; run in a quiet slot or set REALM_OMP_RESPONSIVENESS_ALLOW_LOADED=1 ...`, code `ERR_ASSERTION`, run time under 1 s. Load before the baseline: run 1 13.39 on 8 CPUs (1.67 per CPU), run 2 6.08 (0.76), run 3 11.79 (1.47). No probe was sent.
+- Run 4, 2026-11-18 about 12:01 UTC, a loaded-host mechanics run accepted by the owner on 2026-11-18 (the escape variable for a loaded host was set by the person; the run is labelled loaded in the evidence). Production stack, account `realmlive`; the commit is not recorded in the evidence. Result: 1 test, 0 pass, 1 fail, 49.8 s, `ERR_ASSERTION`: `Omp was not responsive during the cold attach: 6 of 97 probes were never answered; the maximum latency was 9868 ms, above 1000 ms; the 95th percentile latency was 8910 ms, above 500 ms`.
+  - Load: 8.16 before the baseline (1.02 per CPU, quiet ceiling 0.5), 9.00 after the baseline and before the extension session, 11.54 after the extension session (one-minute average, 8 CPUs).
+  - Baseline (loaded, no extension): 41 probes, 0 unanswered, maximum 271 ms, median 6 ms, 95th percentile 201 ms, longest gap between answers 514 ms. It passed its bounds.
+  - Cold attach (loaded): 97 probes over 24001 ms, 91 answered, 6 unanswered, maximum 9868 ms, median 18 ms, 95th percentile 8910 ms, longest gap between answers 11369 ms; the status line reached `realm active`.
+  - Residue: before, after the step and final snapshots read 0 containers, 0 sandboxes, an empty workspace and no daemon.
+  - Evidence files kept outside the repository (names only): the E output file, `snapshots.txt`, and under the Omp evidence directory the baseline and attach samples CSV, summary, frames and stderr files and the transcript.
+- Reading: under load, Omp's `get_state` went unanswered for about 11 s (the longest gap between answers) during the cold attach. The Omp extension still attaches before answering; Phase 33's serve-early applies to `realm mcp`, not to the Omp extension path. This is not a quiet-host measurement, and the cause (a loaded host or a real blocking attach in the Omp path) is not established. The thresholds were not met, so the result is not a pass.
+- Earlier, in Plan 36-01 (2026-11-18, Omp 18.22.2, no extension, no production stack), the baseline mechanics ran with the loaded-host escape variable: load 9.97 on 8 CPUs, 41 probes, 0 unanswered, maximum 114 ms, median 5 ms, 95th percentile 14 ms, longest gap 265 ms. It proves the mechanics only.
+- Status: Re-verified (loaded host, thresholds failed): a dated run that failed its thresholds under load, recorded as it came out. It is carried as a finding into a candidate v5.1 phase, "Omp responsiveness during cold attach", together with finding F-3 (the sleeper that outlived the `TOOL_TIMEOUT` reply). Lift condition for a verdict on UI-01: a quiet slot (one-minute load per CPU at most 0.5, no realm daemon of the account running) on the production stack, or a cause found in the Omp path. UI-01 stays the owner's call (Phase 27, D-27-08).
 
 ## Part C. Reconciliation
 
@@ -156,19 +166,18 @@ Every one of the 14 open items of the v1.0 re-verification has a final label (V1
 | OI-08 | 06 row 11 | Re-verified (dated run, command, commit) |
 | OI-09 | 04 Human Verification 3 | Re-verified, current contract form |
 | OI-10 | 04 Human Verification 5 | Re-verified (dated run, command, commit) |
-| OI-11 | 05 re-verification 1b | Carried (named reason) |
+| OI-11 | 05 re-verification 1b | Re-verified (loaded host, thresholds failed) |
 | OI-12 | 07 row 7 | Closed by test (hermetic, dated) |
-| OI-13 | 07 row 10 | Needs the owner (decision text proposed) |
+| OI-13 | 07 row 10 | Closed: owner decision (accepted), 2026-11-18 |
 | OI-14 | 07 row 12 | Re-verified (dated run, command, commit) |
 
-Count by label: Dropped 3; Closed: moot, not resolved 1; Re-verified (dated run, command, commit) 6; Re-verified, current contract form 1; Closed by test (hermetic, dated) 1; Carried (named reason) 1; Needs the owner (decision text proposed) 1. Total 14.
+Count by label: Dropped 3; Closed: moot, not resolved 1; Re-verified (dated run, command, commit) 6; Re-verified, current contract form 1; Closed by test (hermetic, dated) 1; Re-verified (loaded host, thresholds failed) 1; Closed: owner decision (accepted) 1. Total 14. No row is Carried (named reason).
 
-Carried or waiting, with the named reason and the lift condition:
+Carried as findings, with the lift condition:
 
-- OI-11 (Carried): the Omp cold-attach responsiveness was not measured because the host was not quiet on three tries (1.67, 0.76 and 1.47 load per CPU, bound 0.5). Lift condition: a quiet slot on the production stack. UI-01 stays the owner's call.
-- OI-13 (Needs the owner): the stdin trust boundary needs the owner's answer to the proposed text in Part B. Lift condition: the owner accepts, changes or declines it.
+- OI-11 (Re-verified, loaded host, thresholds failed): the cold-attach test failed its thresholds on a loaded host (maximum 9868 ms, 95th percentile 8910 ms, 6 of 97 probes unanswered, longest gap 11369 ms). The cause is not established. Carried into the candidate v5.1 phase "Omp responsiveness during cold attach" together with F-3. Lift condition: a quiet-slot measurement on the production stack or a cause found in the Omp path. UI-01 stays the owner's call.
 
-Failed scenarios: none is carried. Live closeout C and production live 5 failed twice and passed on the third run; the two causes were test-harness findings (F-1 and F-2), fixed by PR 172 and PR 174, with no product change. Observation F-3 (the sleeper outlived the `TOOL_TIMEOUT` reply for 13 polls) is an evidence limit, not a defect.
+Failed scenarios other than OI-11: none is carried. Live closeout C and production live 5 failed twice and passed on the third run; the two causes were test-harness findings (F-1 and F-2), fixed by PR 172 and PR 174, with no product change. Observation F-3 (the sleeper outlived the `TOOL_TIMEOUT` reply for 13 polls) is an evidence limit, not a defect.
 
 What this phase did not do: it did not rehearse a Muse Code boot against the production stack (named gap, no recipe or registry record for Muse Code), did not drive a model-driven tool call through any host, did not change the status of UI-01 (the owner's call), and did not edit the archived v1.0 reports (history).
 
