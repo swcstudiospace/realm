@@ -4,6 +4,20 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-19
+
+### Fixed
+- fix(docs): align grok-build matrix disposition with registry (rehearsed) (6d6998e)
+- fix(host): create Grok config home in productionOverrides; Grok production tier passes live (50) (9ff6a5b)
+
+### Documentation
+- docs(phase-49): summarize calibration repeat and FINDING verdict (e91f47a)
+- docs(phase-49): record FINDING verdict window and resolution (e7a6d66)
+
+### Maintenance
+- test(omp): freeze calibrated bounds from 16 recorded controls (49) (c392362)
+- test(omp): pin bracket clamp rule on recorded failure shapes; restate feasibility (49) (fcb9af0)
+
 ## [0.8.0] - 2026-11-19
 
 ### Documentation
