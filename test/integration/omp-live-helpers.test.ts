@@ -1061,6 +1061,13 @@ void test("frames, nonJsonLines, status, notices and tool accessors follow the f
   await session.waitFor((s) => s.status() === undefined, BOUND_MS, "the status to clear");
 });
 
+void test("pid is the process id of the child, undefined when the child has none (Phase 45, the contention sampler reads it)", () => {
+  const omp = new FakeOmp();
+  assert.equal(omp.session().pid, undefined);
+  const withPid = new OmpSession({ ...omp.child, pid: 4321 }, omp.exited);
+  assert.equal(withPid.pid, 4321);
+});
+
 void test("frameArrivalsMs has one non-negative, non-decreasing entry per frame, in frame order, and a line that is not a JSON object adds none", async () => {
   const omp = new FakeOmp();
   const session = omp.session();

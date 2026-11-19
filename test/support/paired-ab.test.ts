@@ -12,8 +12,6 @@ import {
   MAX_PAIR_ATTEMPTS,
   MIN_VALID_PAIRS,
   PAIR_ANSWER_TIMEOUT_MS,
-  PAIR_LOAD_CEILING_PER_CPU,
-  PAIR_LOAD_GAP_PER_CPU,
   PAIRED_LABEL,
   type PairInput,
   pairValid,
@@ -24,6 +22,7 @@ import {
   SERVING_CONTROL_WINDOW_MS,
   STALL_TOLERANCE_MS,
 } from "./paired-ab.js";
+import type { RunValidity } from "./omp-verdict.js";
 import { PROBE_INTERVAL_MS, type ProbeSample, samplesCsv, samplesCsvWithPhase } from "./responsiveness.js";
 
 // ---- Fixtures --------------------------------------------------------------------------------------------------------------------
@@ -49,12 +48,11 @@ const ATTEMPT_ONE_CONTROL: ProbeSample[] = [...ladder(0, 8750, () => undefined),
 
 // A synthetic run with the given X and S: the control is ready at 1000 and first answers at 1100 with a serving latency of 10 ms; the
 // cold run is ready at 1000 and first answers at 1100 plus x, then one probe at the first answer with a latency of s plus 10 ms.
-function syntheticArm(x: number, s: number, startLoadPerCpu = 0.5, mechanicsHeld = true): ArmRun {
+function syntheticArm(x: number, s: number, validity: RunValidity = { valid: true }): ArmRun {
   return {
     control: { samples: [{ sentAtMs: 1000, latencyMs: 100 }, { sentAtMs: 1200, latencyMs: 10 }], readyMs: 1000 },
     cold: { samples: [{ sentAtMs: 1000, latencyMs: 100 + x }, { sentAtMs: 1100 + x, latencyMs: s + 10 }], readyMs: 1000 },
-    startLoadPerCpu,
-    mechanicsHeld,
+    validity,
   };
 }
 
@@ -69,10 +67,10 @@ function window(beforeX: readonly number[], afterX: readonly number[], beforeS?:
 
 // ---- The constants ---------------------------------------------------------------------------------------------------------------
 
-void test("OMPR-06 the constants are the frozen values of D-44-07", () => {
+void test("OMPR-06 the constants are the frozen values of D-44-07, with MAX_PAIR_ATTEMPTS 12 since D-45-10", () => {
   assert.deepEqual(
-    [MIN_VALID_PAIRS, MAX_PAIR_ATTEMPTS, PAIR_LOAD_CEILING_PER_CPU, PAIR_LOAD_GAP_PER_CPU, SERVING_CONTROL_WINDOW_MS, REPRODUCTION_MIN_MS, GAIN_MIN_MS, GAIN_PAIR_FRACTION, GAIN_MEDIAN_SHARE, STALL_TOLERANCE_MS, REGRESS_PAIR_FRACTION],
-    [5, 10, 2.0, 0.5, 5000, 250, 250, 0.8, 0.5, 250, 0.2],
+    [MIN_VALID_PAIRS, MAX_PAIR_ATTEMPTS, SERVING_CONTROL_WINDOW_MS, REPRODUCTION_MIN_MS, GAIN_MIN_MS, GAIN_PAIR_FRACTION, GAIN_MEDIAN_SHARE, STALL_TOLERANCE_MS, REGRESS_PAIR_FRACTION],
+    [5, 12, 5000, 250, 250, 0.8, 0.5, 250, 0.2],
   );
   assert.equal(PAIR_ANSWER_TIMEOUT_MS, 10_000, "the answer timeout of the harness probe");
   assert.equal(PAIRED_LABEL, "loaded, paired");
@@ -175,30 +173,28 @@ void test("OMPR-06 S: an unanswered cold probe after the first answer counts as 
 
 // ---- pairValid -------------------------------------------------------------------------------------------------------------------
 
-void test("OMPR-06 pairValid: each of the four failures is its own case, with its reason", () => {
+void test("OMPR-06 pairValid: each failure is its own case, with its reason (the arm and the failed rule)", () => {
   const good = syntheticArm(1000, 0);
   assert.equal(pairValid(pair(1, good, good)).valid, true);
-  const bad = pairValid(pair(1, syntheticArm(1000, 0, 0.5, false), good));
-  assert.deepEqual(bad, { valid: false, reason: "the before run is not valid: the mechanics did not hold" });
+  const refused = pairValid(pair(1, syntheticArm(1000, 0, { valid: false, rule: "V1", reason: "the mechanics of the arm test did not hold" }), good));
+  assert.deepEqual(refused, { valid: false, reason: "the before run is not valid by V1: the mechanics of the arm test did not hold" });
   const silent: ArmRun = { ...good, control: { samples: [{ sentAtMs: 0, latencyMs: undefined }], readyMs: 0 } };
   assert.deepEqual(pairValid(pair(1, good, silent)), { valid: false, reason: "the after run is not valid: the control has no first answer" });
-  const loaded = pairValid(pair(1, syntheticArm(1000, 0, 2.5), syntheticArm(1000, 0, 2.2)));
-  assert.equal(loaded.valid, false);
-  assert.ok(!loaded.valid);
-  assert.match(loaded.reason, /before run started at 2\.5 load per cpu, above 2/);
-  const loadedAfter = pairValid(pair(1, syntheticArm(1000, 0, 1.9), syntheticArm(1000, 0, 2.2)));
-  assert.ok(!loadedAfter.valid);
-  assert.match(loadedAfter.reason, /after run started at 2\.2 load per cpu, above 2/);
-  const apart = pairValid(pair(1, syntheticArm(1000, 0, 0.1), syntheticArm(1000, 0, 1.2)));
-  assert.ok(!apart.valid);
-  assert.match(apart.reason, /start loads differ by 1\.10 load per cpu, more than 0\.5/);
+  const afterInvalid = pairValid(pair(1, good, syntheticArm(1000, 0, { valid: false, rule: "V4", reason: "the control self-inflicted maximum was above its bound" })));
+  assert.deepEqual(afterInvalid, { valid: false, reason: "the after run is not valid by V4: the control self-inflicted maximum was above its bound" });
 });
 
-void test("OMPR-06 pairValid: the load boundaries, 2.0 valid and 2.01 not, a gap of 0.5 valid and 0.51 not", () => {
-  assert.equal(pairValid(pair(1, syntheticArm(1000, 0, 2.0), syntheticArm(1000, 0, 2.0))).valid, true);
-  assert.equal(pairValid(pair(1, syntheticArm(1000, 0, 2.01), syntheticArm(1000, 0, 2.0))).valid, false);
-  assert.equal(pairValid(pair(1, syntheticArm(1000, 0, 1.5), syntheticArm(1000, 0, 1.0))).valid, true);
-  assert.equal(pairValid(pair(1, syntheticArm(1000, 0, 1.51), syntheticArm(1000, 0, 1.0))).valid, false);
+void test("OMPR-06 pairValid: the before run is read first, then the after run, and both must be valid (the load average is not a validity input)", () => {
+  const badBefore = syntheticArm(1000, 0, { valid: false, rule: "V3", reason: "b" });
+  const badAfter = syntheticArm(1000, 0, { valid: false, rule: "V2", reason: "a" });
+  const both = pairValid(pair(1, badBefore, badAfter));
+  assert.ok(!both.valid);
+  assert.match(both.reason, /^the before run is not valid by V3/);
+  const afterOnly = pairValid(pair(1, syntheticArm(1000, 0), badAfter));
+  assert.ok(!afterOnly.valid);
+  assert.match(afterOnly.reason, /^the after run is not valid by V2/);
+  // An arm carries no load field: nothing of the retired load rule is left to read.
+  assert.deepEqual(Object.keys(syntheticArm(1000, 0)).filter((key) => /load/i.test(key)), []);
 });
 
 // ---- decidePairs: one test per row, in the order of the table --------------------------------------------------------------------
@@ -209,21 +205,21 @@ void test("OMPR-06 decidePairs VOID: four valid pairs are not enough; invalid pa
   assert.equal(decision.outcome, "VOID");
   assert.equal(decision.validPairs, 4);
   // A fifth pair that is invalid (loaded) does not make five.
-  const withInvalid = decidePairs([...four, pair(5, syntheticArm(1000, 0, 3.0), syntheticArm(0, 0))]);
+  const withInvalid = decidePairs([...four, pair(5, syntheticArm(1000, 0, { valid: false, rule: "V3", reason: "the scope stall share was above its bound" }), syntheticArm(0, 0))]);
   assert.equal(withInvalid.outcome, "VOID");
   assert.equal(withInvalid.validPairs, 4);
   assert.equal(withInvalid.invalid.length, 1);
   assert.deepEqual(withInvalid.invalid.map((entry) => entry.pair), [5]);
-  assert.match(withInvalid.invalid.map((entry) => entry.reason).join("; "), /load per cpu/);
+  assert.match(withInvalid.invalid.map((entry) => entry.reason).join("; "), /by V3: the scope stall share/);
   const none = decidePairs([]);
   assert.equal(none.outcome, "VOID");
   assert.equal(none.medians, null);
 });
 
-void test("OMPR-06 decidePairs refuses more than the maximum pair attempts", () => {
-  const eleven = window(Array.from({ length: 11 }, () => 1000), Array.from({ length: 11 }, () => 0));
-  assert.throws(() => decidePairs(eleven), /at most 10 pair attempts/);
-  assert.doesNotThrow(() => decidePairs(eleven.slice(0, 10)));
+void test("OMPR-06 decidePairs refuses more than the maximum pair attempts (12 since Phase 45)", () => {
+  const thirteen = window(Array.from({ length: 13 }, () => 1000), Array.from({ length: 13 }, () => 0));
+  assert.throws(() => decidePairs(thirteen), /at most 12 pair attempts/);
+  assert.doesNotThrow(() => decidePairs(thirteen.slice(0, 12)));
 });
 
 void test("OMPR-06 decidePairs NOT-REPRODUCED: the BEFORE median at 250 does not reproduce, at 251 it does", () => {
@@ -354,17 +350,27 @@ const RECORDED_WINDOW: readonly (readonly [RecordedRun, RecordedRun])[] = [
    { controlReadyMs: 9491.616984999999, controlFirstMs: 9999, coldReadyMs: 6820.271729, coldFirstMs: 7415, s: 0, load1: 21.64 }],
 ];
 
-function recordedArm(run: RecordedRun): ArmRun {
+// The runs of the recorded window all had mechanics that held; the validity of a pair there was decided by the retired load rule (a start
+// load above 2.0 per CPU, or a gap above 0.5 between the two start loads of a pair). That decision is data of the record, restated here as
+// the validity each arm carries, so the table below is the recorded one; the load average is not an input of any current rule.
+function recordedArm(run: RecordedRun, retiredLoadRuleFailed: boolean): ArmRun {
   return {
     control: { samples: [{ sentAtMs: 0, latencyMs: run.controlFirstMs }], readyMs: run.controlReadyMs },
     cold: { samples: [{ sentAtMs: 0, latencyMs: run.coldFirstMs }, { sentAtMs: run.coldFirstMs, latencyMs: run.s }], readyMs: run.coldReadyMs },
-    startLoadPerCpu: run.load1 / 8,
-    mechanicsHeld: true,
+    validity: retiredLoadRuleFailed ? { valid: false, rule: "V3", reason: "the recorded start load failed the retired load rule" } : { valid: true },
   };
 }
 
-void test("OMPR-06 the paired loaded window of 2026-11-19 (loaded, paired): three valid pairs, outcome VOID", () => {
-  const decision = decidePairs(RECORDED_WINDOW.map(([before, after], index) => pair(index + 1, recordedArm(before), recordedArm(after))));
+// Pairs 3, 7 and 8 were the valid ones of the recorded window (the other seven failed the retired load rule).
+const RECORDED_VALID_PAIRS = [3, 7, 8];
+
+void test("OMPR-06 the paired loaded window of 2026-11-19 (loaded, paired): three valid pairs, outcome VOID (validity migrated from the retired load rule)", () => {
+  const decision = decidePairs(
+    RECORDED_WINDOW.map(([before, after], index) => {
+      const failed = !RECORDED_VALID_PAIRS.includes(index + 1);
+      return pair(index + 1, recordedArm(before, failed), recordedArm(after, false));
+    }),
+  );
   assert.equal(decision.outcome, "VOID");
   assert.equal(decision.reason, "3 valid pairs, fewer than 5: no effect claim");
   assert.equal(decision.label, "loaded, paired");
@@ -376,15 +382,8 @@ void test("OMPR-06 the paired loaded window of 2026-11-19 (loaded, paired): thre
     [-3104, -1223, -1881, 0, 30, 30],
     [-2201, -2501, 300, 161, 0, -161],
   ]);
-  assert.deepEqual(decision.invalid, [
-    { pair: 1, reason: "the before run started at 2.5275 load per cpu, above 2" },
-    { pair: 2, reason: "the after run started at 2.35 load per cpu, above 2" },
-    { pair: 4, reason: "the start loads differ by 0.98 load per cpu, more than 0.5" },
-    { pair: 5, reason: "the before run started at 2.795 load per cpu, above 2" },
-    { pair: 6, reason: "the after run started at 2.49625 load per cpu, above 2" },
-    { pair: 9, reason: "the before run started at 2.855 load per cpu, above 2" },
-    { pair: 10, reason: "the before run started at 2.045 load per cpu, above 2" },
-  ]);
+  assert.deepEqual(decision.invalid.map((entry) => entry.pair), [1, 2, 4, 5, 6, 9, 10]);
+  assert.ok(decision.invalid.every((entry) => entry.reason === "the before run is not valid by V3: the recorded start load failed the retired load rule"));
   const medians = decision.medians;
   assert.ok(medians !== null);
   assert.deepEqual([medians.before.x, medians.before.s, medians.after.x, medians.after.s], [-2831, 0, -2501, 0]);
