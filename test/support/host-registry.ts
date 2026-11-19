@@ -207,8 +207,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   }),
   // Source: contract page, Phase 25 table (T2: cline config mcp --json, parse only, no result recorded) and OQ-25-09.
   cline: record({ id: "cline", family: "json-merge", suites: [WAVE2_SUITE], snippet: "cline.md", live: "cline", t2: null, t3: WAVE2_T3, deferral: null }),
-  // Source: the Phase 43 live window of 2026-11-18 (43-02): the legacy Python Kimi CLI 1.51.0 from a scratch install outside the repository. T2 ran (2 of 2 passed).
-  // T3 ran and FAILED (the recorder saw no tool names): the note starts with "rehearsal failed", which the wave 1 page test reads as the failed disposition.
+  // Source: the Phase 43 live window of 2026-11-18 (43-02) and the Phase 47 window of 2026-11-19 (47-02, 47-04): the legacy Python Kimi CLI 1.51.0 from scratch installs outside the repository. T2 ran (2 of 2 passed, on both days).
+  // T3 did NOT pass its bound: the note starts with "rehearsal failed", which the wave 1 page test reads as the failed disposition. On 2026-11-19 three default cold runs were answered with the six tool names but each exceeded the test's own 25000 ms bound, so the tier is not recorded as passed; the 2026-11-18 failure stays named, its cause is not established.
   kimi: record({
     id: "kimi",
     family: "json-merge",
@@ -216,14 +216,14 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     snippet: "kimi.md",
     live: "kimi",
     t2: {
-      date: "2026-11-18",
+      date: "2026-11-19",
       version: "1.51.0",
-      result: "2 of 2 passed (validator 1 of 1: kimi mcp list prints realm, kimi mcp test launches the registered argv, kimi mcp remove leaves status drifted; validator session 1 of 1: kimi mcp test against a fake MCP server saw initialize, notifications/initialized and tools/list and the six tools; scratch install outside the repository, the archived legacy product)",
+      result: "2 of 2 passed, first on 2026-11-18 and again on 2026-11-19 with the same result (validator 1 of 1: kimi mcp list prints realm, kimi mcp test launches the registered argv, kimi mcp remove leaves status drifted; validator session 1 of 1: kimi mcp test against a fake MCP server saw initialize, notifications/initialized and tools/list and the six tools; scratch install outside the repository, the archived legacy product)",
       command: "kimi mcp list, kimi mcp test, kimi mcp remove",
     },
     t3: {
       status: "gap",
-      note: "rehearsal failed: kimi 1.51.0 (the archived legacy Python CLI; Kimi Code is the supported product), 2026-11-18, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: kimi mcp test realm exited 0 after 18225 ms, below the 25000 ms bound, and the wire shows initialize, notifications/initialized and tools/list but no tool names answered through the recorder, so the six-tools assertion failed; the cause is not established (GAP-43-03); kimi forwards only HOME and PATH to a stdio server, so the recorder restored XDG_RUNTIME_DIR, XDG_CONFIG_HOME and REALM_DRIVER_SOCKET for the server (GAP-43-01); the validator tier passed 2 of 2 the same day; the network use of the CLI is not measured (GAP-43-02); evidence kept outside the repository",
+      note: "rehearsal failed: kimi 1.51.0 (the archived legacy Python CLI; Kimi Code is the supported product), production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory. 2026-11-18: kimi mcp test realm exited 0 after 18225 ms, below the 25000 ms bound, and the wire shows initialize, notifications/initialized and tools/list but no tool names answered through the recorder, so the six-tools assertion failed. 2026-11-19 (Phase 47 window, default drive, all three names restored, three cold runs): the client printed the connected line and the six tool names and the recorder logged the six names in all three runs (wire classification ANSWERED 3 of 3), but each run exceeded the test's own 25000 ms cold connect bound (28804, 31393 and 32301 ms on a loaded host; the legacy client alone against a fake MCP server takes about 30 s), so the tier did NOT pass its bound and is not recorded as passed. The failure of 2026-11-18 was not reproduced (NOT-REPRODUCED) and its cause is not established (GAP-43-03 narrowed, never closed). Environment ablation of 2026-11-19, diagnostic variants and never the tier: XDG_CONFIG_HOME and XDG_RUNTIME_DIR are needed to reach this non-default stack, REALM_DRIVER_SOCKET is not, and with nothing restored the stack is not reached; kimi forwards only HOME and PATH to a stdio server and does not expand references in an env value, so no recipe env block is possible and the recorder restores the names for the server (GAP-43-01: manual workaround kimi mcp add --env NAME=VALUE with the exact names; an install-time capture capability is planned in its own later phase); the validator tier passed 2 of 2 on both days; the network use of the CLI is not measured (GAP-43-02); evidence kept outside the repository",
     },
     deferral: null,
   }),
