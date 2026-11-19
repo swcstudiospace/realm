@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-19
+
+### Documentation
+- docs(milestone): start v8.0 Shared sandboxes and durable recovery (phases 49-54) (170e4c9)
+
 ## [0.7.10] - 2026-11-19
 
 ### Fixed
