@@ -4,6 +4,17 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-11-19
+
+### Fixed
+- fix(runtime): confirm a container end after a slow stop request instead of failing the teardown step (46-02, 46-03, STOP-02, STOP-03) (#222) (ea04e1c)
+
+### Documentation
+- docs(phase-47): legacy kimi window recorded: NOT-REPRODUCED, cause not established, ablation verdicts (47-02) (#224) (f34cc51)
+
+### Maintenance
+- test(omp): scoped contention gate, calibrated verdict rules and alternating-order arm test (45-03, OMPV-03..05) (#223) (7ff5430)
+
 ## [0.7.4] - 2026-11-19
 
 ### Maintenance
