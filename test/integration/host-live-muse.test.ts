@@ -31,8 +31,9 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runCli } from "../../src/cli/main.js";
-import { actionsOf, cliJson, describeRun, fileSha256, processAlive, readStubArgv, requireReturned, resolveExecutable, runHost, stripAnsi, VALIDATOR_TIMEOUT_MS, writeStubRealm, type HostVersionProbe } from "../support/host-live.js";
+import { actionsOf, cliJson, describeRun, fileSha256, processAlive, readStubArgv, requireReturned, resolveExecutable, runHost, runHostProduction, stripAnsi, VALIDATOR_TIMEOUT_MS, writeStubRealm, type HostVersionProbe } from "../support/host-live.js";
 import {
+  collectMuseProductionSkip,
   countProcessesNamed,
   MUSE_BIN_VARIABLE,
   MUSE_PLUGIN_VALID_PATTERN,
@@ -45,6 +46,7 @@ import {
   museUninstallExpectation,
   parseMuseVersion,
 } from "../support/host-live-muse.js";
+import { museProductionDrive } from "../support/host-live-production.js";
 import { readFakeServerLog, readWireLog, REALM_TOOL_NAMES, SESSION_PROMPT, wireSummary, writeFakeMcpServer, writeWireRecorder } from "../support/host-live-session.js";
 import { isRecord } from "../support/omp-live.js";
 import { scaledMs, testTimeout } from "../support/timing.js";
@@ -234,5 +236,39 @@ void test(
     const museAfter = countProcessesNamed("muse");
     assert.ok(museAfter <= museBefore, `no muse process the run started is left (${String(museBefore)} before, ${String(museAfter)} after)`);
     t.diagnostic(`F: the operator's real Muse settings file is byte-equal before and after; muse processes ${String(museBefore)} before, ${String(museAfter)} after`);
+  },
+);
+
+// ---- The production tier (Phase 48, HTIER-02) ---------------------------------------------------------------------------------------
+// `muse exec --provider echo --trust-workspace` is the command drive of Muse Code (48-01 drive table): Muse starts the registered required entry
+// through the wire recorder that is the registered `realm`, completes the handshake and lists the six tools, against `realm mcp --host muse-code`
+// on the production stack, cold, from a new project directory under the pinned workspace root. The gate is REALM_LIVE_PRODUCTION=1 and
+// REALM_LIVE_MUSE=1 (and the production prerequisites). The echo provider answers locally: no credential, no model turn, no network use of
+// its own. The test never sets a gate variable. The operator's real settings file is hashed before and after.
+
+const CLI_PATH = fileURLToPath(new URL("../../src/cli/main.js", import.meta.url));
+const PRODUCTION_SKIP = await collectMuseProductionSkip({ validator: SKIP, env: process.env, cliPath: CLI_PATH });
+
+void test(
+  "muse production: muse exec --provider echo launches realm mcp --host muse-code on the production stack and lists the six tools",
+  { skip: PRODUCTION_SKIP, ...testTimeout(1_800_000) },
+  async (t) => {
+    assert.ok(BIN !== undefined, "the gate found the muse executable");
+    t.diagnostic(`muse version observed ${parseMuseVersion(VERSION_PROBE.kind === "output" ? VERSION_PROBE.stdout : "") ?? "unknown"}, recorded ${MUSE_RECORDED_VERSION}`);
+    const realBefore = realSettingsHashes();
+    const museBefore = countProcessesNamed("muse");
+    await runHostProduction(t, {
+      host: "muse-code",
+      bin: BIN,
+      cliPath: CLI_PATH,
+      env: process.env,
+      realFile: (home) => join(home, ".config", "muse", "settings.json"),
+      drive: museProductionDrive(),
+      attribution: { installs: ["muse-code"], attributedTo: "muse-code", audit: "diagnostic" },
+    });
+    assert.deepEqual(realSettingsHashes(), realBefore, "the operator's real Muse settings file must be unchanged");
+    const museAfter = countProcessesNamed("muse");
+    assert.ok(museAfter <= museBefore, `no muse process the run started is left (${String(museBefore)} before, ${String(museAfter)} after)`);
+    t.diagnostic(`the operator's real Muse settings file is byte-equal before and after; muse processes ${String(museBefore)} before, ${String(museAfter)} after`);
   },
 );

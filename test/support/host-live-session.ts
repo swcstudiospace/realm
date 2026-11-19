@@ -299,6 +299,10 @@ export interface WireRecorderOptions {
   // absent from its own environment and logs the sorted NAMES it added, never a value. The pairs are written to a file of mode 0600
   // next to the tee, never to an argument. A name the host did forward keeps the host's value.
   readonly restoreEnv?: Readonly<Record<string, string>>;
+  // Environment variables whose value the tee gives the target even when the host forwarded another one (Grok Build runs with an isolated
+  // HOME that the real `realm mcp` must not see, 48-CONTEXT E-48-10). Same file rules and the same logged NAMES as `restoreEnv`; the
+  // names appear in the one `restored` list. A name in both lists takes the value of this one.
+  readonly forceEnv?: Readonly<Record<string, string>>;
   // An absolute path the target's stderr is copied to (created with mode 0600 and appended to) while it is still forwarded to the tee's
   // own stderr. Absent: the target's stderr is inherited and nothing is copied. The path is written into the tee script, never an
   // argument, and adds no file to the recorder directory unless the caller names one there.
@@ -314,13 +318,15 @@ export interface WireRecorderOptions {
 // message object the `invalid` flag. Lifecycle lines (`kind` "lifecycle") mark the child starting (`child-start`), the host closing its
 // end (`host-stdin-end`), a signal the tee received (`host-signal`, logged before it is forwarded) and the child exiting (`child-exit`
 // with its code or signal). Parameters, results, headers, paths and content are never copied. A log write error is swallowed, after the
-// forward. The old reader readWireLog skips lifecycle lines and the new fields.
-function teeSource(prefixLength: number, restore: boolean, stderrFile: string | undefined): string {
+// forward. The child-start line also carries `argv`, the arguments the host passed to the shim (the host's own command line for the
+// server, `mcp --host ID`; never a parameter, a path of the host's data or a value of the environment). The old reader readWireLog skips
+// lifecycle lines and the new fields.
+function teeSource(prefixLength: number, restore: boolean, force: boolean, stderrFile: string | undefined): string {
   return [
     'import { spawn } from "node:child_process";',
-    restore ? 'import { appendFileSync, readFileSync } from "node:fs";' : 'import { appendFileSync } from "node:fs";',
+    restore || force ? 'import { appendFileSync, readFileSync } from "node:fs";' : 'import { appendFileSync } from "node:fs";',
     'import { constants } from "node:os";',
-    ...(restore ? ['import { fileURLToPath } from "node:url";'] : []),
+    ...(restore || force ? ['import { fileURLToPath } from "node:url";'] : []),
     "",
     `const PREFIX = ${String(prefixLength)};`,
     "const LINE_LIMIT = 1048576;",
@@ -380,21 +386,36 @@ function teeSource(prefixLength: number, restore: boolean, stderrFile: string | 
     "  };",
     "};",
     "",
-    ...(restore
+    ...(restore || force
       ? [
           "const childEnv = { ...process.env };",
           "const restored = [];",
-          "try {",
-          '  const pairs = JSON.parse(readFileSync(fileURLToPath(new URL("wire-restore.json", import.meta.url)), "utf8"));',
-          "  for (const name of Object.keys(pairs)) {",
-          "    if (!(name in process.env)) { childEnv[name] = pairs[name]; restored.push(name); }",
-          "  }",
-          "} catch { /* a missing or unreadable pair file restores nothing */ }",
+          ...(restore
+            ? [
+                "try {",
+                '  const pairs = JSON.parse(readFileSync(fileURLToPath(new URL("wire-restore.json", import.meta.url)), "utf8"));',
+                "  for (const name of Object.keys(pairs)) {",
+                "    if (!(name in process.env)) { childEnv[name] = pairs[name]; restored.push(name); }",
+                "  }",
+                "} catch { /* a missing or unreadable pair file restores nothing */ }",
+              ]
+            : []),
+          ...(force
+            ? [
+                "try {",
+                '  const forced = JSON.parse(readFileSync(fileURLToPath(new URL("wire-force.json", import.meta.url)), "utf8"));',
+                "  for (const name of Object.keys(forced)) {",
+                "    childEnv[name] = forced[name];",
+                "    if (!restored.includes(name)) { restored.push(name); }",
+                "  }",
+                "} catch { /* a missing or unreadable pair file forces nothing */ }",
+              ]
+            : []),
           'record({ dir: "host-to-realm", kind: "other", restored: restored.sort() });',
         ]
       : []),
-    `const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", ${stderrFile === undefined ? '"inherit"' : '"pipe"'}]${restore ? ", env: childEnv" : ""} });`,
-    'child.on("spawn", () => { record({ kind: "lifecycle", event: "child-start" }); });',
+    `const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", ${stderrFile === undefined ? '"inherit"' : '"pipe"'}]${restore || force ? ", env: childEnv" : ""} });`,
+    'child.on("spawn", () => { record({ kind: "lifecycle", event: "child-start", argv: extra }); });',
     'child.on("exit", (code, signal) => { record({ kind: "lifecycle", event: "child-exit", code, signal }); });',
     ...(stderrFile === undefined
       ? []
@@ -437,6 +458,14 @@ export function writeWireRecorder(dir: string, options: WireRecorderOptions): st
       }
     }
   }
+  const force = options.forceEnv;
+  if (force !== undefined) {
+    for (const [name, value] of Object.entries(force)) {
+      if (!isRestorePair(name, value)) {
+        throw new Error("forceEnv holds a pair that is not a non-empty name without an equals sign and a string value; nothing was written");
+      }
+    }
+  }
   const { stderrFile } = options;
   if (stderrFile !== undefined && !isAbsolute(stderrFile)) {
     throw new Error("stderrFile must be an absolute path; nothing was written");
@@ -451,8 +480,13 @@ export function writeWireRecorder(dir: string, options: WireRecorderOptions): st
     writeFileSync(pairsFile, JSON.stringify(restore), { mode: 0o600 });
     chmodSync(pairsFile, 0o600);
   }
+  if (force !== undefined) {
+    const forceFile = join(dir, "wire-force.json");
+    writeFileSync(forceFile, JSON.stringify(force), { mode: 0o600 });
+    chmodSync(forceFile, 0o600);
+  }
   const tee = join(dir, "wire-tee.mjs");
-  writeFileSync(tee, teeSource(options.target.length, restore !== undefined, stderrFile));
+  writeFileSync(tee, teeSource(options.target.length, restore !== undefined, force !== undefined, stderrFile));
   chmodSync(tee, 0o644);
   const shim = join(dir, "realm");
   const words = [options.nodePath, tee, options.logFile, ...options.target].map((word) => shellQuote(word)).join(" ");
@@ -531,6 +565,27 @@ export function wireSummary(events: readonly WireEvent[]): WireSummary {
   const toolNames = listed === undefined ? [] : [...listed].sort();
   const restoredNames = [...(events.find((event) => event.restored !== undefined)?.restored ?? [])].sort();
   return { hostMethods, toolNames, answered: toolNames.length > 0, restoredNames };
+}
+
+// The argument lists of the server starts a recorder logged, one per `child-start` line, in file order (the arguments the host passed to
+// the shim). A missing file has no start; a start line without a string list has the empty list; a malformed or foreign line is skipped.
+export function readRecorderStarts(file: string): string[][] {
+  if (!existsSync(file)) {
+    return [];
+  }
+  const starts: string[][] = [];
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isRecord(parsed) && parsed["kind"] === "lifecycle" && parsed["event"] === "child-start") {
+      starts.push(stringArray(parsed["argv"]) ?? []);
+    }
+  }
+  return starts;
 }
 
 // ---- The until-ready runner ------------------------------------------------------------------------------------------------

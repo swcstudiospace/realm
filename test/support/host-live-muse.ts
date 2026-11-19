@@ -10,7 +10,9 @@
 // the installed file with the snippet document, the expectation of what uninstall leaves, and a count of processes by name.
 //
 // Exports: MUSE_OPT_IN, MUSE_BIN_VARIABLE, MUSE_RECORDED_VERSION, MUSE_PLUGIN_VALID_PATTERN, parseMuseVersion, museSettingsText,
-// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv, museInstalledProblem, museUninstallExpectation, countProcessesNamed.
+// museEntryProblem, museListProblem, museGateReason, museIsolatedEnv, museInstalledProblem, museUninstallExpectation, countProcessesNamed,
+// museProductionSkipReason, collectMuseProductionSkip (the Phase 48 production tier: the gate of REALM_LIVE_PRODUCTION plus REALM_LIVE_MUSE; the
+// drive itself is museProductionDrive in host-live-production.ts).
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -18,6 +20,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import type { HostVersionProbe } from "./host-live.js";
 import { isRecord } from "./omp-live.js";
+import { isDirectory, isSocket, LIVE_PRODUCTION_VARIABLE, onPath, probePodman, productionSkipReason, readLiveInputs } from "./production-live.js";
 
 export const MUSE_OPT_IN = "REALM_LIVE_MUSE";
 export const MUSE_BIN_VARIABLE = "REALM_MUSE_BIN";
@@ -241,4 +244,64 @@ export function countProcessesNamed(name: string): number {
     }
   }
   return count;
+}
+
+// ---- The production tier (Phase 48, HTIER-02) --------------------------------------------------------------------------------------------
+
+export interface MuseProductionInputs {
+  // museGateReason of the validator gate: the host opt-in, Linux, the executable and its version.
+  readonly validator: string | false;
+  // Whether dist/src/cli/main.js exists.
+  readonly cliBuilt: boolean;
+  // productionSkipReason (REALM_LIVE_PRODUCTION, Podman, image, driver, sockets), consulted after the host gate.
+  readonly production: string | false;
+  // Whether the shared state directory already holds a Realm receipt for muse-code.
+  readonly receiptExists: boolean;
+}
+
+// The first missing prerequisite of the production tier as a sentence, or false. The host's own opt-in and executable come first (as for every
+// host), then the built CLI, then the production prerequisites, then an existing receipt. A skipped test is not-run, never a pass.
+export function museProductionSkipReason(inputs: MuseProductionInputs): string | false {
+  if (inputs.validator !== false) {
+    return inputs.validator;
+  }
+  if (!inputs.cliBuilt) {
+    return "the built CLI dist/src/cli/main.js is missing; run npm run build first";
+  }
+  if (inputs.production !== false) {
+    return inputs.production;
+  }
+  if (inputs.receiptExists) {
+    return "the shared state directory already holds a Realm host receipt for muse-code; refusing to touch a real install";
+  }
+  return false;
+}
+
+// Reads the facts museProductionSkipReason decides from. `validator` is the already collected validator gate: nothing else is probed when it
+// is not false, and `podman --version` runs only after REALM_LIVE_PRODUCTION is 1, so a plain run starts nothing.
+export async function collectMuseProductionSkip(options: { readonly validator: string | false; readonly env: EnvironmentLike; readonly cliPath: string }): Promise<string | false> {
+  const { validator, env, cliPath } = options;
+  const unprobed: MuseProductionInputs = { validator, cliBuilt: false, production: false, receiptExists: false };
+  if (validator !== false) {
+    return museProductionSkipReason(unprobed);
+  }
+  const cliBuilt = existsSync(cliPath);
+  let production: string | false = false;
+  let receiptExists = false;
+  if (cliBuilt) {
+    production = productionSkipReason({
+      env,
+      podman: env[LIVE_PRODUCTION_VARIABLE] === "1" ? await probePodman() : { kind: "unavailable" },
+      isSocket,
+      onPath: (name) => onPath(name, env["PATH"]),
+      exists: existsSync,
+      isDirectory,
+      cliPath,
+    });
+    if (production === false) {
+      const stateDir = readLiveInputs(env, cliPath).driverStateDir;
+      receiptExists = stateDir !== undefined && existsSync(join(stateDir, "hosts", "muse-code.receipt.json"));
+    }
+  }
+  return museProductionSkipReason({ validator, cliBuilt, production, receiptExists });
 }
