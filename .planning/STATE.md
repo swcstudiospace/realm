@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v7.0
-milestone_name: Carried findings closure (Starting)
-status: Starting
-stopped_at: Milestone v7.0 started, phases 45 to 48 planned
+milestone_name: Carried findings closure (Planned)
+status: Planned
+stopped_at: Phases 45 to 48 planned (16 plans), ready to execute phase 46 first
 last_updated: "2026-11-19T06:36:00.000Z"
 last_activity: 2026-11-19
-last_activity_desc: Milestone v7.0 started
+last_activity_desc: Phases 45 to 48 planned
 state_head: 1b0e63b
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 16
   completed_plans: 0
   percent: 0
-current_phase: 45
+current_phase: 46
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-19)
 
 ## Current Position
 
-Phase: 45 (Omp responsiveness, a measurement that can yield a valid verdict), not started
-Plan: —
-Status: Starting milestone v7.0 (phases 45 to 48, release line 0.7.x)
-Last activity: 2026-11-19 — Milestone v7.0 started
+Phase: 46 (Rapid stop then up, F-41-1), planned, ready to execute
+Plan: 46-01 next
+Status: Phases 45 to 48 planned (four plans each, 16 in all), ready to execute phase 46 first. Phase order: 46 first, then 47, then 48 (documentation edits of 47 land before 48), then the Phase 45 live windows by need; the hermetic parts of Phase 45 (plans 45-02 and 45-03) can run in parallel with the others, and its calibration and verdict windows take the shared live lock one at a time.
+Last activity: 2026-11-19 — Phases 45 to 48 planned
 
 ## Current Recovery Boundaries
 
