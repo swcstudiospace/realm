@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-19
+
+### Maintenance
+- test(omp): corrected responsiveness window, frozen paired A/B rule and paired arm test (44-01) (#210) (d568ae4)
+
 ## [0.6.5] - 2026-11-19
 
 ### Documentation
