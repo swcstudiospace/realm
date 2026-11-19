@@ -18,6 +18,15 @@ export const CONTAINER_STOP_GRACE_MS = 2_000;
 // Bound on the delete of one session's realm sandbox in stop() and destroy(). A delete that misses it is a failed stop.
 export const SANDBOX_DELETE_DEADLINE_MS = 15_000;
 
+// Bound on the confirmation wait after a libpod stop or force removal request that missed its request bound (5 s plus its 2 s
+// grace, 7 s). The live window of 2026-11-19 saw the container stop take 7 to about 12 s in 9 of 52 stops (typically about 3 s),
+// the longest read 11.9 s after the stop began, so the request bound (7 s) was missed by up to about 5 s. The confirmation wait
+// is twice that, 10 s. A container still live at this bound keeps the failed step, so the wait fails closed.
+export const CONTAINER_END_CONFIRM_MS = 10_000;
+
+// The pause between two reads of the container state during the confirmation wait.
+export const CONTAINER_CONFIRM_POLL_MS = 500;
+
 // The bound of each stage that runs in turn inside one session end.
 const SESSION_END_STAGE_BOUNDS_MS = Object.freeze({
   // Spent only while a create of the sandbox is in flight (settleCreatesFor): the end waits for it under the AgentOS bound.
@@ -28,6 +37,9 @@ const SESSION_END_STAGE_BOUNDS_MS = Object.freeze({
   // (libpod-client.ts exchange).
   containerStep:
     2 * DEFAULT_REQUEST_TIMEOUT_MS + Math.max(CONTAINER_STOP_GRACE_MS, FORCE_REMOVE_STOP_GRACE_SECONDS * 1000),
+  // The wait that follows a stop or a force removal whose request missed its bound while Podman was still working on it: the
+  // state of the container is read until it has ended, inside this bound (CONTAINER_END_CONFIRM_MS). Spent only after such a miss.
+  containerConfirm: CONTAINER_END_CONFIRM_MS,
   // The delete of the realm sandbox at the gateway.
   sandboxDelete: SANDBOX_DELETE_DEADLINE_MS,
 });
@@ -37,4 +49,5 @@ export const SESSION_END_WORST_CASE_MS =
   SESSION_END_STAGE_BOUNDS_MS.createWait +
   SESSION_END_STAGE_BOUNDS_MS.agentosStop +
   SESSION_END_STAGE_BOUNDS_MS.containerStep +
+  SESSION_END_STAGE_BOUNDS_MS.containerConfirm +
   SESSION_END_STAGE_BOUNDS_MS.sandboxDelete;

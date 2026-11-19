@@ -355,6 +355,18 @@ void test("failureKindsOf: a daemon that did not exit is a stop-timeout, and an 
   assert.equal(windowOutcome([{ variant: "a", state: step.state, ended: "host" }]).outcome, "OTHER-FAILURE");
 });
 
+void test("failureKindsOf: a failing realm down after a variant c iteration is a failure of its own kind, kept and counted, never a host stop", () => {
+  const base = cleanOutcome();
+  assert.deepEqual(failureKindsOf({ ...base, down: { kind: "ok", notice: false } }), []);
+  const failedDown: UpOutcome = { kind: "other-failure", code: "AGENTOS_STOP_FAILED", notice: false };
+  assert.deepEqual(failureKindsOf({ ...base, down: failedDown }), ["down-failed"]);
+  assert.deepEqual(failureKindsOf({ ...base, down: { kind: "timeout", notice: false } }), ["down-failed"]);
+  const step = chainStep(newChainState("c", 5, 3), { ...base, down: failedDown });
+  assert.equal(step.action, "restart-chain");
+  assert.deepEqual(step.state.failures, [{ iteration: 1, kinds: ["down-failed"] }]);
+  assert.equal(windowOutcome([{ variant: "c", state: step.state, ended: "host" }]).outcome, "OTHER-FAILURE");
+});
+
 void test("chainStep: a clean iteration continues until the consecutive count reaches the target, then the variant is done clean", () => {
   let state = newChainState("a", 3, 3);
   const actions: ChainAction[] = [];
@@ -714,6 +726,7 @@ function record(overrides: Partial<IterationRecord> = {}): IterationRecord {
     iteration: 4,
     up: UP_OK,
     interruptedUp: undefined,
+    down: undefined,
     active: true,
     execOk: true,
     stop: { kind: "clean" },
@@ -734,7 +747,7 @@ function record(overrides: Partial<IterationRecord> = {}): IterationRecord {
 void test("iterationEvidenceLine: a clean iteration is one closed-phrase line", () => {
   assert.equal(
     iterationEvidenceLine(record()),
-    "variant=a chain=1 iteration=4 result=clean kinds=none up=ok upCode=none upCause=none interruptedUp=none active=yes execOk=yes stop=clean failedTeardowns=none stopCode=none stoppingSeen=none startupSeen=none notice=no containersRemoved=none stopMs=812 gapToUpMs=40 upMs=9100 lateAfterExit=0 lateAfterNextUp=0 loadBefore=0.25 loadAfter=0.5",
+    "variant=a chain=1 iteration=4 result=clean kinds=none up=ok upCode=none upCause=none interruptedUp=none down=none downCode=none active=yes execOk=yes stop=clean failedTeardowns=none stopCode=none stoppingSeen=none startupSeen=none notice=no containersRemoved=none stopMs=812 gapToUpMs=40 upMs=9100 lateAfterExit=0 lateAfterNextUp=0 loadBefore=0.25 loadAfter=0.5",
   );
 });
 
@@ -776,6 +789,13 @@ void test("iterationEvidenceLine: a dirty stop keeps the failed-teardown count a
 void test("iterationEvidenceLine: startupSeen is recorded for every stop that observes it, a clean one included", () => {
   assert.match(iterationEvidenceLine(record({ variant: "c", startupSeen: true })), /stop=clean failedTeardowns=none stopCode=none stoppingSeen=none startupSeen=yes/);
   assert.match(iterationEvidenceLine(record({ variant: "c", startupSeen: false })), /stop=clean .* startupSeen=no /);
+});
+
+void test("iterationEvidenceLine: a failing realm down after a variant c iteration keeps its code", () => {
+  const line = iterationEvidenceLine(
+    record({ variant: "c", down: { kind: "other-failure", code: "AGENTOS_STOP_FAILED", notice: false }, kinds: ["down-failed"] }),
+  );
+  assert.match(line, /result=failed kinds=down-failed .* down=other-failure downCode=AGENTOS_STOP_FAILED active=yes/);
 });
 
 void test("iterationEvidenceLine: unobserved figures are none, never a number", () => {

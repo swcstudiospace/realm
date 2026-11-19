@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-19
+
+### Maintenance
+- test(host): Grok attribution matrix, host drive probes and gated validator cells (48-01, HTIER-01) (#221) (4bb244a)
+
 ## [0.7.3] - 2026-11-19
 
 ### Maintenance
