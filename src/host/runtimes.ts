@@ -308,10 +308,10 @@ export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.
   // Phase 40 (D-40-01, D-40-02). Realm-only host: its flag is not a GSD Core installer flag. Evidence E-40-02 to E-40-05: `muse mcp add` writes
   // settings.json below XDG_CONFIG_HOME/muse with `mcpServers.realm` and schema_version 1; the recipe adds `required: true` (E-40-03) so a failed
   // Realm aborts the run, seeds schema_version only into a file it creates (E-40-04) and refuses a file that also holds the rival `mcp_servers` spelling (E-40-05).
-  "muse-code": entry("muse-code", {
+"muse-code": entry("muse-code", {
     flag: "--muse-code",
     displayName: "Muse Code",
-    tier: "config-only",
+    tier: "proven",
     homes: [".config/muse"],
     envBase: { name: "XDG_CONFIG_HOME", sub: "muse" },
     binaries: ["muse"],

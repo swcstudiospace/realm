@@ -96,8 +96,9 @@ was byte-equal before and after. The result covers Grok Build 1.0.77 on one mach
 `test/support/host-registry.ts`. The three-source observation (`config.toml`, `~/.claude.json`, `.mcp.json`) is not part of
 this run: it was made by hand in isolated homes with `grok mcp doctor --json` on the same date (40-CONTEXT E-40-09).
 
-Not shown: a Grok Build boot against the production stack, and a model-driven tool call. No production tier is defined for this
-host.
+Attribution result of Phase 48 (2026-11-19, Grok Build 1.0.77): the source matrix (plan 48-01, cells a to i, each run twice) shows that with the recipe's `config.toml` entry present the started server carries `grok-build` (cells a, c, d, e, g, h, i), and with the Claude file alone it carries `claude` (cell b); the gated validator step passed 1 of 1 the same day (`test/integration/host-live-wave2.test.ts`). The live both-files attach never reached the host (same install failure as the production tier), and the Claude-alone control named presence `claude` but wrote no attach audit line (the cold doctor left in 1595 ms). The first source winning by name is an observation of version 1.0.77 and the documented order of that version, not a guarantee for later versions. The verified workaround is `realm host install grok-build` (cells a and c). The Claude vendor switch (`[compat.claude] mcps = false`, or the environment variable `GROK_CLAUDE_MCPS_ENABLED`) exists but does not stop the Claude file being loaded on 1.0.77, so it is not a working workaround and the recipe does not set it (OD-48-4). `adapters/claude-plugin` stays labelled `claude`.
+
+Not shown: a Grok Build boot against the production stack (the production tier of 2026-11-19 failed at `realm host install grok-build --dry-run` with `config-home-missing`, catalogue `POLICY_DENIED`, before the host command ran; the harness fix, to create the grok config home in `productionOverrides`, is carried as `GAP-48-03` and the tier stays `config-only`), and a model-driven tool call (`GAP-48-01`).
 
 ## Not documented
 

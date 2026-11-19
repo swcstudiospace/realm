@@ -77,8 +77,7 @@ value-identical (status installed, entry `ok`); uninstall removed only Realm's e
 byte-equal before and after. The result covers Prime Agent 0.10.2 on one machine only and is recorded in
 `test/support/host-registry.ts`.
 
-Not shown: a Prime Agent boot against the production stack, and a model-driven tool call. No production tier is defined for
-this host (`GAP-40-01` in `docs/integration/host-plugin-gaps.md`).
+Not shown: a Prime Agent boot against the production stack, and a model-driven tool call. No credential-free command starts the registered server on Prime Agent 0.10.2 (blocker B-48-02, observed 2026-11-19 in Phase 48 plan 48-01: the commands in the validator tier above read or write the file and start nothing, and a start needs a model tool call), so the production tier is a named gap, not a result (`GAP-48-04` in `docs/integration/host-plugin-gaps.md`).
 
 ## Not documented
 

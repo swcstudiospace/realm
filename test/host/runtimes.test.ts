@@ -27,7 +27,7 @@ const EXPECTED_TIERS: Record<HostId, HostTier> = {
   kilo: "config-only", copilot: "config-only", antigravity: "config-only", cursor: "config-only",
   windsurf: "config-only", augment: "config-only", trae: "config-only", qwen: "config-only",
   hermes: "config-only", codebuddy: "config-only", cline: "config-only", "kimi-code": "config-only",
-  zcode: "config-only", pi: "config-only", "muse-code": "config-only", "prime-agent": "config-only", "grok-build": "config-only",
+  zcode: "config-only", pi: "config-only", "muse-code": "proven", "prime-agent": "config-only", "grok-build": "config-only",
 };
 const EXPECTED_HOMES: Record<HostId, readonly (readonly [string, "config" | "skills" | "mcp"])[]> = {
   antigravity: [[".gemini/config", "config"]],
