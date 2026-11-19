@@ -1,12 +1,13 @@
 // The hermetic test of test/support/omp-calibration.ts (Phase 45, OMPV-04; 45-CONTEXT D-45-06 and D-45-08): the four calibrated constants
-// are unset until plan 45-04 freezes them, and while they are unset no verdict is possible. Plan 45-04 Task 4 is the only change allowed
-// to this test, and it changes it to pin the frozen values and their derivation. Pure: no process, no clock, no file, no host.
+// are unset until plan 45-04 freezes them, and while they are unset no verdict is possible. Plan 45-04 Task 4 froze them from a recorded
+// calibration; on an underivable calibration (2026-11-19: three attempts, all refused V0, zero valid controls) Task 7 pins the underivable
+// derivation instead, and no bound is frozen. Pure: no process, no clock, no file, no host.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CALIBRATED_BOUNDS, CALIBRATION_FREEZE } from "./omp-calibration.js";
 import { type StallSet, type WindowObservation } from "./omp-contention.js";
-import { type Bounds, decideVerdict, runIndexOf, type RunObservation, TIER_SCOPED } from "./omp-verdict.js";
+import { type Bounds, decideVerdict, deriveBounds, runIndexOf, type RunObservation, TIER_SCOPED } from "./omp-verdict.js";
 import { PROBE_INTERVAL_MS, type ProbeSample, summariseLatencies } from "./responsiveness.js";
 
 const NO_STALL: StallSet = { count: 0, attributedCount: 0, onCpuMs: 0, runqMs: 0, sleepMs: 0, onCpuShare: 0, sleepShare: 0, cause: "none" };
@@ -45,4 +46,14 @@ void test("OMPV-04 the day the bounds are set they are four numbers, the stall s
     assert.equal(typeof bounds.controlSelfP95Ms, "number");
     assert.ok(bounds.stallShareMax === null || typeof bounds.stallShareMax === "number");
   }
+});
+
+void test("OMPV-04 deriveBounds on zero valid controls (the recorded 2026-11-19 calibration: three attempts, all refused V0) is underivable, so no bound is frozen", () => {
+  const derivation = deriveBounds([]);
+  if (derivation.derivable) {
+    assert.fail("deriveBounds over zero valid controls must be underivable");
+  }
+  assert.match(derivation.reason, /^0 of 0 calibration controls met the thresholds, fewer than 5$/);
+  assert.equal(CALIBRATED_BOUNDS, null);
+  assert.equal(CALIBRATION_FREEZE, null);
 });
