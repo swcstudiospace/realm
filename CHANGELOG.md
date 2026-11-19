@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-19
+
+### Maintenance
+- ci: breaking change guard workflow (42-02, option A, needs owner review of the exact head) (#205) (1c16b3a)
+
 ## [0.6.2] - 2026-11-19
 
 ### Added
