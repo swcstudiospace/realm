@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-19
+
+### Maintenance
+- test(omp): deterministic in-process stall probe with min-of-5 rule and seeded red case (45-02, OMPV-02) (#220) (9ed99b7)
+- test(host): wire timeline, frozen legacy-kimi classification and attribution rules, evidence and probes (47-01) (#219) (d4c92b8)
+
 ## [0.7.2] - 2026-11-19
 
 ### Maintenance
