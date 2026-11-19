@@ -237,6 +237,7 @@ Plans:
 - [x] **Phase 41: Daemon teardown flake** - The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, its cause found, and the fix or bound proved by a hermetic test and a live run. (completed 2026-11-18)
 - [ ] **Phase 42: Evidence debt** - The whole unit suite runs as uid 5002 (EVID-01 Set B), and a script under `scripts/check` reports breaking commit subjects without the `!` marker on a pull request range, report-only where enforcement needs a workflow change.
 - [x] **Phase 43: Kimi and kimi-code rehearsal** - Both CLIs are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02). (completed 2026-11-18)
+- [ ] **Phase 44: Omp non-blocking cold attach (owner-directed from loaded-host evidence)** - The Omp extension path is made lighter and later at the start of the attach (the daemon-launch module split so the extension no longer loads the CLI graph, the attach started one turn after the session handler), the responsiveness harness reads its verdict from the Omp ready frame with a labelled control-relative secondary measure, and the change is re-proved by a paired before/after comparison on the loaded host, labelled loaded and paired, on the owner's override of the VOID outcome of Phase 38 (D-44-01, 2026-11-18/19).
 
 ## Phase Details
 
@@ -653,6 +654,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 41. Daemon teardown flake | 2/2 | Complete    | 2026-11-18 |
 | 42. Evidence debt | 0/0 | Not started | - |
 | 43. Kimi and kimi-code rehearsal | 2/2 | Complete    | 2026-11-18 |
+| 44. Omp non-blocking cold attach | 0/3 | Not started | - |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -988,3 +990,20 @@ Plans:
 Plans:
 - [x] 43-01-PLAN.md: Give the two Kimi hosts the live test wiring they lack so Plan 43-02 can run them: add kimi-code to the live table and t (wave 1)
 - [x] 43-02-PLAN.md: Install both Kimi CLIs outside the repository, run the validator and production tiers for each one that can run, and rec (wave 2)
+
+### Phase 44: Omp non-blocking cold attach (owner-directed from loaded-host evidence)
+
+**Goal:** The Omp extension answers `get_state` as early in the cold attach as the extension controls (it loads about 42 modules instead of about 98 and starts the attach one event-loop turn after the session handler, fail closed kept), the harness verdict window starts at Omp ready, and the effect is measured by a paired before/after comparison on the loaded host (at least five valid pairs, interleaved, each against its own no-extension control), labelled loaded and paired and never cited as a quiet-host measurement; built on the owner's override of the Phase 38 VOID outcome (2026-11-18/19). OI-11 stays Carried.
+**Depends on:** Phase 38
+**Requirements**: OMPR-04, OMPR-05, OMPR-06
+**Success Criteria** (what must be TRUE):
+  1. The responsiveness harness reads its cold-attach verdict over the window that starts at Omp's ready frame, records a control-relative comparison and the host CPU pressure as a labelled secondary measure, and leaves every threshold and the Phase 38 decision constants unchanged; the baseline instability is recorded as a finding.
+  2. The static import closure of the Omp extension reaches no CLI, doctor, MCP or ACP module and reaches `node:child_process` only through `src/daemon/launch.ts`; the attach starts through an injected deferral that skips an ended or superseded session; no mutation runs before the session is ready, shown by an attach-window test and the unedited Omp, boot and contract suites.
+  3. The paired decision rule exists as code with a passing hermetic test before the first paired run; the window records at least five valid pairs (or the outcome VOID), every number labelled loaded and paired, and the outcome (EFFECT, NO-EFFECT, REGRESSION, NOT-REPRODUCED or VOID) follows the rule.
+  4. The records and the OI-11 row state the owner override of the VOID outcome and read Carried with the paired outcome; no document says OI-11 is closed, OMPR-01 is met, or a quiet-host measurement was made.
+**Plans:** 3 plans
+
+Plans:
+- [ ] 44-01-PLAN.md: supersede 38-02 and 38-03, attribution, harness correction (ready window, control-relative secondary, CPU pressure), the paired arm test and the frozen paired rule as code (wave 1)
+- [ ] 44-02-PLAN.md: K1 launch module split with full cutover and lint and gate swap, K2 injected deferral, attach-window test, docs (wave 2)
+- [ ] 44-03-PLAN.md: the paired loaded window (blocking human), the record, the outcome, docs, ledger line and label (wave 3)
