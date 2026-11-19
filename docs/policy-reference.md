@@ -250,7 +250,7 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   lower configured budget does not change it. The daemon's runtime guard in
   `src/daemon/daemon.ts` remains as defence in depth for a waiter whose
   remaining client wait is shorter than the budget.
-- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (60000 ms) is a separate
+- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (70000 ms) is a separate
   constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/bounds.ts`). It is derived
   from the stage bounds of one session end in `src/runtime/teardown-stages.ts`.
 
@@ -365,7 +365,7 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 | --- | --- | --- |
 | `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. For an `exec`, the process tree is ended inside the sandbox by the watchdog of `src/runtime/exec-watchdog.ts` shortly after the reply (dead about 3 s after it in the Phase 39 live run); the client kill alone does not end it. |
 | `WATCHDOG_MARGIN_MS` | `500` (`src/runtime/exec-watchdog.ts`) | Added to the 28 s runner deadline to give the in-sandbox exec watchdog its own deadline (28.5 s), so the watchdog never ends a call before the client's bound does. Not a policy key. |
-| `TEARDOWN_TIMEOUT_MS` | `60_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`, derived as the worst case of the stage bounds of one session end (`SESSION_END_WORST_CASE_MS`, `src/runtime/teardown-stages.ts`, 57 000 ms) plus a 3 000 ms margin; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
+| `TEARDOWN_TIMEOUT_MS` | `70_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`, derived as the worst case of the stage bounds of one session end (`SESSION_END_WORST_CASE_MS`, `src/runtime/teardown-stages.ts`, 67 000 ms: the create wait 15 000, the AgentOS stop 15 000, the container step 12 000, the container confirmation wait 10 000 (`CONTAINER_END_CONFIRM_MS`, Phase 46) and the sandbox delete 15 000) plus a 3 000 ms margin; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
 | `CONTAINER_STOP_GRACE_MS` | `2_000` (`src/runtime/teardown-stages.ts`) | Libpod stop timeout grace period of the stop path (`CONTAINER_STOP_GRACE_MS`, `src/runtime/teardown-stages.ts`); the sandbox runtime ignores SIGTERM, so a longer grace is dead time. |
 | `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/teardown-stages.ts`) | Backstop on the AgentOS stop, and on the wait for a create still in flight; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` in `src/runtime/teardown-stages.ts` and `stopDeadlineMs` in `src/runtime/session-execution.ts`). |

@@ -19,7 +19,7 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
-import { withTimeout } from "../core/timeout.js";
+import { sleep, withTimeout } from "../core/timeout.js";
 import { bindRoot } from "../fs/root.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
 import type { EgressRule } from "../contract/validate.js";
@@ -39,7 +39,13 @@ import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from ".
 import { readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
 import { watchdogWorkload } from "./exec-watchdog.js";
-import { AGENTOS_STOP_DEADLINE_MS, CONTAINER_STOP_GRACE_MS, SANDBOX_DELETE_DEADLINE_MS } from "./teardown-stages.js";
+import {
+  AGENTOS_STOP_DEADLINE_MS,
+  CONTAINER_CONFIRM_POLL_MS,
+  CONTAINER_END_CONFIRM_MS,
+  CONTAINER_STOP_GRACE_MS,
+  SANDBOX_DELETE_DEADLINE_MS,
+} from "./teardown-stages.js";
 import {
   buildExecArgv,
   deleteSandbox,
@@ -349,17 +355,59 @@ export class SessionExecution implements ExecutionService {
 
   // The inspect, then the container step. A rejected inspect is a failed step, and the container step is then skipped. A stop of
   // a container the inspect reports gone is skipped too. A removal is sent regardless, since a gone container counts as removed.
+  // A stop or removal request that misses its request bound (PODMAN_MACHINE_DOWN) while Podman is still working is not yet a
+  // failure: the container state is read until it has ended, for at most CONTAINER_END_CONFIRM_MS, and only a container that has
+  // not ended by then keeps the failed step (F-46-1). Any other failure is a failed step at once.
   private async containerStep(containerId: string, mode: "stop" | "remove"): Promise<StopStep> {
+    let inspect: LibpodInspect | null;
     try {
-      const inspect = await this.libpod.inspectContainer(containerId);
+      inspect = await this.libpod.inspectContainer(containerId);
+    } catch (error) {
+      return { ok: false, causeCode: catalogueCodeOf(error) };
+    }
+    if (mode === "stop" && inspect === null) {
+      return STEP_OK;
+    }
+    try {
       if (mode === "remove") {
         await this.libpod.removeContainer(containerId, { force: true });
-      } else if (inspect !== null) {
+      } else {
         await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
       }
       return STEP_OK;
     } catch (error) {
-      return { ok: false, causeCode: catalogueCodeOf(error) };
+      const causeCode = catalogueCodeOf(error);
+      if (causeCode === "PODMAN_MACHINE_DOWN" && (await this.containerEnded(containerId, mode))) {
+        return STEP_OK;
+      }
+      return { ok: false, causeCode };
+    }
+  }
+
+  // Reads the container state every CONTAINER_CONFIRM_POLL_MS until the container has ended (a stop: it has stopped or is gone; a
+  // removal: it is gone), for at most CONTAINER_END_CONFIRM_MS. A read that fails is read again. False at the bound.
+  private async containerEnded(containerId: string, mode: "stop" | "remove"): Promise<boolean> {
+    const waiting = { open: true };
+    const poll = async (): Promise<boolean> => {
+      while (waiting.open) {
+        try {
+          const inspect = await this.libpod.inspectContainer(containerId);
+          if (inspect === null || (mode === "stop" && hasEnded(inspect))) {
+            return true;
+          }
+        } catch {
+          // A state that cannot be read is not an end: it is read again until the bound.
+        }
+        await sleep(CONTAINER_CONFIRM_POLL_MS);
+      }
+      return false;
+    };
+    try {
+      return await withTimeout(poll(), CONTAINER_END_CONFIRM_MS, "AGENTOS_STOP_FAILED");
+    } catch {
+      return false;
+    } finally {
+      waiting.open = false;
     }
   }
 
@@ -476,6 +524,16 @@ export class SessionExecution implements ExecutionService {
 function isRunning(inspect: LibpodInspect): boolean {
   const state: unknown = inspect["State"];
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
+}
+
+// The states in which a container holds nothing: it has not started or it has stopped. A state that cannot be read, and every
+// other state (running, paused, stopping, removing), is not an end, so the confirmation wait fails closed.
+const ENDED_STATES: Readonly<Record<string, true>> = { configured: true, created: true, exited: true, stopped: true };
+
+function hasEnded(inspect: LibpodInspect): boolean {
+  const state: unknown = inspect["State"];
+  const status: unknown = typeof state === "object" && state !== null ? Reflect.get(state, "Status") : undefined;
+  return typeof status === "string" && ENDED_STATES[status] === true;
 }
 
 // Which property of a session container the adoption verdict refused it for. The identity properties are checked first, in

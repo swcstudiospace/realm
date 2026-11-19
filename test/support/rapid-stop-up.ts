@@ -229,7 +229,8 @@ export type FailureKind =
   | "dirty-stop"
   | "row-absent"
   | "log-unreadable"
-  | "stop-timeout";
+  | "stop-timeout"
+  | "down-failed";
 
 // One failed iteration, kept whole: its number and every kind it failed in, the up kind first.
 export interface IterationFailure {
@@ -243,6 +244,8 @@ export interface IterationOutcome {
   readonly active: boolean;
   readonly execOk: boolean;
   readonly stop: StopClass;
+  // The realm down that follows a variant c iteration, classified like an up; absent for the other variants.
+  readonly down?: UpOutcome | undefined;
 }
 
 // The state of one variant across its chains: the iterations run, the iterations that were clean, the consecutive clean count
@@ -283,6 +286,10 @@ export function failureKindsOf(outcome: IterationOutcome): readonly FailureKind[
     kinds.push("stop-timeout");
   } else if (outcome.stop.kind !== "clean") {
     kinds.push(outcome.stop.kind);
+  }
+  // The realm down that follows a variant c iteration: a failing down (a product code, a timeout) is a failure of its own kind.
+  if (outcome.down !== undefined && outcome.down.kind !== "ok") {
+    kinds.push("down-failed");
   }
   if (kinds.length === 0 && outcome.up.kind === "not-run") {
     kinds.push("other-failure");
@@ -558,6 +565,8 @@ export interface IterationRecord {
   readonly up: UpOutcome;
   // The first, interrupted up of variant c; undefined for the other variants.
   readonly interruptedUp: UpOutcome | undefined;
+  // The realm down that follows each variant c iteration; undefined for the other variants.
+  readonly down: UpOutcome | undefined;
   readonly active: boolean;
   readonly execOk: boolean;
   readonly stop: StopClass;
@@ -589,6 +598,8 @@ export function iterationEvidenceLine(record: IterationRecord): string {
     upCode: record.up.kind === "other-failure" ? (record.up.code ?? null) : null,
     upCause: record.up.kind === "start-failed" ? (record.up.causeCode ?? null) : null,
     interruptedUp: record.interruptedUp === undefined ? null : record.interruptedUp.kind,
+    down: record.down === undefined ? null : record.down.kind,
+    downCode: record.down?.kind === "other-failure" ? (record.down.code ?? null) : null,
     active: record.active,
     execOk: record.execOk,
     stop: stop.kind,
