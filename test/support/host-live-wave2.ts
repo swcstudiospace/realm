@@ -38,6 +38,25 @@ export interface Wave2AddOther {
   readonly note: string;
 }
 
+// One cell of the Grok Build source matrix (48-01, CONTEXT D-48-05): `realm host` words that put the cell's files into the isolated HOME,
+// then one doctor run whose started server must carry `expectLabel`. The cells run in order in the same HOME.
+export interface Wave2SourceCell {
+  // Printed in the test diagnostic.
+  readonly name: string;
+  // Each entry is the words after `realm host`.
+  readonly setup: readonly (readonly string[])[];
+  // The `--host` label the server named realm must carry (what the stub recorded and what the doctor JSON printed).
+  readonly expectLabel: string;
+}
+
+export interface Wave2SourceMatrix {
+  // The host's JSON doctor command, after the executable. The path argument is inside the rig so a leader never leaves it.
+  readonly doctorArgs: (rig: HostRig) => readonly string[];
+  readonly cells: readonly Wave2SourceCell[];
+  // `realm host` words that put the HOME back as it was before the cells.
+  readonly restore: readonly (readonly string[])[];
+}
+
 export interface Wave2Script {
   // Override variable -> directory name below the rig root (created by the rig).
   readonly overrides: Readonly<Record<string, string>>;
@@ -48,6 +67,8 @@ export interface Wave2Script {
   // The directories below the home that Realm's install creates and uninstall removes again (never the home itself).
   readonly createdDirs: (rig: HostRig) => readonly string[];
   readonly validators: readonly Wave2Validator[];
+  // The source-precedence cells of a host that shares configuration files with another (Grok Build reads `~/.claude.json`, GAP-40-01).
+  readonly sourceMatrix?: Wave2SourceMatrix;
   readonly addOther?: Wave2AddOther;
   // The operator's real configuration files of this host below `realHome`: hashed before and after, and never to change.
   readonly realFiles: (realHome: string) => readonly string[];
@@ -197,8 +218,18 @@ export const WAVE2_LIVE: Readonly<Record<Wave2LiveId, Wave2Script>> = Object.fre
       { args: ["mcp", "list"], expect: [hostFlag("grok-build")], launches: false },
       { args: ["mcp", "doctor"], expect: [/server started/], launches: true, exitCodes: [0, 1] },
     ],
+    // 48-01 D-48-05: Grok merges `config.toml` over `~/.claude.json` over `.mcp.json` by server name (documented order, observed on 1.0.77), so
+    // with the recipe's entry present the server named realm carries grok-build, and with the Claude file alone it carries claude (the residual).
+    sourceMatrix: {
+      doctorArgs: (rig) => ["mcp", "doctor", "--json", "--leader-socket", rig.path("grok-leader.sock")],
+      cells: [
+        { name: "both files: config.toml and the Claude file", setup: [["install", "claude"]], expectLabel: "grok-build" },
+        { name: "the Claude file alone", setup: [["uninstall", "grok-build"]], expectLabel: "claude" },
+      ],
+      restore: [["install", "grok-build"], ["uninstall", "claude"]],
+    },
     addOther: { args: ["mcp", "add", "other", "--", "other-cmd"], note: "grok mcp add rewrites the file with a comment-dropping editor and the Realm table stays byte-identical (E-40-07)" },
-    realFiles: (home) => [`${home}/.grok/config.toml`],
+    realFiles: (home) => [`${home}/.grok/config.toml`, `${home}/.claude.json`],
   },
 });
 
@@ -288,4 +319,30 @@ export function parseLooseJson(text: string): unknown {
   }
   const parsed: unknown = JSON.parse(out);
   return parsed;
+}
+
+// The `--host` label of the server named realm in the JSON `grok mcp doctor --json` prints (`servers[].name` and `servers[].target`, for
+// example `realm mcp --host grok-build`). The word `none` when nothing parses or no server is named realm, `several` when more than one is,
+// `unlabelled` when the one realm server's target names no host. Starts nothing and never throws.
+export function doctorRealmLabel(text: string): string {
+  let parsed: unknown;
+  try {
+    parsed = parseLooseJson(text);
+  } catch {
+    return "none";
+  }
+  const servers = isRecord(parsed) ? parsed["servers"] : undefined;
+  if (!Array.isArray(servers)) {
+    return "none";
+  }
+  const realms = (servers as unknown[]).filter((server) => isRecord(server) && server["name"] === "realm");
+  if (realms.length === 0) {
+    return "none";
+  }
+  const [only] = realms;
+  if (realms.length > 1 || !isRecord(only)) {
+    return "several";
+  }
+  const { target } = only;
+  return typeof target === "string" ? (/--host["',\s]+([A-Za-z0-9._-]+)/.exec(target)?.[1] ?? "unlabelled") : "unlabelled";
 }

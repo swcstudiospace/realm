@@ -44,7 +44,7 @@ import {
   stripAnsi,
   writeStubRealm,
 } from "../support/host-live.js";
-import { WAVE2_LIVE, WAVE2_LIVE_IDS, wave2Recipe, type Wave2LiveId } from "../support/host-live-wave2.js";
+import { doctorRealmLabel, WAVE2_LIVE, WAVE2_LIVE_IDS, wave2Recipe, type Wave2LiveId } from "../support/host-live-wave2.js";
 import { pollUntil } from "../support/production-live.js";
 import { scaledMs } from "../support/timing.js";
 
@@ -668,6 +668,56 @@ void test("the wave-2 script table covers the eleven hosts, runs only commands t
     ANTIGRAVITY_GAP,
     "Antigravity's CLI `agy` was never installed or run: its MCP file is documented by three Google pages and no listing command was observed (25-CONTEXT E-AG2); its recipe is proven on a fixture host only",
   );
+});
+
+// ---- The Grok Build source matrix (48-01, CONTEXT D-48-05) ---------------------------------------------------------------------
+
+function doctorJson(servers: readonly Record<string, unknown>[]): string {
+  return `${JSON.stringify({ sources: [], servers, healthy_count: servers.length, failing_count: 0 }, null, 2)}\n`;
+}
+
+void test("doctorRealmLabel reads the --host label of the server named realm, and never throws", () => {
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "realm", target: "realm mcp --host grok-build", source: "config" }])), "grok-build");
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "realm", target: "realm mcp --host claude", source: "~/.claude.json" }])), "claude");
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "other", target: "other-cmd", source: "config" }])), "none", "no server named realm");
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "other", target: "realm mcp --host grok-build", source: "config" }, { name: "realm", target: "realm mcp --host claude", source: "config" }])), "claude", "only the server named realm counts");
+  assert.equal(
+    doctorRealmLabel(doctorJson([{ name: "realm", target: "realm mcp --host grok-build", source: "config" }, { name: "realm", target: "realm mcp --host claude", source: "~/.claude.json" }])),
+    "several",
+    "two servers named realm",
+  );
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "realm", target: "realm mcp", source: "config" }])), "unlabelled", "a bare launcher names no host");
+  assert.equal(doctorRealmLabel(doctorJson([{ name: "realm", source: "config" }])), "unlabelled", "a server with no target names no host");
+  assert.equal(doctorRealmLabel("not json at all"), "none");
+  assert.equal(doctorRealmLabel(""), "none");
+  assert.equal(doctorRealmLabel("[1, 2]"), "none");
+  assert.equal(doctorRealmLabel('{"servers": "realm"}'), "none");
+  assert.equal(doctorRealmLabel(doctorJson([])), "none");
+});
+
+void test("the Grok Build script keeps the source matrix: the both-files cell is grok-build, the Claude file alone is claude, and the HOME is put back", (t) => {
+  const matrix = WAVE2_LIVE["grok-build"].sourceMatrix;
+  assert.ok(matrix !== undefined, "grok-build carries the source matrix");
+  assert.deepEqual(
+    matrix.cells.map((cell) => [cell.setup, cell.expectLabel]),
+    [
+      [[["install", "claude"]], "grok-build"],
+      [[["uninstall", "grok-build"]], "claude"],
+    ],
+  );
+  assert.deepEqual(matrix.restore, [["install", "grok-build"], ["uninstall", "claude"]]);
+  const rig = createHostRig({ host: "grok-build", bin: "/bin/sh", overrides: {} }, {});
+  t.after(() => {
+    rig.dispose();
+  });
+  const args = matrix.doctorArgs(rig);
+  assert.deepEqual(args.slice(0, 3), ["mcp", "doctor", "--json"]);
+  assert.equal(args[3], "--leader-socket");
+  assert.ok(args[4]?.startsWith(`${rig.root}${sep}`), "the leader socket lies inside the rig");
+  assert.ok(WAVE2_LIVE["grok-build"].realFiles("/operator-home").includes("/operator-home/.claude.json"), "the operator's Claude file is hashed before and after");
+  for (const host of WAVE2_LIVE_IDS) {
+    assert.equal(WAVE2_LIVE[host].sourceMatrix !== undefined, host === "grok-build", `${host}: only Grok Build shares a file with another host`);
+  }
 });
 
 // ---- Process-group runner --------------------------------------------------------------------------------------------------
