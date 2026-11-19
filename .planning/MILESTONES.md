@@ -1,5 +1,21 @@
 # Milestones
 
+## v6.0 Responsiveness, exec kill proof, host ids and evidence debt (Shipped: 2026-11-19)
+
+**Phases completed:** 7 phases, 17 plans (plans 38-02 and 38-03 were superseded by Phase 44 and not executed)
+
+**Requirements:** 19 audited (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02): 17 marked Complete (OMPR-02 not triggered, OMPR-03 as VOID, HOSTID-02 and DEBT-03 with recorded partials), OMPR-01 carried (not met) and OMPR-06 partial. Audit: `milestones/v6.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- The Omp cold attach could not be measured on a quiet host: Phase 38's window made six attempts and recorded one valid run (case `serving-stall`), so its frozen rule gave VOID and OMPR-01 stays not met with OI-11 `Carried (no quiet slot)`. The owner (2026-11-19) took that run and the loaded runs as sufficient to act, and Phase 44 corrected the harness (the verdict window starts at Omp's ready frame; control-relative and CPU-pressure secondary measures), split the daemon launch out of the CLI (the extension's value imports 98 to 43) and deferred the attach start one turn (hermetic proof, fail closed kept), then ran a paired loaded A/B window that ended VOID (three valid pairs of five, OMPR-06 partial). No effect of the change is claimed, and `src/omp/plugin.ts` is at the 1000-line ceiling.
+- A real defect was closed (F-3, Phase 39): a timed-out exec left its process tree running in the sandbox, because the group kill is denied by the sandbox seccomp. An in-sandbox bash `/proc`-sweep watchdog now wraps every dispatcher exec; live closeout C showed the tree dead 2988 ms after the `TOOL_TIMEOUT` reply with 269 s of the sleeper's life left. The earlier Phase 24 closeout C and Phase 36 records were invalid for the kill claim and are corrected; the reply, bounds, audit line and error catalogue are unchanged.
+- Muse Code, Prime Agent and Grok Build have host ids and recipes (22 host ids, pinned in docs and tests) and attach under the enforce default (GAP-34-01 closed); the evidence is the daemon proof and the hosts' own CLIs at the validator tier, with no production tier and no model-driven call, and a Grok Build session that loads the shared Claude files stays attributed `claude` (GAP-40-01).
+- The slow daemon stop was explained and bounded (Phase 41): the stage bounds of one session end summed to more than the 30 s stop bound; the bound was derived and 10 live stops showed none near 30 s. Finding F-41-1 (a start failure after a rapid stop) is carried with its cause not established.
+- The v5.0 evidence debt was paid (Phase 42): the whole unit suite as uid 5002 (5542 tests, 0 failures, after a stale-build artefact and one test fix), a breaking-change marker guard (`scripts/check/breaking-change-guard.mjs`, 46 tests) and its CI workflow (option A, merged on the owner's review of the exact head, green on a real pull request), the ENF-04 closure statement; the ship flow's own `--enforce` run is owner-side and unconfirmed (DEBT-03 partial).
+- Kimi Code 2.6.3 passed the validator and production tiers cold, and the legacy kimi-cli 1.51.0 passed its validator tier and failed its production tier (cause not established; GAP-43-01 to GAP-43-03). Owner decisions of 2026-11-18/19: v6.0 scope A to F, release line 0.6.x, the latest release line is supported, CI option A, take the loaded evidence for Phase 44, complete v6.0; the v7.0 candidates are the Omp responsiveness repeat with a harness fix, F-41-1, the legacy kimi CLI and GAP-43-01, GAP-40-01 and production tiers for the new hosts, and the ship-flow enforce confirmation.
+
+---
+
 ## v5.0 Cold attach, enforced capability tokens and evidence (Shipped: 2026-11-18)
 
 **Phases completed:** 5 phases, 13 plans, 0 tasks

@@ -1,12 +1,21 @@
 ---
 phase: 38-omp-responsiveness-during-cold-attach
 verified: 2026-11-19
-verdict: gaps_found
-status: gaps_found
+verdict: passed_with_accepted_limitations
+status: passed
 score: "1 of 3 requirements met (OMPR-03 recorded either way); OMPR-01 not met (one valid quiet-host run in six attempts, three needed; outcome VOID); OMPR-02 not triggered (the frozen rule gave no verdict; plans 38-02 and 38-03 do not run)"
 ref: "origin/main 103725b, plus the recording change that carries this file"
 behavior_unverified: 3
-overrides_applied: 0
+overrides_applied: 2
+overrides:
+  - must_have: "OMPR-01: the Omp cold attach is measured on a quiet host, three valid runs, as a pass or a finding (gaps_found at verification: NOT MET, outcome VOID)"
+    reason: "Not met and not relabelled. Closure of the phase with OMPR-01 carried and OI-11 Carried (no quiet slot), by the owner decision of 2026-11-18/19 to take the single valid run plus the loaded runs as sufficient for Phase 44 (D-44-01) and by the owner decision of 2026-11-19 to complete milestone v6.0"
+    accepted_by: "owner"
+    accepted_at: "2026-11-19"
+  - must_have: "OMPR-02: the extension path is made non-blocking if the quiet-host measurement exceeds the thresholds (not triggered: the frozen rule gave VOID; plans 38-02 and 38-03 do not run)"
+    reason: "Not triggered. Plans 38-02 and 38-03 are superseded by Phase 44 (D-44-01 and D-44-02); the extension change was made there by the owner's override, as OMPR-05, and no quiet-host verdict was reached"
+    accepted_by: "owner"
+    accepted_at: "2026-11-19"
 covered_files:
   - ".planning/phases/38-omp-responsiveness-during-cold-attach/38-CONTEXT.md"
   - ".planning/phases/38-omp-responsiveness-during-cold-attach/38-01-PLAN.md"
@@ -21,6 +30,7 @@ covered_files:
   - "test/integration/omp-live-helpers.test.ts"
   - "test/integration/omp-responsiveness.test.ts"
   - "docs/integration/omp.md"
+covered_digest: "v3:sha256:89bad8ede40c8f87e37f5ff18104366f37027bd39042d192a40e3b221a439b51"
 ---
 
 # Phase 38 Verification: Omp responsiveness during cold attach
@@ -60,3 +70,7 @@ What this phase is so far: the decision rule as code (`responsiveness-decision.t
 ## Verdict
 
 gaps_found. OMPR-01 is not met: the quiet-host window made six attempts and recorded one valid run, so the frozen rule gives VOID and no verdict on the cold attach. OMPR-02 is not triggered, and plans 38-02 and 38-03 do not run. OMPR-03 is met in the sense that the numbers and host facts are recorded and OI-11 carries `Carried (no quiet slot)`. UI-01 stays the owner's call.
+
+## Closure (2026-11-19)
+
+The verdict above stands unchanged: gaps_found for OMPR-01 (not met, outcome VOID), OMPR-02 not triggered, OMPR-03 met as VOID, OI-11 Carried. The phase closure tool accepts only a `passed` status, so at milestone v6.0 closure the frontmatter `status` was set to `passed` and the `verdict` to `passed_with_accepted_limitations`, with two `overrides` entries that cite the owner decisions of 2026-11-18/19 (Phase 44 on the loaded evidence, D-44-01) and of 2026-11-19 (complete v6.0). This is not a result of the quiet-host window and does not meet OMPR-01. Plans 38-02 and 38-03 were not run and are marked `status: superseded` (superseded by Phase 44); the `covered_digest` was recomputed after that edit.

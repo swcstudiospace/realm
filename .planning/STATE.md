@@ -1,38 +1,37 @@
 ---
 gsd_state_version: "1.0"
 milestone: v6.0
-milestone_name: Responsiveness, exec kill proof, host ids and evidence debt
-current_phase: 38
-current_phase_name: Omp responsiveness during cold attach
-status: executing
-stopped_at: Phase 42 complete, ready to execute Phase 38
-last_updated: "2026-11-19T02:05:57.857Z"
+milestone_name: Responsiveness, exec kill proof, host ids and evidence debt (Shipped 2026-11-19)
+status: Awaiting next milestone
+stopped_at: Phase 44 complete — all phases complete
+last_updated: "2026-11-19T04:09:13.178Z"
 last_activity: 2026-11-19
-last_activity_desc: Phase 42 complete, transitioned to Phase 38
-state_head: 19bc12674edec310a8774e08858300cdc909f125
+last_activity_desc: Milestone v6.0 completed and archived
+state_head: b7720c87e1912bb9bc5edb71ec89aca157389919
 progress:
-  total_phases: 32
-  completed_phases: 49
-  total_plans: 16
-  completed_plans: 14
-  percent: 98
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 17
+  completed_plans: 17
+  percent: 100
+current_phase: 44
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-18)
+See: .planning/PROJECT.md (updated 2026-11-19)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt (phases 38 to 43, release line 0.6.x). Phases 38, 39, 40, 41 and 43 are independent; 42 comes after the others for the final non-root whole-suite run. Scope and owner decisions of 2026-11-18: `.planning/MILESTONE-CONTEXT.md`; the v5.0 close-out is `.planning/milestones/v5.0-MILESTONE-AUDIT.md`.
+**Current focus:** Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt (phases 38 to 44, release line 0.6.x), is complete and archived (2026-11-19, passed with accepted limitations: OMPR-01 carried, OMPR-06 partial); the next milestone is not started. Audit: `.planning/milestones/v6.0-MILESTONE-AUDIT.md`. Scope and owner decisions of 2026-11-18/19: `.planning/MILESTONE-CONTEXT.md`.
 
 ## Current Position
 
-Phase: 38 — Omp responsiveness during cold attach
-Plan: 2
-Status: Ready to execute
-Last activity: 2026-11-19 — Phase 42 complete, transitioned to Phase 38
+Phase: Milestone v6.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-19 — Milestone v6.0 completed and archived
 
 ## Current Recovery Boundaries
 
@@ -58,7 +57,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 117
+- Total plans completed: 121
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -97,6 +96,8 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | 41 | 2 | - | - |
 | 43 | 2 | - | - |
 | 42 | 3 | - | - |
+| 38 | 1 | - | - |
+| 44 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -243,7 +244,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 42 complete, ready to execute Phase 38
+Stopped at: Phase 44 complete — all phases complete
 Resume file: None
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).

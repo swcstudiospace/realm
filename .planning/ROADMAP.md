@@ -8,7 +8,7 @@ Milestone v3.0, Containment by Default, makes the sandbox the place where a mode
 
 Milestone v5.0, Cold attach, enforced capability tokens and evidence, makes `realm mcp` answer the MCP handshake before the sandbox is up so that hosts with a 30 second connect timeout connect on a cold start (Phase 33), turns capability tokens on by default as a breaking change with a migration path (Phase 34), backs the token claims with a non-root run, a memory-read probe and a live enforce proof (Phase 35), re-verifies the v1.0 live items this host can run (Phase 36), and removes the Anda bridge from the product spec by owner direction (Phase 37). It has five phases, 33 to 37, on release line 0.5.x; 34 depends on 33 and 35 on 34, while 36 and 37 are independent.
 
-Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt, measures the Omp cold attach on a quiet host and makes the Omp path non-blocking if it exceeds the thresholds (Phase 38), proves that a timed-out exec is killed and not merely finished (Phase 39), gives Muse Code, Prime Agent and Grok Build host ids so they work under the enforce default (Phase 40), finds and fixes the daemon teardown report `failedTeardowns=1` after about 30 s (Phase 41), pays the evidence debt of v5.0 (Phase 42), and rehearses kimi and kimi-code (Phase 43). It has six phases, 38 to 43, on release line 0.6.x; 38, 39, 40, 41 and 43 are independent and 42 comes after the others for the final non-root whole-suite run.
+Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt, tried to measure the Omp cold attach on a quiet host (Phase 38: outcome VOID, one valid run in six attempts), proves that a timed-out exec is killed and not merely finished (Phase 39), gives Muse Code, Prime Agent and Grok Build host ids so they work under the enforce default (Phase 40), finds and bounds the daemon teardown report `failedTeardowns=1` after about 30 s (Phase 41), pays the evidence debt of v5.0 (Phase 42), rehearses kimi and kimi-code (Phase 43), and, by the owner's decision of 2026-11-19 on the loaded-host evidence, corrects the responsiveness harness, makes the Omp attach lighter and later and runs a paired loaded A/B window that ended VOID (Phase 44). It has seven phases, 38 to 44, on release line 0.6.x; it shipped 2026-11-19 with OMPR-01 carried and OMPR-06 partial.
 
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
@@ -19,7 +19,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v3.0 Containment by Default** — Phases 12 to 26 (shipped 2026-11-17, release line 0.3.x; archived in `milestones/v3.0-ROADMAP.md`)
 - 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
 - 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
-- 🚧 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 43 (in progress, release line 0.6.x)
+- 🗄 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 44 (shipped 2026-11-19, release line 0.6.x; archived in `milestones/v6.0-ROADMAP.md`)
 
 ## Phases
 
@@ -227,17 +227,17 @@ Plans:
 - [x] **Phase 36: Live re-verification of the v1.0 open items** - The v1.0 live items this host can do (doctor and control-socket live modes, two reaper live checks, Muse Code and Hermes loading, Omp responsiveness) are re-verified with dated evidence or carried with a named reason; the Anda live handshake and licence items are closed as dropped by D-27-01. (completed 2026-11-18)
 - [x] **Phase 37: Spec update** - `docs/specs/realm-spec.xml` no longer describes the Anda bridge and no longer requires `andaUrl` or the degraded state, as an owner-directed edit of 2026-11-18 recorded in the pull request; all other spec content is kept. (completed 2026-11-18)
 
-### 🚧 v6.0 Responsiveness, exec kill proof, host ids and evidence debt (In progress, release line 0.6.x)
+### ✅ v6.0 Responsiveness, exec kill proof, host ids and evidence debt (Shipped 2026-11-19)
 
-**Milestone Goal:** The Omp cold attach is measured and, if needed, made non-blocking; a timed-out exec is proved dead; Muse Code, Prime Agent and Grok Build work under the enforce default; the daemon teardown report is explained and fixed; the v5.0 evidence debt is paid; and kimi and kimi-code are rehearsed or have named blockers.
+**Milestone Goal:** The Omp cold attach is measured and, if needed, made non-blocking; a timed-out exec is proved dead; Muse Code, Prime Agent and Grok Build work under the enforce default; the daemon teardown report is explained and fixed; the v5.0 evidence debt is paid; and kimi and kimi-code are rehearsed or have named blockers. **Outcome (2026-11-19):** shipped with accepted limitations, listed in `milestones/v6.0-MILESTONE-AUDIT.md`: OMPR-01 carried (Phase 38 ended VOID with one valid quiet-host run), OMPR-06 partial (Phase 44, the paired loaded window ended VOID with three valid pairs of five), and recorded partials for HOSTID-02 and DEBT-03. The owner took the loaded evidence for the Omp change and accepted the limitations on completing the milestone.
 
-- [ ] **Phase 38: Omp responsiveness during cold attach** - `get_state` is measured across the Omp cold attach on a quiet host with the existing harness, the Omp extension path is made non-blocking if the measurement exceeds the thresholds, and the numbers are recorded either way (OI-11).
+- [x] **Phase 38: Omp responsiveness during cold attach** - `get_state` is measured across the Omp cold attach on a quiet host with the existing harness, the Omp extension path is made non-blocking if the measurement exceeds the thresholds, and the numbers are recorded either way (OI-11). (completed 2026-11-19)
 - [x] **Phase 39: Timed-out exec kill proof** - A live closeout test shows that a sleeper outliving the timeout window is dead, not merely finished, after `TOOL_TIMEOUT`, by a proof independent of the sleeper's own run time; the kill path is fixed if the sleeper survives (finding F-3). (completed 2026-11-18)
 - [x] **Phase 40: Host ids for Muse Code, Prime Agent and Grok Build** - The three hosts get host ids and manifests, recipes or launcher labels so they attach under the enforce default, `GAP-34-01` is closed, and the contract checker, the support matrix and the docs agree. (completed 2026-11-18)
 - [x] **Phase 41: Daemon teardown flake** - The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, its cause found, and the fix or bound proved by a hermetic test and a live run. (completed 2026-11-18)
 - [x] **Phase 42: Evidence debt** - The whole unit suite runs as uid 5002 (EVID-01 Set B), and a script under `scripts/check` reports breaking commit subjects without the `!` marker on a pull request range, report-only where enforcement needs a workflow change. (completed 2026-11-19)
 - [x] **Phase 43: Kimi and kimi-code rehearsal** - Both CLIs are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02). (completed 2026-11-18)
-- [ ] **Phase 44: Omp non-blocking cold attach (owner-directed from loaded-host evidence)** - The Omp extension path is made lighter and later at the start of the attach (the daemon-launch module split so the extension no longer loads the CLI graph, the attach started one turn after the session handler), the responsiveness harness reads its verdict from the Omp ready frame with a labelled control-relative secondary measure, and the change is re-proved by a paired before/after comparison on the loaded host, labelled loaded and paired, on the owner's override of the VOID outcome of Phase 38 (D-44-01, 2026-11-18/19).
+- [x] **Phase 44: Omp non-blocking cold attach (owner-directed from loaded-host evidence)** - The Omp extension path is made lighter and later at the start of the attach (the daemon-launch module split so the extension no longer loads the CLI graph, the attach started one turn after the session handler), the responsiveness harness reads its verdict from the Omp ready frame with a labelled control-relative secondary measure, and the change is re-proved by a paired before/after comparison on the loaded host, labelled loaded and paired, on the owner's override of the VOID outcome of Phase 38 (D-44-01, 2026-11-18/19). (completed 2026-11-19)
 
 ## Phase Details
 
@@ -648,13 +648,13 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 35. Capability token evidence | 3/3 | Complete    | 2026-11-18 |
 | 36. Live re-verification of the v1.0 open items | 3/3 | Complete    | 2026-11-18 |
 | 37. Spec update | 1/1 | Complete    | 2026-11-18 |
-| 38. Omp responsiveness during cold attach | 0/0 | Not started | - |
+| 38. Omp responsiveness during cold attach | 1/1 | Complete    | 2026-11-19 |
 | 39. Timed-out exec kill proof | 3/3 | Complete    | 2026-11-18 |
 | 40. Host ids for Muse Code, Prime Agent and Grok Build | 3/3 | Complete    | 2026-11-18 |
 | 41. Daemon teardown flake | 2/2 | Complete    | 2026-11-18 |
 | 42. Evidence debt | 3/3 | Complete    | 2026-11-19 |
 | 43. Kimi and kimi-code rehearsal | 2/2 | Complete    | 2026-11-18 |
-| 44. Omp non-blocking cold attach | 0/3 | Not started | - |
+| 44. Omp non-blocking cold attach | 3/3 | Complete    | 2026-11-19 |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -896,12 +896,12 @@ Plans:
   3. The existing status vocabulary, the not-active refusal and the audit lines are unchanged, shown by the existing Omp and contract tests plus a test for the not-active window of the Omp path if the path changed.
   4. The OI-11 row reads closed on the quiet-host evidence, or stays open with the measured numbers and a named reason.
 
-**Plans:** 3 plans
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 38-01-PLAN.md: Measure the Omp cold attach on a quiet host with the existing harness, add the diagnostics that say where a stall sits,  (wave 1)
-- [ ] 38-02-PLAN.md: Change the Omp path only where the quiet-host evidence says the extension's own work is the cause, prove with hermetic t (wave 2)
-- [ ] 38-03-PLAN.md: Repeat the quiet-host measurement on the build or the harness that plan 38-02 changed, with the same frozen rule, record (wave 3)
+- [x] 38-01-PLAN.md: Measure the Omp cold attach on a quiet host with the existing harness, add the diagnostics that say where a stall sits,  (wave 1)
+- [x] 38-02-PLAN.md: Change the Omp path only where the quiet-host evidence says the extension's own work is the cause, prove with hermetic t (wave 2). Superseded by Phase 44, not executed
+- [x] 38-03-PLAN.md: Repeat the quiet-host measurement on the build or the harness that plan 38-02 changed, with the same frozen rule, record (wave 3). Superseded by Phase 44, not executed
 
 ### Phase 39: Timed-out exec kill proof
 
@@ -1001,9 +1001,10 @@ Plans:
   2. The static import closure of the Omp extension reaches no CLI, doctor, MCP or ACP module and reaches `node:child_process` only through `src/daemon/launch.ts`; the attach starts through an injected deferral that skips an ended or superseded session; no mutation runs before the session is ready, shown by an attach-window test and the unedited Omp, boot and contract suites.
   3. The paired decision rule exists as code with a passing hermetic test before the first paired run; the window records at least five valid pairs (or the outcome VOID), every number labelled loaded and paired, and the outcome (EFFECT, NO-EFFECT, REGRESSION, NOT-REPRODUCED or VOID) follows the rule.
   4. The records and the OI-11 row state the owner override of the VOID outcome and read Carried with the paired outcome; no document says OI-11 is closed, OMPR-01 is met, or a quiet-host measurement was made.
-**Plans:** 3 plans
+
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 44-01-PLAN.md: supersede 38-02 and 38-03, attribution, harness correction (ready window, control-relative secondary, CPU pressure), the paired arm test and the frozen paired rule as code (wave 1)
-- [ ] 44-02-PLAN.md: K1 launch module split with full cutover and lint and gate swap, K2 injected deferral, attach-window test, docs (wave 2)
-- [ ] 44-03-PLAN.md: the paired loaded window (blocking human), the record, the outcome, docs, ledger line and label (wave 3)
+- [x] 44-01-PLAN.md: supersede 38-02 and 38-03, attribution, harness correction (ready window, control-relative secondary, CPU pressure), the paired arm test and the frozen paired rule as code (wave 1)
+- [x] 44-02-PLAN.md: K1 launch module split with full cutover and lint and gate swap, K2 injected deferral, attach-window test, docs (wave 2)
+- [x] 44-03-PLAN.md: the paired loaded window (blocking human), the record, the outcome, docs, ledger line and label (wave 3)

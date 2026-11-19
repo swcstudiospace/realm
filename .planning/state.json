@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v6.0 — Responsiveness, exec kill proof, host ids and evidence debt",
+  "milestone": "v6.0 — Responsiveness, exec kill proof, host ids and evidence debt (Shipped 2026-11-19)",
   "phases": [
     {
       "number": "1",
@@ -226,7 +226,7 @@
     {
       "number": "38",
       "name": "Omp responsiveness during cold attach",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "39",
@@ -252,12 +252,17 @@
       "number": "43",
       "name": "Kimi and kimi-code rehearsal",
       "status": "complete"
+    },
+    {
+      "number": "44",
+      "name": "Omp non-blocking cold attach",
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 27 of 32 · 98% · executing"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-19T02:05:57.963Z"
+  "updated_at": "2026-11-19T04:09:13.295Z"
 }

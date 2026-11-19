@@ -217,11 +217,16 @@ All v3.0 requirements are hypotheses until shipped and verified.
 ### v6.0 Responsiveness, exec kill proof, host ids and evidence debt
 
 - [ ] **OMPR-01**: The Omp cold attach is measured on a quiet host (one-minute load per CPU below 0.5) with `test/integration/omp-responsiveness.test.ts`: `get_state` answered across the attach, with the number of probes, the maximum and the 95th percentile recorded, and the result recorded as a pass or a finding (OI-11; Linear SPE-34662)
-- [ ] **OMPR-02**: If the quiet-host measurement exceeds the harness thresholds, the Omp extension path is made non-blocking (it answers before `up` completes, as `realm mcp` does since Phase 33), fail closed is kept (no mutation before the session is ready), and the measurement is repeated and recorded; if it passes, the phase records that no code change was needed
-- [ ] **OMPR-03**: The numbers and the host facts (load, CPU count, Omp version, date) are recorded in the phase and in `docs/integration/omp.md` either way, and the OI-11 row of the v1.0 open items reads closed on that evidence
-- [ ] **OMPR-04**: The responsiveness harness reads the cold-attach verdict over the window that starts at Omp's ready frame (probes before it are recorded as boot samples), with every threshold and the Phase 38 decision constants unchanged; a control-relative comparison and the host CPU pressure are recorded as a labelled secondary measure that is never a verdict; the baseline instability (five of nine no-extension baselines missed their 500 ms bound at 0.17 to 0.36 load per CPU) is recorded as a finding with its cause unestablished; the attribution of the one valid quiet-host run is written down with evidence tiers (owner override of the VOID outcome, D-44-01)
-- [ ] **OMPR-05**: The Omp extension path is changed on the owner's override of the VOID outcome: the daemon-launch functions move to src/daemon/launch.ts with every importer migrated and no re-export, so the extension's static import closure reaches no CLI, doctor, MCP or ACP module; the attach starts through an injected deferral, one event-loop turn after the session handler, skipping an ended or superseded session; fail closed is kept (no mutation or tool call reaches the daemon before the session is ready), shown by an attach-window test and the unedited Omp suites; the lint and gate allowlists name the new module in place of the old one without widening
+  Status: Carried (not met). Phase 38 (2026-11-19): six attempts, one valid quiet-host run, outcome VOID; OI-11 stays `Carried (no quiet slot)`. Phase 44 did not meet it. Accepted by the owner on completing v6.0 (2026-11-19); a candidate for v7.0
+- [x] **OMPR-02**: If the quiet-host measurement exceeds the harness thresholds, the Omp extension path is made non-blocking (it answers before `up` completes, as `realm mcp` does since Phase 33), fail closed is kept (no mutation before the session is ready), and the measurement is repeated and recorded; if it passes, the phase records that no code change was needed
+  Status: Not triggered (2026-11-19): the frozen rule gave VOID, so neither a code outcome nor a pass; plans 38-02 and 38-03 were not run and are superseded by Phase 44. The extension change was made by the owner's override (D-44-01) as OMPR-05, not by this requirement; no quiet-host verdict was reached
+- [x] **OMPR-03**: The numbers and the host facts (load, CPU count, Omp version, date) are recorded in the phase and in `docs/integration/omp.md` either way, and the OI-11 row of the v1.0 open items reads closed on that evidence
+  Status: Complete (as VOID, 2026-11-19): the numbers and host facts are recorded in `38-MEASUREMENT.md` and `docs/integration/omp.md`; the OI-11 label follows the outcome and reads Carried, not closed
+- [x] **OMPR-04**: The responsiveness harness reads the cold-attach verdict over the window that starts at Omp's ready frame (probes before it are recorded as boot samples), with every threshold and the Phase 38 decision constants unchanged; a control-relative comparison and the host CPU pressure are recorded as a labelled secondary measure that is never a verdict; the baseline instability (five of nine no-extension baselines missed their 500 ms bound at 0.17 to 0.36 load per CPU) is recorded as a finding with its cause unestablished; the attribution of the one valid quiet-host run is written down with evidence tiers (owner override of the VOID outcome, D-44-01)
+- [x] **OMPR-05**: The Omp extension path is changed on the owner's override of the VOID outcome: the daemon-launch functions move to src/daemon/launch.ts with every importer migrated and no re-export, so the extension's static import closure reaches no CLI, doctor, MCP or ACP module; the attach starts through an injected deferral, one event-loop turn after the session handler, skipping an ended or superseded session; fail closed is kept (no mutation or tool call reaches the daemon before the session is ready), shown by an attach-window test and the unedited Omp suites; the lint and gate allowlists name the new module in place of the old one without widening
+  Status: Complete (hermetic basis, 2026-11-19): that the change makes the cold attach more responsive is not shown by this phase
 - [ ] **OMPR-06**: The change is measured by a paired before/after comparison on the loaded host (at least five valid pairs, interleaved, each arm against its own no-extension control in the same test) under a decision rule fixed as code before the first run; the outcome (EFFECT, NO-EFFECT, REGRESSION, NOT-REPRODUCED or VOID), the per-pair numbers and the host facts are recorded in the phase and in docs/integration/omp.md, labelled loaded and paired and never cited as a quiet-host measurement; OI-11 is recorded Carried with the owner override and the paired outcome
+  Status: Partial (2026-11-19): the paired loaded window ended VOID with three valid pairs of the five required; no effect claim for or against the change. Accepted by the owner on completing v6.0; a candidate for v7.0 together with OMPR-01
 - [x] **EXEC-01**: A live closeout test runs a sleeper that outlives the timeout window; after `TOOL_TIMEOUT` the sleeper is dead (not merely finished) within a stated bound, shown by a check independent of the sleeper's own run time (a sleeper longer than the observation window and a process-state check inside the sandbox) (finding F-3; Linear SPE-34663)
 - [x] **EXEC-02**: If the sleeper survives, the kill path of the dispatcher and driver is fixed so that a timed-out exec's process tree is killed, the session stays usable, and a hermetic test pins the behaviour
 - [x] **EXEC-03**: The timeout contract is unchanged for callers (the retryable `TOOL_TIMEOUT` reply, the per-call bound, the audit line), and the docs and the finding F-3 record state what the proof shows and its limits
@@ -244,6 +249,12 @@ All v3.0 requirements are hypotheses until shipped and verified.
   Note: closed in this milestone by HARN-04 (owner decision D2).
 - [x] **PRD-DRV-01**: The realm compute driver serves ComputeDriver gRPC on a Unix socket in a 0700 directory with mode 0600, implementing GetCapabilities, ValidateSandboxCreate, CreateSandbox, GetSandbox, ListSandboxes, DeleteSandbox, WatchSandboxes, and EnsureWorkspace. AuthenticateSandbox is not advertised and returns UNIMPLEMENTED, because the gateway does not call it on the built-in path, and DeleteWorkspace refuses, because the driver never creates or removes the pinned workspace root. This amendment follows from the owner decisions of 2026-10-26 and 2026-10-27 and awaits the owner's confirmation (Phase 9.4) (Complete: the owner confirmed the amendment on 2026-11-17, after the Phase 27 disposition recorded it as open; code and tests match it)
 - [ ] **UI-01**: The Omp plugin starts on session launch and shows its realm state in the Omp UI status item without blocking the session (accepted limitation by owner decision, 2026-10-23: the status item appears at launch; a non-blocking check was not demonstrated, because get_state took about 6 s during the attach and the cause is not isolated; re-measured 2026-10-28: keystrokes echoed within 0.2 to 1.2 s through a 24 s cold attach on a loaded host, which bounds the stall but does not prove the loop is never blocked) (Accepted limitation, Phase 27 disposition, 2026-11-17; v5.0, Phase 36, 2026-11-18: the one Omp cold-attach run was on a loaded host and failed its thresholds, with about 11 s unanswered, so no pass is claimed; carried with finding F-3 into a v5.1 candidate phase, and the status stays the owner's call)
+
+## Carried from v6.0 (open at close, 2026-11-19)
+
+- [ ] **OMPR-01**: Carried, not met: a quiet-host measurement of the Omp cold attach (Phase 38 ended VOID, one valid run in six attempts; OI-11 `Carried (no quiet slot)`). Accepted by the owner on completing v6.0; a v7.0 candidate (a repeat with a harness fix)
+- [ ] **OMPR-06**: Partial: the paired loaded A/B window ended VOID with three valid pairs of five (Phase 44); no effect claim for or against the change. Accepted by the owner on completing v6.0; a v7.0 candidate together with OMPR-01
+  Also carried as findings and accepted limitations, not requirements: F-41-1, GAP-40-01, GAP-43-01 to GAP-43-03, and the ship-flow `--enforce` confirmation of DEBT-03 (see `.planning/milestones/v6.0-MILESTONE-AUDIT.md`).
 
 ## Standing requirements (completed earlier, still binding)
 
@@ -293,7 +304,7 @@ v3.0 requirements: 52 total, 52 mapped
 
 v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Complete (ENF-04 with a recorded partial). Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`
 
-v6.0 requirements: 19 total (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 19 mapped to phases 38 to 44
+v6.0 requirements: 19 total (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 19 mapped to phases 38 to 44. 17 ticked Complete (OMPR-02 not triggered; OMPR-03 as VOID; OMPR-05 on its hermetic basis; HOSTID-02 met at the daemon and the validator tier only; DEBT-03 with a recorded partial), OMPR-01 left open as Carried and OMPR-06 left open as Partial, both accepted by the owner on completing v6.0. Audit: `.planning/milestones/v6.0-MILESTONE-AUDIT.md`
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
@@ -434,17 +445,17 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | V1LIVE-01 | Phase 36 | Complete |
 | V1LIVE-02 | Phase 36 | Complete |
 | SPEC-01 | Phase 37 | Complete |
-| OMPR-01 | Phase 38 | Planned |
-| OMPR-02 | Phase 38 | Planned |
-| OMPR-03 | Phase 38 | Planned |
-| OMPR-04 | Phase 44 | Planned |
-| OMPR-05 | Phase 44 | Planned |
-| OMPR-06 | Phase 44 | Planned |
+| OMPR-01 | Phase 38 | Carried (not met): one valid quiet-host run in six attempts, outcome VOID; OI-11 stays Carried (no quiet slot); accepted by the owner on completing v6.0 |
+| OMPR-02 | Phase 38 | Complete (not triggered: the frozen rule gave VOID; plans 38-02 and 38-03 superseded by Phase 44) |
+| OMPR-03 | Phase 38 | Complete (as VOID: numbers and host facts recorded, OI-11 reads Carried) |
+| OMPR-04 | Phase 44 | Complete |
+| OMPR-05 | Phase 44 | Complete (hermetic basis; no responsiveness effect shown) |
+| OMPR-06 | Phase 44 | Partial: paired loaded window VOID, three valid pairs of five, no effect claim; accepted by the owner on completing v6.0 |
 | EXEC-01 | Phase 39 | Complete |
 | EXEC-02 | Phase 39 | Complete |
 | EXEC-03 | Phase 39 | Complete |
 | HOSTID-01 | Phase 40 | Complete |
-| HOSTID-02 | Phase 40 | Complete |
+| HOSTID-02 | Phase 40 | Complete (met at the daemon and the validator tier; partial for a host-driven tool call: no production tier, no model-driven call; GAP-40-01 accepted) |
 | HOSTID-03 | Phase 40 | Complete |
 | TEAR-01 | Phase 41 | Complete |
 | TEAR-02 | Phase 41 | Complete |
