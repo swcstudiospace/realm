@@ -160,3 +160,138 @@ frozen design; the default tier remains Branch S). (d) Ask other users to
 pause heavy work for the window (OD-45-3). Each option's cost and what it
 would show are recorded in `45-RESOLUTION.md`; the status of UI-01 stays
 the owner's call.
+
+## Part 1b: re-calibration after the scope-leaf harness fix (2026-11-19, appended)
+
+The record above is unchanged. After the refusal of Part 1, the harness was
+fixed (the change this addendum records): `verifyScopedChild`
+(`test/support/omp-arm-run.ts`) now accepts any transient-scope leaf
+`run-*.scope` instead of only `run-p<pid>-i<id>.scope`. The two observed
+shapes (`run-p<pid>-i<id>.scope` and `run-<32hex>.scope`, seen live as
+`run-r<32hex>.scope`) are both `run-*.scope`; the pid is still verified by
+reading its `comm` and its cgroup, and `expectedScopeDir` still pins the
+exact directory when given. Hermetic cover for both shapes and the
+rejection cases is in `test/support/omp-arm-run.test.ts`. The calibration
+was then re-run to the maximum of 16 attempts. This addendum is the result.
+
+### Facts (read before the first run, `facts.txt` of the evidence directory)
+
+- CPUs: 8. Kernel: 6.8.0-149-generic. Node: v24.18.0. Omp: omp/19.0.0 (the
+  Omp binary on PATH, passed as `REALM_OMP_BIN` for every run).
+- Account: root, uid 0 (this host has no `realm` account; deviation below).
+  Scope wrapper smoke (the design's exact argv on a trivial command): `ok`.
+- Descriptive only, across the window: one-minute load ranged 1.36 to 27.53;
+  system CPU pressure "some" avg10 near 60 at the start. Load and pressure
+  are recorded, not quiet, and are never a validity input.
+- Commit under test (`AFTER_COMMIT`): `ff0a75e62a903c4dda052a46ed0fd1dd2d6b0d7c`
+  (the merge of PR 231), plus the uncommitted scope-leaf harness fix above.
+- SHA-256 of the built harness: `dist/test/integration/omp-responsiveness.test.js`
+  `567b63f5f046c560ffd41f01db74b2dd255b5abf4da361b3b973c975bec9e570`;
+  `dist/test/support/omp-verdict.js`
+  `e6e6b6269fa20d46398b87bf5dc90e26d7bb7c0fe995b8d8d4b58113c1d8660d`;
+  `dist/test/support/omp-calibration.js`
+  `82cc61cefb348543a254e39cdc5ab9415a00c3087504326b93aee29b1e876e0b`;
+  `dist/test/support/omp-arm-run.js`
+  `d7f1d14fb673d41d64f60331b3f2398c43f9533934011124a639b4d5429cf4a5`
+  (the last hash differs from Part 1 by exactly the scope-leaf fix; the
+- Evidence: a fresh directory outside the repository (mode 0700, files 0600),
+  with per-attempt directories `run-1` to `run-16` (record, samples CSV and
+  readings CSV where the attempt reached the record; frames and transcript
+  otherwise). Temp directory: a short directory outside the repository (full
+  path under 40 characters), removed after the run.
+- Environment of every run: scrubbed (`env -i` with exactly `HOME`, `TMPDIR`,
+  `PATH`, `XDG_RUNTIME_DIR`) plus the gate variables: `REALM_LIVE_OMP=1`,
+  `REALM_LIVE_OMP_RESPONSIVENESS=1`, `REALM_OMP_CALIBRATION_RUN` (the attempt
+  number), `REALM_OMP_EVIDENCE_DIR` (the per-attempt directory),
+  `REALM_OMP_BIN`. The command: `node --test --test-concurrency=1
+  --test-name-pattern "omp responsiveness calibration control"
+  dist/test/integration/omp-responsiveness.test.js`, from the checkout.
+  No other live run held the stack (an isolated worktree; no lock holder was
+  observed and the runs were serialized by construction).
+
+### The attempts (sixteen, the maximum; settle of at least 60 s kept)
+
+| Attempt | Start (UTC) | End (UTC) | Exit | Validity | Counted |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 2026-11-19T14:00:46 | 14:01:09 | 1 | mechanics failed: inconsistent readings, 697.54 ms of thread time in a span of 633 ms (9783 to 10416 ms) | no |
+| 2 | 2026-11-19T14:02:20 | 14:02:41 | 1 | mechanics failed: inconsistent readings, 80.04 ms of thread time in a span of 11 ms | no |
+| 3 | 2026-11-19T14:03:42 | 14:04:04 | 0 | valid | yes |
+| 4 | 2026-11-19T14:05:11 | 14:05:37 | 1 | mechanics failed: inconsistent readings, 83.97 ms of thread time in a span of 16 ms | no |
+| 5 | 2026-11-19T14:06:37 | 14:06:58 | 1 | mechanics failed: inconsistent readings, 11.43 ms of thread time in a span of 5 ms | no |
+| 6 | 2026-11-19T14:07:58 | 14:08:19 | 1 | mechanics failed: inconsistent readings, 85.38 ms of thread time in a span of 80 ms | no |
+| 7 | 2026-11-19T14:09:27 | 14:09:48 | 0 | valid | yes |
+| 8 | 2026-11-19T14:10:49 | 14:11:12 | 1 | mechanics failed: inconsistent readings, 26.01 ms of thread time in a span of 14 ms | no |
+| 9 | 2026-11-19T14:12:12 | 14:12:38 | 1 | mechanics failed: inconsistent readings, 20.04 ms of thread time in a span of 12 ms | no |
+| 10 | 2026-11-19T14:13:42 | 14:14:04 | 1 | mechanics failed: inconsistent readings, 76.15 ms of thread time in a span of 62 ms | no |
+| 11 | 2026-11-19T14:15:04 | 14:15:27 | 1 | mechanics failed: inconsistent readings, 15.95 ms of thread time in a span of 7 ms | no |
+| 12 | 2026-11-19T14:16:27 | 14:16:51 | 1 | mechanics failed: inconsistent readings, 23.97 ms of thread time in a span of 10 ms | no |
+| 13 | 2026-11-19T14:18:03 | 14:18:27 | 0 | valid | yes |
+| 14 | 2026-11-19T14:19:27 | 14:19:56 | 0 | valid | yes |
+| 15 | 2026-11-19T14:20:56 | 14:21:21 | 1 | mechanics failed: inconsistent readings, 261.38 ms of thread time in a span of 197 ms | no |
+| 16 | 2026-11-19T14:22:21 | 14:22:44 | 0 | valid | yes |
+
+Counts: 16 attempts (the maximum), 5 mechanically complete controls (of the
+12 the calibration targets), 2 passing controls (of the 5
+`CALIBRATION_MIN_PASSING` needs). Zero runs were refused by rule V0: the
+scope-leaf fix holds under live measurement; every failure is the
+`attributeInterval` "inconsistent readings" mechanics error thrown from
+`observeWindow` while the record is built (the scope check itself passed in
+all sixteen attempts, since Omp in its `run-*.scope` scope was probed until
+the serving window completed). The eleven mechanics failures wrote frames
+and a transcript but no record, samples CSV or readings CSV (the failure
+precedes the save); they count for nothing.
+
+### The five counted controls (recomputed from the CSVs; the records match)
+
+| Attempt | Self-inflicted max (ms) | Self-inflicted p95 (ms) | Stall share | Run-queue share | Main-thread share | Main busiest |
+| --- | --- | --- | --- | --- | --- | --- |
+| 3 | 1139.1 | 842.8 | 0.2359 | 0.1532 | 0.6483 | yes |
+| 7 | 344.0 | 295.7 | 0.1425 | 0.1030 | 0.6524 | yes |
+| 13 | 1307.3 | 852.3 | 0.2172 | 0.1158 | 0.6630 | yes |
+| 14 | 1295.1 | 1060.0 | 0.3266 | 0.2399 | 0.7224 | yes |
+| 16 | 728.6 | 420.2 | 0.2334 | 0.1646 | 0.6357 | yes |
+
+All five records read tier "loaded, scoped", `quietClaim` false,
+`mechanics` true, valid by the mechanical rules; the main thread carries the
+largest on-CPU share in all five counted controls.
+
+### Derivation and verdict
+
+`analyseCalibration` over the five records and CSVs returns: 5 controls,
+`validControls` 5, `mainBusiestCount` 5, derivation
+`{derivable: false, reason: "2 of 5 calibration controls met the thresholds, fewer than 5"}`,
+digest
+`04e52c28f91713d18b638eedf0a01d00959e2ded9f33ed4348044fb1eff3194f`.
+Hand reading gives the same result: attempts 7 and 16 meet the thresholds
+(self-inflicted max at most 1000 ms and 95th percentile at most 500 ms);
+attempts 3, 13 and 14 exceed the maximum. The main-thread identity check
+(10 of 12) cannot pass with 5 counted controls. No freeze:
+`test/support/omp-calibration.ts` keeps `CALIBRATED_BOUNDS` null and
+`CALIBRATION_FREEZE` null, and the verdict window is not run.
+
+**Outcome of this addendum: VOID (calibration).** The maximum of 16 attempts
+was spent and 5 controls were mechanically complete (target 12), of which
+2 passed (5 needed). The separate, remaining cause is the "inconsistent
+readings" mechanics failure in eleven of sixteen attempts; whether it is a
+property of this host, of the scope wrapper under load, or of the bracketed
+reading arithmetic in `omp-contention.ts` is not established here and was
+not edited here: plan 45-04 forbids editing a harness rule after a number
+exists. Nothing in this addendum is a verdict; it claims nothing for or
+against the product.
+
+### Residue, secret search and deviations
+
+The before, per-attempt and final snapshots agree: 2 transient scopes (the
+same two pre-existing scopes) and no transient scope or Omp process left
+behind. The secret search of the evidence directory (the capability-token
+shape) listed nothing. The temp directory contents were removed; the
+evidence directory stays.
+
+Deviations from the plan, stated:
+- The controls ran as root from the worktree itself, not as the realm
+  account from a separate run copy (this host has no `realm` account; the
+  scrubbed environment, the evidence directory, the 60 s settle and the
+  serialization are as written).
+- One block of sixteen attempts, not three blocks spaced 20 minutes apart.
+  The attempts were spread by the 60 s settle only; the three-refusal stop
+  did not trigger (there were no V0 refusals after the fix).

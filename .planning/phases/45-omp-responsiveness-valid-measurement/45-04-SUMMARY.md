@@ -103,3 +103,51 @@ calibration block instead of three spaced blocks).
 
 **Task 8 did not apply**: there is no FINDING (no verdict window ran, no
 cause exists), so no extension fix is claimed or attempted.
+
+## Addendum (2026-11-19): the harness fix and the re-calibration — VOID again, with new numbers
+
+The summary above is unchanged. The harness fix that the summary said was
+needed is now made, in `test/support/omp-arm-run.ts`: `verifyScopedChild`
+accepts any transient-scope leaf `run-*.scope` instead of only the
+pid-encoded `run-p<pid>-i<id>.scope`. The two shapes observed in the wild
+(`run-p<pid>-i<id>.scope` and `run-<32hex>.scope`, seen live as
+`run-r<32hex>.scope`) are both `run-*.scope`; the pid is still verified by
+reading its `comm` and its cgroup, `comm == "systemd-run"` is still
+refused as the wrapper, and `expectedScopeDir` still pins the exact
+directory when given. Hermetic cover: both shapes accepted (including the
+exact observed leaf `run-r8a83b262795a418cac3c9d99a9904410.scope`), a
+generic `run-*.scope` leaf accepted, and refusals for the wrapper, a
+non-`run-*.scope` leaf (`session-3.scope`, an empty `run-.scope`, a leaf
+without `.scope`), the root cgroup, an unreadable `/proc` and a mismatched
+`expectedScopeDir`. `npx tsc -p tsconfig.json`,
+`node --test` on the five harness suites (omp-arm-run, omp-contention,
+omp-calibration, omp-verdict, omp-window-analysis: 123 pass),
+`npx eslint` on the two touched files, `node scripts/check/host-paths.mjs`,
+`npm run check:docs` and `npm run check:gates` are green (results recorded
+in the full report of this change).
+
+The calibration was then re-run to the maximum of 16 attempts
+outside the repository; full table, words and
+derivations in `45-MEASUREMENT.md` Part 1b): **5 mechanically complete
+controls** (attempts 3, 7, 13, 14, 16; target 12), **0 V0 refusals**
+(the scope-leaf fix holds live), **11 mechanics failures** all of the one
+form: the `attributeInterval` "inconsistent readings" error
+(e.g. "697.54 ms of thread time in a span of 633 ms"). Of the five
+counted controls, 2 met the thresholds (attempts 7 and 16), so
+`deriveBounds` is still underivable ("2 of 5 calibration controls met the
+thresholds, fewer than 5"); the digest is
+`04e52c28f91713d18b638eedf0a01d00959e2ded9f33ed4348044fb1eff3194f`;
+`mainBusiestCount` is 5 of 5 counted, which cannot satisfy the 10-of-12
+identity check. No bound was frozen and the verdict window was not run.
+
+**The verdict stays VOID (calibration), for the new counts.** OMPR-01,
+OMPR-06 and OI-11 stay carried; nothing closes on VOID; the owner's
+options are unchanged (full list in `45-RESOLUTION.md`). What changed is
+the remaining blocker: no longer the scope name, but the "inconsistent
+readings" mechanics failure in eleven of sixteen attempts, whose cause is
+not established in this addendum and was not edited (plan 45-04 forbids
+editing a harness rule after a number exists). Any repeat of this window
+should budget for that failure mode first. Task 8 still does not apply:
+there is no FINDING (no verdict window ran), so no extension fix is
+claimed or attempted. Deviations of the re-run (root instead of the realm
+account, one block instead of three) are stated in the addendum.
