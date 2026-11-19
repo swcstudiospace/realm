@@ -227,9 +227,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **HOSTID-03**: The contract checker, the support matrix, the host-plugin docs, the policy reference and the migration notes are updated and agree with the registry, and the docs site build and `check:docs` pass
 - [x] **TEAR-01**: The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, and its cause is found and recorded
 - [x] **TEAR-02**: The cause is fixed or bounded, with a hermetic test that fails without the fix and a live run on the production stack that stops with a sandbox container and reports `failedTeardowns=0`
-- [ ] **DEBT-01**: The whole unit suite runs as a non-root user (uid 5002) and the result is recorded (EVID-01 Set B), including any failure as a finding
-- [ ] **DEBT-02**: A script under `scripts/check`, with tests, reports every commit subject in a pull request range that is breaking (by the repository's own rules) and lacks the `!` marker, unless the pull request lands as a merge commit; it is wired into the gate conventions of the repository
-- [ ] **DEBT-03**: The guard is enforcing where the existing gate conventions allow it without a workflow change; where enforcement needs a change under `.github/workflows/**` the guard stays report-only and the needed change is recorded for human review
+- [x] **DEBT-01**: The whole unit suite runs as a non-root user (uid 5002) and the result is recorded (EVID-01 Set B), including any failure as a finding
+- [x] **DEBT-02**: A script under `scripts/check`, with tests, reports every commit subject in a pull request range that is breaking (by the repository's own rules) and lacks the `!` marker, unless the pull request lands as a merge commit; it is wired into the gate conventions of the repository
+- [x] **DEBT-03**: The guard is enforcing where the existing gate conventions allow it without a workflow change; where enforcement needs a change under `.github/workflows/**` the guard stays report-only and the needed change is recorded for human review
 - [x] **KIMI-01**: Kimi CLI and Kimi Code CLI are installed in a scratch location outside the repository, and the validator and production tiers are run as for claude, opencode and codex, with each result recorded with version and date
 - [x] **KIMI-02**: Anything that cannot run has a named blocker, and `GAP-24-02` and the support matrix are updated to the evidence tier reached
 
@@ -442,9 +442,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | HOSTID-03 | Phase 40 | Complete |
 | TEAR-01 | Phase 41 | Complete |
 | TEAR-02 | Phase 41 | Complete |
-| DEBT-01 | Phase 42 | Planned |
-| DEBT-02 | Phase 42 | Planned |
-| DEBT-03 | Phase 42 | Planned |
+| DEBT-01 | Phase 42 | Complete |
+| DEBT-02 | Phase 42 | Complete |
+| DEBT-03 | Phase 42 | Complete (partial: the ship-flow --enforce run is owner-side configuration, unconfirmed) |
 | KIMI-01 | Phase 43 | Complete |
 | KIMI-02 | Phase 43 | Complete |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |

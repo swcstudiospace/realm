@@ -246,7 +246,7 @@
     {
       "number": "42",
       "name": "Evidence debt",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "43",
@@ -257,7 +257,7 @@
   "next": {
     "command": "/gsd-progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 27 of 32 · 96% · executing"
+    "reason": "Phase 27 of 32 · 98% · executing"
   },
-  "updated_at": "2026-11-18T21:55:38.659Z"
+  "updated_at": "2026-11-19T02:05:57.963Z"
 }
