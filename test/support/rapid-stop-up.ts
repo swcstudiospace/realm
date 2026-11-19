@@ -230,7 +230,8 @@ export type FailureKind =
   | "row-absent"
   | "log-unreadable"
   | "stop-timeout"
-  | "down-failed";
+  | "down-failed"
+  | "chain-start-failed";
 
 // One failed iteration, kept whole: its number and every kind it failed in, the up kind first.
 export interface IterationFailure {
@@ -309,6 +310,30 @@ export function chainStep(state: ChainState, outcome: IterationOutcome): { reado
   }
   const next: ChainState = { ...state, iterations: iteration, consecutiveClean: 0, failures: [...state.failures, { iteration, kinds }] };
   return { state: next, action: next.failures.length >= next.failureCap ? "variant-done-failed" : "restart-chain" };
+}
+
+// The settled first up of a chain failed (the up exited non-zero, or the session did not reach active), before any stop of the
+// chain. It is a failure of its own kind: kept and counted, it resets the consecutive count, and it is never start-failed, because a
+// settled up is not the unsettled stop-then-up shape of F-41-1 and must not read as a reproduction of it. iteration is the number of
+// the last iteration that completed before it (0 for the first chain). Like a failed iteration it asks for a new chain or, at the
+// failure cap, ends the variant. It does not count as an iteration.
+export function recordChainStartFailure(state: ChainState): { readonly state: ChainState; readonly action: ChainAction } {
+  const next: ChainState = { ...state, consecutiveClean: 0, failures: [...state.failures, { iteration: state.iterations, kinds: ["chain-start-failed"] }] };
+  return { state: next, action: next.failures.length >= next.failureCap ? "variant-done-failed" : "restart-chain" };
+}
+
+// The one closed-phrase line of a failed chain start: the up kind and its code, and whether the session reached active.
+export function chainStartEvidenceLine(variant: RapidVariant, chain: number, up: UpOutcome, active: boolean): string {
+  return evidenceLine({
+    variant,
+    chain,
+    stage: "chain-start",
+    result: "failed",
+    up: up.kind,
+    upCode: up.kind === "other-failure" ? (up.code ?? null) : null,
+    upCause: up.kind === "start-failed" ? (up.causeCode ?? null) : null,
+    active,
+  });
 }
 
 // ---- F. The window outcome ------------------------------------------------------------------------------------------------
