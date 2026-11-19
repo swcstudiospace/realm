@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-19
+
+### Documentation
+- docs(milestone): start v7.0 Carried findings closure (phases 45 to 48), release line 0.7.x (#216) (fae4c27)
+
 ## [0.6.8] - 2026-11-19
 
 ### Documentation
