@@ -315,3 +315,80 @@ void test("OMPR-06 decidePairs result: the label, the quiet claim, the table and
   assert.equal(void_.label, "loaded, paired");
   assert.equal(void_.quietClaim, false);
 });
+
+// ---- The recorded window of 2026-11-19 (Phase 44, plan 44-03; loaded, paired) --------------------------------------------------------
+
+// The per-run values the metrics read, copied from the ten pair records of the window (production stack, host loaded throughout, 8 CPUs):
+// the control and cold ready times and first answers, the serving stall S the record shows, and the one-minute load at the first reading.
+// The samples are rebuilt from them so that runMetrics returns exactly these values (a control without a serving probe reads 0 for its
+// serving maximum, so the cold probe after the first answer carries S itself). Each entry is [BEFORE run, AFTER run] of one pair.
+interface RecordedRun {
+  readonly controlReadyMs: number;
+  readonly controlFirstMs: number;
+  readonly coldReadyMs: number;
+  readonly coldFirstMs: number;
+  readonly s: number;
+  readonly load1: number;
+}
+
+const RECORDED_WINDOW: readonly (readonly [RecordedRun, RecordedRun])[] = [
+  [{ controlReadyMs: 44406.53421, controlFirstMs: 51195, coldReadyMs: 10817.008678999999, coldFirstMs: 12899, s: 1317, load1: 20.22 },
+   { controlReadyMs: 11893.052359, controlFirstMs: 12587, coldReadyMs: 10800.727482999999, coldFirstMs: 11706, s: 0, load1: 23.25 }],
+  [{ controlReadyMs: 10792.162256, controlFirstMs: 11284, coldReadyMs: 7602.395980999998, coldFirstMs: 8305, s: 0, load1: 7.81 },
+   { controlReadyMs: 11605.353344, controlFirstMs: 13685, coldReadyMs: 8188.412218999998, coldFirstMs: 8902, s: 0, load1: 18.8 }],
+  [{ controlReadyMs: 9727.040759, controlFirstMs: 10817, coldReadyMs: 7078.374576999999, coldFirstMs: 7986, s: 0, load1: 3.7 },
+   { controlReadyMs: 10817.546936, controlFirstMs: 11420, coldReadyMs: 6721.613179, coldFirstMs: 7504, s: 0, load1: 2.34 }],
+  [{ controlReadyMs: 9912.927953999999, controlFirstMs: 10701, coldReadyMs: 7877.525352000001, coldFirstMs: 8285, s: 0, load1: 9.41 },
+   { controlReadyMs: 11309.641891000001, controlFirstMs: 12320, coldReadyMs: 8987.600233000001, coldFirstMs: 9380, s: 0, load1: 1.53 }],
+  [{ controlReadyMs: 11202.677089, controlFirstMs: 12196, coldReadyMs: 7800.993404000001, coldFirstMs: 8386, s: 92, load1: 22.36 },
+   { controlReadyMs: 9493.217967, controlFirstMs: 9910, coldReadyMs: 7998.127593000001, coldFirstMs: 8782, s: 0, load1: 20.96 }],
+  [{ controlReadyMs: 9787.059737, controlFirstMs: 10187, coldReadyMs: 6390.521419000001, coldFirstMs: 7204, s: 0, load1: 11.03 },
+   { controlReadyMs: 9792.252395, controlFirstMs: 10192, coldReadyMs: 7277.289530000002, coldFirstMs: 7887, s: 0, load1: 19.97 }],
+  [{ controlReadyMs: 10397.194808, controlFirstMs: 10896, coldReadyMs: 7184.441941000001, coldFirstMs: 7792, s: 0, load1: 6.24 },
+   { controlReadyMs: 9103.075198999999, controlFirstMs: 9606, coldReadyMs: 7789.683205000001, coldFirstMs: 8383, s: 30, load1: 2.7 }],
+  [{ controlReadyMs: 10916.624112, controlFirstMs: 12188, coldReadyMs: 9201.005504, coldFirstMs: 9987, s: 161, load1: 1.78 },
+   { controlReadyMs: 9805.752106, controlFirstMs: 10119, coldReadyMs: 7105.822326000001, coldFirstMs: 7618, s: 0, load1: 2.28 }],
+  [{ controlReadyMs: 11588.052037000001, controlFirstMs: 12385, coldReadyMs: 8487.018021, coldFirstMs: 8786, s: 315, load1: 22.84 },
+   { controlReadyMs: 9403.927651, controlFirstMs: 9690, coldReadyMs: 6409.371013, coldFirstMs: 7092, s: 0, load1: 25.92 }],
+  [{ controlReadyMs: 9796.812268, controlFirstMs: 10283, coldReadyMs: 7488.716163000001, coldFirstMs: 7797, s: 0, load1: 16.36 },
+   { controlReadyMs: 9491.616984999999, controlFirstMs: 9999, coldReadyMs: 6820.271729, coldFirstMs: 7415, s: 0, load1: 21.64 }],
+];
+
+function recordedArm(run: RecordedRun): ArmRun {
+  return {
+    control: { samples: [{ sentAtMs: 0, latencyMs: run.controlFirstMs }], readyMs: run.controlReadyMs },
+    cold: { samples: [{ sentAtMs: 0, latencyMs: run.coldFirstMs }, { sentAtMs: run.coldFirstMs, latencyMs: run.s }], readyMs: run.coldReadyMs },
+    startLoadPerCpu: run.load1 / 8,
+    mechanicsHeld: true,
+  };
+}
+
+void test("OMPR-06 the paired loaded window of 2026-11-19 (loaded, paired): three valid pairs, outcome VOID", () => {
+  const decision = decidePairs(RECORDED_WINDOW.map(([before, after], index) => pair(index + 1, recordedArm(before), recordedArm(after))));
+  assert.equal(decision.outcome, "VOID");
+  assert.equal(decision.reason, "3 valid pairs, fewer than 5: no effect claim");
+  assert.equal(decision.label, "loaded, paired");
+  assert.equal(decision.quietClaim, false);
+  assert.equal(decision.validPairs, 3);
+  assert.deepEqual(decision.rows.map((row) => row.pair), [3, 7, 8]);
+  assert.deepEqual(decision.rows.map((row) => [row.before.x, row.after.x, row.gainMs, row.before.s, row.after.s, row.stallChangeMs]), [
+    [-2831, -3916, 1085, 0, 0, 0],
+    [-3104, -1223, -1881, 0, 30, 30],
+    [-2201, -2501, 300, 161, 0, -161],
+  ]);
+  assert.deepEqual(decision.invalid, [
+    { pair: 1, reason: "the before run started at 2.5275 load per cpu, above 2" },
+    { pair: 2, reason: "the after run started at 2.35 load per cpu, above 2" },
+    { pair: 4, reason: "the start loads differ by 0.98 load per cpu, more than 0.5" },
+    { pair: 5, reason: "the before run started at 2.795 load per cpu, above 2" },
+    { pair: 6, reason: "the after run started at 2.49625 load per cpu, above 2" },
+    { pair: 9, reason: "the before run started at 2.855 load per cpu, above 2" },
+    { pair: 10, reason: "the before run started at 2.045 load per cpu, above 2" },
+  ]);
+  const medians = decision.medians;
+  assert.ok(medians !== null);
+  assert.deepEqual([medians.before.x, medians.before.s, medians.after.x, medians.after.s], [-2831, 0, -2501, 0]);
+  // The components are differences of unrounded frame times: compared to a thousandth of a millisecond.
+  assert.ok(Math.abs(medians.before.x1 - -2648.666182) < 1e-3 && Math.abs(medians.after.x1 - -2699.92978) < 1e-3);
+  assert.ok(Math.abs(medians.before.x2 - -182.333818) < 1e-3 && Math.abs(medians.after.x2 - 179.933757) < 1e-3);
+});
