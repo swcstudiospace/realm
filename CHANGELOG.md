@@ -4,6 +4,19 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-11-19
+
+### Fixed
+- fix(docs): quote plans value in v7.0 audit frontmatter (ca9fddc)
+- fix(docs): quote reason frontmatter in 45-04-SUMMARY (1394fd3)
+- fix(test): accept run-*.scope leaves in scoped check; second calibration VOID with counted numbers (45-04) (48330e5)
+
+### Documentation
+- docs(milestone): v7.0 shipped: phases 45-48 verified, 11 of 19 requirements complete, audit with limitations (b8b4834)
+- docs(host): record Phase 48: Muse Code proven, Grok failed on harness defect, Prime blocked (48-04) (2755c8d)
+- docs(phase-45): calibration VOID on scope leaf mismatch; harness fix needed (45-04) (8de7617)
+- docs(phase-46): second window recorded: b/c/s 20 of 20 clean each, window VOID (STOP-04 not met for full set) (4ebbce0)
+
 ## [0.7.9] - 2026-11-19
 
 ### Documentation
