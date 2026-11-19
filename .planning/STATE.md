@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v8.0
-milestone_name: Shared sandboxes and durable recovery (Starting)
-status: Starting
-stopped_at: Milestone v8.0 started, phases 49 to 54 planned
+milestone_name: Shared sandboxes and durable recovery (Phases complete)
+status: PhasesComplete
+stopped_at: Milestone v8.0 phases 49 to 54 verified, 4 of 12 requirements complete
 last_updated: "2026-11-19T09:00:00.000Z"
 last_activity: 2026-11-19
-last_activity_desc: Milestone v8.0 started
-state_head: 3160320
+last_activity_desc: Milestone v8.0 phases 49 to 54 verified (audit .planning/v8.0-MILESTONE-AUDIT.md)
+state_head: 63bbc7e
 progress:
   total_phases: 6
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-current_phase: 49
+  completed_phases: 6
+  total_plans: 6
+  completed_plans: 6
+  percent: 100
+current_phase: —
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase: 49
 See: .planning/PROJECT.md (updated 2026-11-19)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v8.0, Shared sandboxes and durable recovery (phases 49 to 54, release line 0.8.x). Retests for the eight requirements v7.0 carried (OMPV-04; STOP-01 to STOP-04; KIMV-02; HTIER-01 and HTIER-04) plus two owner-approved (HITL) design phases, concurrent binding (CBIND) and snapshots (SNAP). The retest phases are independent in code and queue for the shared live window. Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v7.0 close-out is `.planning/v7.0-MILESTONE-AUDIT.md`.
+**Current focus:** Milestone v8.0, Shared sandboxes and durable recovery (phases 49 to 54, release line 0.8.x) — phases complete, audit `.planning/v8.0-MILESTONE-AUDIT.md` (passed with accepted limitations): OMPV-04 met and OMPR-01/06 + OI-11 closed on the FINDING (Phase 49); HTIER-04 met, GAP-48-03 closed, HTIER-01 still carried (Phase 50); STOP not met, F-51-1 new, F-41-1 carried (Phase 51); KIMV-02 NOT-ESTABLISHED narrowed, GAP-43-03 open (Phase 52); CBIND-01..02 design-frozen pending HITL owner ratification (Phase 53); SNAP-01..02 met on the frozen design (Phase 54). 4 of 12 v8.0 requirements ticked Complete; carried items stay carried. Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v7.0 close-out is `.planning/v7.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: 49 (Omp calibration repeat), not started
+Phase: — (all phases 49 to 54 complete)
 Plan: —
-Status: Starting milestone v8.0 (phases 49 to 54, release line 0.8.x)
-Last activity: 2026-11-19 — Milestone v8.0 started
+Status: Phases complete (audit passed with accepted limitations); milestone ship decision is the owner's
+Last activity: 2026-11-19 — Milestone v8.0 phases verified
 
 ## Current Recovery Boundaries
 
