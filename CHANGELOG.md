@@ -4,6 +4,17 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-19
+
+### Fixed
+- fix(docs): strip host paths from 53-SUMMARY (6204e20)
+
+### Documentation
+- docs(phase-51): repeat windows: OTHER-FAILURE, new finding F-51-1, STOP not met (50b8964)
+- docs(phase-52): legacy kimi cause round: NOT-ESTABLISHED, recorder indicted by code (c08e51a)
+- docs(phase-53): concurrent binding design (file-lock identity) (703da8e)
+- docs(phase-54): snapshots design (snapshot = retained RES-04 checkpoint) (834a616)
+
 ## [0.8.1] - 2026-11-19
 
 ### Fixed
