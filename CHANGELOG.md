@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-19
+
+### Documentation
+- docs(phase-38): quiet-host window outcome VOID (six attempts, one valid run); measurement, summary and verification (#207) (a0b56de)
+
 ## [0.6.3] - 2026-11-19
 
 ### Maintenance
