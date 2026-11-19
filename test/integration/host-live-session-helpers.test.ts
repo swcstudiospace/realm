@@ -16,6 +16,7 @@ import {
   codexSessionArgs,
   isLoopbackPeer,
   readFakeServerLog,
+  readRecorderStarts,
   readWireLog,
   REALM_TOOL_NAMES,
   runHostUntil,
@@ -526,4 +527,56 @@ void test("readWireLog and wireSummary carry the restored names, sorted, and ski
   ]);
   assert.deepEqual([...wireSummary(events).restoredNames], ["A", "B"], "the first restored event, sorted");
   assert.deepEqual([...wireSummary(events).hostMethods], ["tools/list"]);
+});
+
+void test("the recorder forces a name to the given value even when the host forwarded another, logs only the names, and writes the pairs with mode 0600", async (t) => {
+  const dir = tempDir(t);
+  const outFile = join(dir, "probe.json");
+  const wireLog = join(dir, "wire.log");
+  const bin = join(dir, "bin");
+  const shim = writeWireRecorder(bin, {
+    nodePath: process.execPath,
+    target: [process.execPath, writeProbeTarget(dir, outFile)],
+    logFile: wireLog,
+    restoreEnv: { RESTORED_NAME: "restored-value-marker" },
+    forceEnv: { FORWARDED_NAME: "forced-value-marker" },
+  });
+  assert.deepEqual(readdirSync(bin).sort(), ["realm", "wire-force.json", "wire-restore.json", "wire-tee.mjs"]);
+  assert.equal(statSync(join(bin, "wire-force.json")).mode & 0o777, 0o600);
+  for (const file of ["realm", "wire-tee.mjs"]) {
+    assert.equal(readFileSync(join(bin, file), "utf8").includes("forced-value-marker"), false, `no forced value in ${file}`);
+  }
+
+  const ended = await runToEndWithEnv(shim, { PATH: process.env["PATH"] ?? "/usr/bin:/bin", FORWARDED_NAME: "host-value-marker" });
+  assert.equal(ended.code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(outFile, "utf8")), { restored: "restored-value-marker", forwarded: "forced-value-marker" }, "the forced value replaces the forwarded one");
+  assert.deepEqual(readWireLog(wireLog), [{ dir: "host-to-realm", kind: "other", restored: ["FORWARDED_NAME", "RESTORED_NAME"] }], "the restored and the forced names, sorted");
+  const text = readFileSync(wireLog, "utf8");
+  for (const value of ["restored-value-marker", "forced-value-marker", "host-value-marker"]) {
+    assert.equal(text.includes(value), false, "no environment value reaches the log");
+  }
+});
+
+void test("a recorder with only forceEnv writes no restore file, and writeWireRecorder refuses a bad force pair before it writes anything", (t) => {
+  const dir = join(tempDir(t), "bin");
+  const options = { nodePath: process.execPath, target: [process.execPath, "server.mjs"], logFile: join(dir, "wire.log") };
+  assert.throws(() => writeWireRecorder(dir, { ...options, forceEnv: { "": "x" } }), /forceEnv holds a pair/);
+  assert.throws(() => writeWireRecorder(dir, { ...options, forceEnv: { "A=B": "x" } }), /forceEnv holds a pair/);
+  assert.throws(() => writeWireRecorder(dir, { ...options, forceEnv: { GOOD: "x", BAD: 5 as unknown as string } }), /forceEnv holds a pair/);
+  assert.equal(existsSync(dir), false, "a refused call created nothing");
+  writeWireRecorder(dir, { ...options, forceEnv: { HOME: "/account" } });
+  assert.deepEqual(readdirSync(dir).sort(), ["realm", "wire-force.json", "wire-tee.mjs"]);
+});
+
+void test("readRecorderStarts returns the argument list of each server start the recorder logged, and nothing for a missing, foreign or argument-less log", async (t) => {
+  const rig = recorderRig(t);
+  assert.deepEqual(readRecorderStarts(rig.wireLog), [], "a missing log has no start");
+  assert.equal((await runToEnd(rig.shim, ["mcp", "--host", "grok-build"], HOST_INPUT)).code, 0);
+  assert.deepEqual(readRecorderStarts(rig.wireLog), [["mcp", "--host", "grok-build"]]);
+  assert.equal((await runToEnd(rig.shim, ["mcp", "--host", "claude"], HOST_INPUT)).code, 0);
+  assert.deepEqual(readRecorderStarts(rig.wireLog), [["mcp", "--host", "grok-build"], ["mcp", "--host", "claude"]], "one entry per start, in order");
+  assert.equal(readFileSync(rig.wireLog, "utf8").includes(PLANTED_PARAMS), false, "the argument list is the only new content: no parameter reaches the log");
+  const foreign = join(rig.dir, "foreign.log");
+  writeFileSync(foreign, ["not json", JSON.stringify({ kind: "lifecycle", event: "child-exit" }), JSON.stringify({ kind: "lifecycle", event: "child-start" }), JSON.stringify({ kind: "lifecycle", event: "child-start", argv: ["a", 5] }), ""].join("\n"));
+  assert.deepEqual(readRecorderStarts(foreign), [[], []], "a start without a string list has the empty list; a malformed or foreign line is skipped");
 });

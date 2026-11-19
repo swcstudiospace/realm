@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ import {
   downAcceptable,
   describeRun,
   fileSha256,
+  GROK_HOME_DIR,
   HOST_LIVE,
   HOST_OVERRIDE_VARIABLES,
   type HostLiveGateInputs,
@@ -34,6 +35,7 @@ import {
   type LiveHostId,
   ownedTableOf,
   parseHostVersion,
+  PRIME_AGENT_PRODUCTION_GAP,
   processAlive,
   productionOverrides,
   readStubArgv,
@@ -44,6 +46,23 @@ import {
   stripAnsi,
   writeStubRealm,
 } from "../support/host-live.js";
+import {
+  attachAuditOf,
+  attributionProblems,
+  bootAuditLinesOf,
+  doctorCheckNames,
+  GROK_LEADER_SOCKET,
+  GROK_WARM_VARIABLE,
+  grokProductionDrive,
+  HANDSHAKE_ONLY_NOTE,
+  museProductionDrive,
+  presenceDirsOf,
+  productionWireProblem,
+  SERVER_ENV_NAMES,
+  type ProductionWire,
+} from "../support/host-live-production.js";
+import { codeOnly } from "../support/host-registry.js";
+import { CODEX_FORWARDED_ENV, REALM_TOOL_NAMES, SESSION_PROMPT, type WireSummary } from "../support/host-live-session.js";
 import { doctorRealmLabel, WAVE2_LIVE, WAVE2_LIVE_IDS, wave2Recipe, type Wave2LiveId } from "../support/host-live-wave2.js";
 import { pollUntil } from "../support/production-live.js";
 import { scaledMs } from "../support/timing.js";
@@ -121,7 +140,7 @@ void test("HOST_LIVE is a frozen table of the sixteen hosts with the recorded fa
     codebuddy: ["REALM_LIVE_CODEBUDDY", "REALM_CODEBUDDY_BIN", "codebuddy", "2.185.0", true, false],
     cline: ["REALM_LIVE_CLINE", "REALM_CLINE_BIN", "cline", "3.0.74", false, false],
     "prime-agent": ["REALM_LIVE_PRIME_AGENT", "REALM_PRIME_AGENT_BIN", "prime-agent", "0.10.2", false, false],
-    "grok-build": ["REALM_LIVE_GROK_BUILD", "REALM_GROK_BUILD_BIN", "grok", "1.0.77", true, false],
+    "grok-build": ["REALM_LIVE_GROK_BUILD", "REALM_GROK_BUILD_BIN", "grok", "1.0.77", true, true],
   };
   const displayNames: Record<Wave2LiveId, string> = {
     qwen: "Qwen Code",
@@ -302,8 +321,11 @@ void test("hostLiveSkipReason: the production tier names the production reason f
   }
 });
 
-void test("hostLiveSkipReason: every wave-2 host has no production tier, and its production query names the config-only sentence", () => {
+void test("hostLiveSkipReason: every wave-2 host but Prime Agent and Grok Build has no production tier, and its production query names the config-only sentence", () => {
   for (const host of WAVE2_LIVE_IDS) {
+    if (host === "prime-agent" || host === "grok-build") {
+      continue;
+    }
     assert.equal(HOST_LIVE[host].productionTier, false, host);
     assert.equal(HOST_LIVE[host].productionGap, CONFIG_ONLY_GAP, host);
     assert.equal(hostLiveSkipReason(host, "production", gateInputs(host, { production: "no Podman" })), CONFIG_ONLY_GAP, host);
@@ -920,7 +942,7 @@ void test("downAcceptable tolerates a down for a session that never became activ
 
 // ---- Production drives and the host configuration homes ----------------------------------------------------------------------
 
-void test("the production drive types accept a session drive with a fixed key and a command drive, and the host union has five hosts", () => {
+void test("the production drive types accept a session drive with a fixed key and a command drive, and the production-capable hosts are the five of Phase 43 plus Muse Code and Grok Build", () => {
   const session: HostSessionDrive = {
     kind: "session",
     provider: { baseUrl: "http://127.0.0.1:1/v1", requests: () => [], close: () => Promise.resolve() },
@@ -934,23 +956,24 @@ void test("the production drive types accept a session drive with a fixed key an
     drives.map((drive) => drive.kind),
     ["session", "command"],
   );
-  const hosts: readonly HostProductionId[] = ["claude", "codex", "opencode", "kimi", "kimi-code"];
+  const hosts: readonly LiveHostId[] = ["claude", "codex", "opencode", "kimi", "kimi-code", "grok-build"];
   for (const host of hosts) {
     assert.equal(HOST_LIVE[host].productionTier, true, host);
   }
+  assert.equal(HOST_LIVE["prime-agent"].productionTier, false, "Prime Agent is wired as a blocker, never as a drive");
 });
 
 void test("productionOverrides creates each host's own configuration home inside the scenario, and refuses an unknown host", (t) => {
   const root = tempDir(t);
   const configHome = join(root, "config");
-  const expected: Readonly<Record<HostProductionId, readonly [string, string] | null>> = {
+  const expected: Readonly<Record<Exclude<HostProductionId, "muse-code" | "grok-build">, readonly [string, string] | null>> = {
     claude: ["CLAUDE_CONFIG_DIR", "cfg"],
     codex: ["CODEX_HOME", "codex"],
     opencode: null,
     kimi: ["KIMI_SHARE_DIR", "kimi"],
     "kimi-code": ["KIMI_CODE_HOME", "kimi-code"],
   };
-  for (const host of Object.keys(expected) as HostProductionId[]) {
+  for (const host of Object.keys(expected) as (keyof typeof expected)[]) {
     const overrides = productionOverrides(host, root, configHome);
     const entry = expected[host];
     if (entry === null) {
@@ -963,4 +986,173 @@ void test("productionOverrides creates each host's own configuration home inside
     }
   }
   assert.throws(() => productionOverrides("bogus" as HostProductionId, root, configHome), /no production configuration home is defined for host bogus/);
+});
+
+// ---- Phase 48: the production tier of Muse Code, Prime Agent and Grok Build -------------------------------------------------------
+
+void test("productionOverrides of Muse Code and Grok Build: the muse directory below the scenario config home, and a HOME of its own inside the scenario that is never the operator's", (t) => {
+  const root = tempDir(t);
+  const configHome = join(root, "config");
+  assert.deepEqual(productionOverrides("muse-code", root, configHome), {}, "Muse Code relocates with the scenario's own XDG_CONFIG_HOME");
+  assert.equal(statSync(join(configHome, "muse")).isDirectory(), true, "the directory named muse below the configuration home exists");
+  const grok = productionOverrides("grok-build", root, configHome);
+  assert.deepEqual(grok, { HOME: join(root, GROK_HOME_DIR) });
+  assert.equal(statSync(join(root, GROK_HOME_DIR)).isDirectory(), true, "the Grok home exists");
+  assert.equal(isUnderTemp(grok["HOME"]), true, "the Grok home lies inside the temporary directory");
+  assert.notEqual(grok["HOME"], homedir(), "never the operator's real home");
+  assert.equal(GROK_HOME_DIR, "grok-home");
+});
+
+void test("the Muse Code drive is the echo command drive with the trust-workspace flag, and adds no credential, key flag or provider other than echo", () => {
+  const drive = museProductionDrive();
+  assert.equal(drive.kind, "command");
+  assert.deepEqual([...drive.args], ["exec", "--provider", "echo", "--trust-workspace", SESSION_PROMPT]);
+  assert.equal(drive.args.filter((arg) => arg === "--provider").length, 1);
+  assert.equal(drive.args[drive.args.indexOf("--provider") + 1], "echo");
+  assert.ok(drive.args.includes("--trust-workspace"));
+  assert.equal(drive.args.some((arg) => /key|token|secret|password|api/i.test(arg)), false, "no credential name or key flag");
+  assert.deepEqual([...drive.restore], ["XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "REALM_DRIVER_SOCKET"]);
+  assert.deepEqual([...SERVER_ENV_NAMES], [...CODEX_FORWARDED_ENV], "the restored names are the three the session helpers name");
+  assert.equal(drive.boundedConnect, false, "a failure bound only, no cold connect bound");
+  assert.equal(drive.wire, undefined, "the full wire is asserted (Muse sends tools/list)");
+  assert.equal(drive.force, undefined);
+  assert.equal(drive.rootArgs, undefined);
+});
+
+void test("the Grok Build drive is `grok mcp doctor` with a leader socket inside the scenario root, a forced account HOME and no credential or prompt", () => {
+  for (const warm of [false, true]) {
+    const drive = grokProductionDrive(warm);
+    assert.equal(drive.kind, "command");
+    assert.deepEqual([...drive.args], ["mcp", "doctor"]);
+    const rootArgs = drive.rootArgs?.("/scenario/root") ?? [];
+    assert.deepEqual(rootArgs, ["--leader-socket", `/scenario/root/${GROK_LEADER_SOCKET}`], "the leader socket is inside the scenario root");
+    assert.deepEqual([...(drive.force ?? [])], ["HOME"], "only HOME is forced to the account's value");
+    assert.deepEqual([...drive.restore], [...SERVER_ENV_NAMES]);
+    assert.deepEqual([...(drive.exitCodes ?? [])], [0, 1], "doctor exits 0 or 1 after its rows; the wire decides");
+    assert.equal(drive.boundedConnect, false);
+    assert.equal(drive.output, "check-names");
+    assert.equal(drive.warm, warm ? true : undefined, "warm only in the diagnostic variant");
+    assert.equal(drive.wire, undefined, "doctor sends tools/list: the full wire, never handshake only");
+    const words = [...drive.args, ...rootArgs];
+    assert.equal(words.some((arg) => /key|token|secret|password|api|prompt/i.test(arg)), false, "no credential name, key flag or prompt");
+  }
+  assert.equal(GROK_WARM_VARIABLE, "REALM_LIVE_GROK_WARM");
+});
+
+void test("the production gate of Grok Build names the first missing prerequisite and never passes without the opt-in; Prime Agent's names the blocker B-48-02", () => {
+  assert.equal(HOST_LIVE["grok-build"].productionGap, null);
+  const opt = hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { env: {} }));
+  assert.ok(typeof opt === "string" && opt.startsWith("REALM_LIVE_GROK_BUILD=1 is not set"), String(opt));
+  assert.match(String(hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { resolveBinary: () => undefined }))), /no Grok Build executable/);
+  assert.match(String(hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { versionProbe: { kind: "unavailable" } }))), /did not run to a successful exit/);
+  assert.match(String(hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { cliBuilt: false }))), /built CLI/);
+  assert.equal(hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { production: "REALM_LIVE_PRODUCTION=1 is not set" })), "REALM_LIVE_PRODUCTION=1 is not set");
+  const receipt = hostLiveSkipReason("grok-build", "production", gateInputs("grok-build", { receiptExists: true }));
+  assert.ok(typeof receipt === "string" && receipt.includes("Realm host receipt for grok-build"), String(receipt));
+  assert.equal(hostLiveSkipReason("grok-build", "production", gateInputs("grok-build")), false, "with every prerequisite the gate opens");
+
+  assert.equal(HOST_LIVE["prime-agent"].productionGap, PRIME_AGENT_PRODUCTION_GAP);
+  assert.ok(PRIME_AGENT_PRODUCTION_GAP.startsWith("B-48-02:"), "the fixed sentence names the blocker first");
+  for (const overrides of [{}, { production: "no Podman" }, { receiptExists: true }] as const) {
+    assert.equal(hostLiveSkipReason("prime-agent", "production", gateInputs("prime-agent", overrides)), PRIME_AGENT_PRODUCTION_GAP, "a blocked host never passes");
+  }
+  const primeOpt = hostLiveSkipReason("prime-agent", "production", gateInputs("prime-agent", { env: {} }));
+  assert.ok(typeof primeOpt === "string" && primeOpt.startsWith("REALM_LIVE_PRIME_AGENT=1 is not set"), "without the opt-in the first missing prerequisite is named");
+});
+
+// A wire a host that sent initialize, tools/list and got the six names leaves behind.
+function summaryOf(overrides: Partial<WireSummary> = {}): WireSummary {
+  return { hostMethods: ["initialize", "notifications/initialized", "tools/list"], toolNames: [...REALM_TOOL_NAMES], answered: true, restoredNames: [], ...overrides };
+}
+
+function wireOf(overrides: Partial<ProductionWire> = {}): ProductionWire {
+  return { summary: summaryOf(), starts: [["mcp", "--host", "grok-build"]], host: "grok-build", mode: "full", ...overrides };
+}
+
+void test("productionWireProblem: a complete wire passes; no tools/list fails in the full mode and passes only in the handshake-only mode, whose failure text says handshake only", () => {
+  assert.equal(productionWireProblem(wireOf()), undefined);
+  assert.equal(productionWireProblem(wireOf({ summary: summaryOf({ hostMethods: ["server/discover", "tools/list"] }) })), undefined, "the modern era handshake also passes");
+  const noList = summaryOf({ hostMethods: ["initialize", "notifications/initialized"], toolNames: [], answered: false });
+  assert.match(productionWireProblem(wireOf({ summary: noList })) ?? "", /tools\/list/);
+  assert.equal(productionWireProblem(wireOf({ summary: noList, mode: "handshake-only" })), undefined, "the weaker assertion is its own mode");
+  const noHandshake = summaryOf({ hostMethods: ["tools/list"] });
+  assert.match(productionWireProblem(wireOf({ summary: noHandshake })) ?? "", /initialize or server\/discover/);
+  const weak = productionWireProblem(wireOf({ summary: noHandshake, mode: "handshake-only" }));
+  assert.ok(weak !== undefined && weak.includes(HANDSHAKE_ONLY_NOTE), "the handshake-only failure text says handshake only");
+  assert.equal(HANDSHAKE_ONLY_NOTE, "handshake only");
+  assert.match(productionWireProblem(wireOf({ summary: summaryOf({ toolNames: ["exec", "list"] }) })) ?? "", /six Realm tools/);
+  assert.equal(productionWireProblem(wireOf({ mode: "full", summary: summaryOf({ toolNames: ["exec"] }) }))?.includes(HANDSHAKE_ONLY_NOTE), false, "the full mode never says handshake only");
+});
+
+void test("productionWireProblem: a second realm server start, no start, or an argument list other than mcp --host ID fails", () => {
+  assert.match(productionWireProblem(wireOf({ starts: [["mcp", "--host", "grok-build"], ["mcp", "--host", "claude"]] })) ?? "", /exactly one realm server start; it logged 2/);
+  assert.match(productionWireProblem(wireOf({ starts: [] })) ?? "", /exactly one realm server start; it logged 0/);
+  for (const argv of [["mcp", "--host", "claude"], ["mcp"], ["mcp", "--host", "grok-build", "--extra"], ["serve", "--host", "grok-build"], ["mcp", "--hosts", "grok-build"], []]) {
+    assert.match(productionWireProblem(wireOf({ starts: [argv] })) ?? "", /mcp --host grok-build/, argv.join(" "));
+  }
+  assert.match(productionWireProblem(wireOf({ mode: "handshake-only", starts: [["mcp", "--host", "claude"]] })) ?? "", /handshake only/, "the argument list is asserted in the handshake-only mode too");
+});
+
+void test("attachAuditOf: one attach line naming a host returns it; no line, several lines or a line without a host return a distinct word and never a guess", () => {
+  const line = (path: string, tool = "host.boot"): string => JSON.stringify({ at: "2026-11-19T00:00:00.000Z", sessionId: "host-boot", tool, outcome: "ok", path });
+  assert.deepEqual(attachAuditOf([line("grok-build/stdio/attached")]), { word: "named", host: "grok-build" });
+  assert.deepEqual(attachAuditOf([line("claude/stdio/attached")]), { word: "named", host: "claude" });
+  assert.deepEqual(attachAuditOf([]), { word: "none" });
+  assert.deepEqual(attachAuditOf([line("grok-build/stdio/failed"), line("grok-build/stdio/refused"), "not json", "[]", "null", JSON.stringify({ tool: "write", path: "grok-build/stdio/attached" })]), { word: "none" }, "only the attached phase of the host.boot tool counts");
+  assert.deepEqual(attachAuditOf([line("grok-build/stdio/attached"), line("grok-build/stdio/attached")]), { word: "several" });
+  assert.deepEqual(attachAuditOf([line("grok-build/stdio/attached"), line("claude/stdio/attached")]), { word: "several" });
+  assert.deepEqual(attachAuditOf([line("unlabelled/stdio/attached")]), { word: "unlabelled" });
+  assert.deepEqual(attachAuditOf([line("/stdio/attached")]), { word: "unlabelled" });
+  assert.deepEqual(attachAuditOf([line("grok-build/attached")]), { word: "none" }, "a path that is not host, transport, phase is not an attach line");
+  assert.deepEqual(attachAuditOf([JSON.stringify({ tool: "host.boot", path: 5 })]), { word: "none" });
+});
+
+void test("attributionProblems: the audit line, the presence directory and the attached boot report must all name the attributed host", () => {
+  const good = { attributedTo: "grok-build", audit: { word: "named", host: "grok-build" } as const, createdPresence: ["grok-build-active"], attachedBoots: 1 };
+  assert.deepEqual(attributionProblems(good), []);
+  assert.match(attributionProblems({ ...good, audit: { word: "none" } }).join(";"), /no attach line/);
+  assert.match(attributionProblems({ ...good, audit: { word: "several" } }).join(";"), /several attach lines/);
+  assert.match(attributionProblems({ ...good, audit: { word: "unlabelled" } }).join(";"), /naming no host/);
+  assert.match(attributionProblems({ ...good, audit: { word: "named", host: "claude" } }).join(";"), /names claude, not grok-build/);
+  assert.match(attributionProblems({ ...good, createdPresence: [] }).join(";"), /grok-build-active must have been created/);
+  assert.match(attributionProblems({ ...good, createdPresence: ["claude-active"] }).join(";"), /another host appeared/);
+  assert.match(attributionProblems({ ...good, createdPresence: ["grok-build-active", "claude-active"] }).join(";"), /another host appeared: \[claude-active\]/);
+  assert.match(attributionProblems({ ...good, attachedBoots: 0 }).join(";"), /attached boot report for grok-build/);
+  const control = { attributedTo: "claude", audit: { word: "named", host: "claude" } as const, createdPresence: ["claude-active"], attachedBoots: 2 };
+  assert.deepEqual(attributionProblems(control), [], "the control attributes the Claude-file-alone attach to claude");
+});
+
+void test("bootAuditLinesOf and presenceDirsOf read the audit file and the presence directories of a state directory, and an absent one holds nothing", (t) => {
+  const stateDir = tempDir(t);
+  assert.deepEqual(bootAuditLinesOf(stateDir), []);
+  assert.deepEqual(presenceDirsOf(stateDir), []);
+  mkdirSync(join(stateDir, "audit"));
+  writeFileSync(join(stateDir, "audit", "host-boot.jsonl"), 'one\ntwo\n');
+  writeFileSync(join(stateDir, "audit", "another.jsonl"), "ignored\n");
+  assert.deepEqual(bootAuditLinesOf(stateDir), ["one", "two"], "the lines of the host boot audit file, without line ends");
+  mkdirSync(join(stateDir, "hosts", "grok-build-active"), { recursive: true });
+  mkdirSync(join(stateDir, "hosts", "claude-active"));
+  mkdirSync(join(stateDir, "hosts", "not-a-presence"));
+  writeFileSync(join(stateDir, "hosts", "pi-active"), "a file, not a directory");
+  writeFileSync(join(stateDir, "hosts", "claude.receipt.json"), "{}");
+  assert.deepEqual(presenceDirsOf(stateDir), ["claude-active", "grok-build-active"], "only directories named ID-active, sorted");
+});
+
+void test("doctorCheckNames prints the names of the doctor checks and never a line of its output", () => {
+  const output = "command found: /home/someone/bin/realm\nserver started (pid 4242)\nhandshake OK\n6 tools discovered: exec, list\n";
+  assert.deepEqual(doctorCheckNames(output), ["command found", "server started", "handshake OK", "N tools discovered"]);
+  assert.deepEqual(doctorCheckNames("1 tool discovered"), ["N tool discovered"]);
+  assert.deepEqual(doctorCheckNames("nothing of the sort"), []);
+  assert.equal(doctorCheckNames(output).some((name) => name.includes("/") || name.includes("4242")), false, "no path and no pid");
+});
+
+void test("no module of the three hosts' production tier sets REALM_LIVE_PRODUCTION or an opt-in variable, and no test of them sends a prompt or reads a credential", () => {
+  const files = ["test/support/host-live-production.ts", "test/support/host-live-muse.ts", "test/support/host-live.ts", "test/integration/host-live-wave2-production.test.ts", "test/integration/host-live-muse.test.ts"];
+  for (const file of files) {
+    const code = codeOnly(readFileSync(fileURLToPath(new URL(`../../../${file}`, import.meta.url)), "utf8"));
+    assert.equal(/process\.env(?:\.[A-Za-z_]+|\[[^\]]+\])\s*=(?!=)/.test(code), false, `${file} assigns a process environment variable`);
+    assert.equal(/delete\s+process\.env/.test(code), false, `${file} deletes a process environment variable`);
+    assert.equal(/["']REALM_LIVE_[A-Z_]+["']\s*:\s*["']1["']/.test(code), false, `${file} defines a gate variable as 1`);
+    assert.equal(/\b(?:ANTHROPIC|OPENAI|XAI|GROK|MOONSHOT|KIMI)_API_KEY\b|\bapi[-_]?key\b/i.test(code.replace(/api-key/g, "")), false, `${file} names a credential variable`);
+  }
 });

@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
+  collectMuseProductionSkip,
   countProcessesNamed,
   MUSE_BIN_VARIABLE,
   MUSE_OPT_IN,
@@ -18,6 +19,7 @@ import {
   museInstalledProblem,
   museIsolatedEnv,
   museListProblem,
+  museProductionSkipReason,
   museSettingsText,
   museUninstallExpectation,
   parseMuseVersion,
@@ -214,4 +216,25 @@ void test("40-03 countProcessesNamed counts the processes of a command name from
   assert.equal(countProcessesNamed("rlh-no-such-command"), 0);
   const own = readFileSync("/proc/self/comm", "utf8").trim();
   assert.ok(countProcessesNamed(own) >= 1, "this test process counts under its own command name");
+});
+
+void test("Phase 48 museProductionSkipReason names the first missing prerequisite of the production tier: the host gate, the built CLI, the production prerequisites, then a receipt", () => {
+  const open = { validator: false, cliBuilt: true, production: false, receiptExists: false } as const;
+  assert.equal(museProductionSkipReason(open), false, "with every prerequisite the gate opens");
+  assert.equal(museProductionSkipReason({ ...open, validator: `${MUSE_OPT_IN}=1 is not set; the live Muse Code rehearsal needs an explicit operator opt-in`, cliBuilt: false, production: "no Podman", receiptExists: true }), `${MUSE_OPT_IN}=1 is not set; the live Muse Code rehearsal needs an explicit operator opt-in`, "the host's own gate comes first");
+  assert.match(String(museProductionSkipReason({ ...open, cliBuilt: false, production: "no Podman", receiptExists: true })), /built CLI/);
+  assert.equal(museProductionSkipReason({ ...open, production: "REALM_LIVE_PRODUCTION=1 is not set", receiptExists: true }), "REALM_LIVE_PRODUCTION=1 is not set", "the production prerequisites come before a receipt");
+  const receipt = museProductionSkipReason({ ...open, receiptExists: true });
+  assert.ok(typeof receipt === "string" && receipt.includes("Realm host receipt for muse-code"), String(receipt));
+});
+
+void test("Phase 48 collectMuseProductionSkip probes nothing without the opt-in or the production gate: a plain run skips with the first missing sentence", async () => {
+  const validator = museGateReason({ env: {}, platform: "linux", resolveBinary: () => undefined, versionProbe: { kind: "unavailable" } });
+  assert.ok(typeof validator === "string" && validator.startsWith(`${MUSE_OPT_IN}=1 is not set`));
+  assert.equal(await collectMuseProductionSkip({ validator, env: {}, cliPath: "/nonexistent/main.js" }), validator, "the host opt-in comes first");
+  const noCli = await collectMuseProductionSkip({ validator: false, env: {}, cliPath: "/nonexistent/main.js" });
+  assert.match(String(noCli), /built CLI/, "a missing built CLI is named before any production probe");
+  // The built CLI exists (this module) and REALM_LIVE_PRODUCTION is unset: the production opt-in is named, and `podman --version` never ran.
+  const noProduction = await collectMuseProductionSkip({ validator: false, env: {}, cliPath: fileURLToPath(import.meta.url) });
+  assert.ok(typeof noProduction === "string" && noProduction.startsWith("REALM_LIVE_PRODUCTION=1 is not set"), String(noProduction));
 });

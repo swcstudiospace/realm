@@ -9,7 +9,9 @@
 // session drive (`codex exec`, `kimi -p` against a refusing loopback provider; 31-CONTEXT D-31-02, and for kimi-code one fixed non-secret
 // key) that makes the host launch the registered server and list its tools. In every production run the registered `realm` is a wire
 // recorder (test/support/host-live-session.ts) that logs method names and tool names. The eleven wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline, prime-agent, grok-build) share one
-// table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08).
+// table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08), except Grok Build (Phase 48: the health
+// check `grok mcp doctor`, test/integration/host-live-wave2-production.test.ts) and Muse Code, which has a gated file of its own (test/integration/host-live-muse.test.ts; a command
+// drive, `muse exec --provider echo`). Prime Agent has no credential-free drive (48-01 blocker B-48-02, PRIME_AGENT_PRODUCTION_GAP).
 // Antigravity has no live file at all (ANTIGRAVITY_GAP).
 //
 // Gate order of hostLiveSkipReason, the first failing check names the skip (no test ever sets a gate variable):
@@ -82,7 +84,19 @@ import {
 } from "./production-live.js";
 import { catalogueCodesIn, type RunEvidenceSettings, writeRunEvidence } from "./host-live-evidence.js";
 import { observeReach, REACH_WINDOW_MS, type ReachSeams } from "./host-live-reach.js";
-import { isLoopbackPeer, readWireLog, REALM_TOOL_NAMES, runHostUntil, type RefusingProvider, wireSummary, writeWireRecorder } from "./host-live-session.js";
+import { isLoopbackPeer, readRecorderStarts, readWireLog, REALM_TOOL_NAMES, runHostUntil, type RefusingProvider, wireSummary, writeWireRecorder } from "./host-live-session.js";
+import {
+  attachAuditOf,
+  type AttributionObserved,
+  type AttributionCheck,
+  attributionProblems,
+  bootAuditLinesOf,
+  describeAudit,
+  doctorCheckNames,
+  presenceDirsOf,
+  productionWireProblem,
+  type WireMode,
+} from "./host-live-production.js";
 import { scaledMs } from "./timing.js";
 
 // ---- The per-host table ----------------------------------------------------------------------------------------------------
@@ -119,6 +133,11 @@ export interface HostVersionRoot {
 // The production-tier gap of every wave-2 host.
 export const CONFIG_ONLY_GAP = "config-only host: no production tier is defined for it (25-CONTEXT D-25-08)";
 
+// The production-tier gap of Prime Agent (48-01 blocker B-48-02): Prime Agent initialises an MCP server on first use from a model tool call,
+// and none of its commands (mcp list, get, add, remove, status, doctor, or a mode with no model) starts the registered server, so no
+// credential-free drive exists. The registry T3 of the host is the same gap.
+export const PRIME_AGENT_PRODUCTION_GAP = "B-48-02: no credential-free command starts the registered server on Prime Agent 0.10.2 (a start needs a model tool call), so no production tier can be run for it";
+
 interface Wave2SpecInit {
   readonly optIn: string;
   readonly binOverride: string;
@@ -128,9 +147,12 @@ interface Wave2SpecInit {
   readonly minVersion?: string;
   readonly launchesOnValidate: boolean;
   readonly versionRoot?: HostVersionRoot;
+  // The fixed production-gap sentence, or null for a host that has a production tier. Absent: CONFIG_ONLY_GAP.
+  readonly productionGap?: string | null;
 }
 
-// One wave-2 table entry: a config-only host whose validator runs `<bin> --version` and has no production tier.
+// One wave-2 table entry: a host whose validator runs `<bin> --version`. It has no production tier (CONFIG_ONLY_GAP or the gap sentence
+// it names) unless `productionGap` is null.
 function wave2Spec(init: Wave2SpecInit): HostLiveSpec {
   return Object.freeze({
     optIn: init.optIn,
@@ -141,8 +163,8 @@ function wave2Spec(init: Wave2SpecInit): HostLiveSpec {
     recordedVersion: init.recordedVersion,
     minVersion: init.minVersion ?? null,
     launchesOnValidate: init.launchesOnValidate,
-    productionTier: false,
-    productionGap: CONFIG_ONLY_GAP,
+    productionTier: init.productionGap === null,
+    productionGap: init.productionGap === undefined ? CONFIG_ONLY_GAP : init.productionGap,
     ...(init.versionRoot === undefined ? {} : { versionRoot: Object.freeze({ variable: init.versionRoot.variable, prepare: Object.freeze([...init.versionRoot.prepare]) }) }),
   });
 }
@@ -222,8 +244,9 @@ export const HOST_LIVE: Readonly<Record<LiveHostId, HostLiveSpec>> = Object.free
   cline: wave2Spec({ optIn: "REALM_LIVE_CLINE", binOverride: "REALM_CLINE_BIN", defaultBinary: "cline", displayName: "Cline CLI", recordedVersion: "3.0.74", launchesOnValidate: false }),
   // Phase 40 (40-CONTEXT D-40-07): `prime-agent mcp list|get` print the name and the transport only and start nothing (E-40-06); `grok mcp doctor`
   // starts the registered server (E-40-08), `grok mcp list` does not.
-  "prime-agent": wave2Spec({ optIn: "REALM_LIVE_PRIME_AGENT", binOverride: "REALM_PRIME_AGENT_BIN", defaultBinary: "prime-agent", displayName: "Prime Agent", recordedVersion: "0.10.2", launchesOnValidate: false }),
-  "grok-build": wave2Spec({ optIn: "REALM_LIVE_GROK_BUILD", binOverride: "REALM_GROK_BUILD_BIN", defaultBinary: "grok", displayName: "Grok Build", recordedVersion: "1.0.77", launchesOnValidate: true }),
+  // Phase 48 (48-01, 48-02): Prime Agent has no credential-free drive (B-48-02); Grok Build has a production tier, the health check `grok mcp doctor`.
+  "prime-agent": wave2Spec({ optIn: "REALM_LIVE_PRIME_AGENT", binOverride: "REALM_PRIME_AGENT_BIN", defaultBinary: "prime-agent", displayName: "Prime Agent", recordedVersion: "0.10.2", launchesOnValidate: false, productionGap: PRIME_AGENT_PRODUCTION_GAP }),
+  "grok-build": wave2Spec({ optIn: "REALM_LIVE_GROK_BUILD", binOverride: "REALM_GROK_BUILD_BIN", defaultBinary: "grok", displayName: "Grok Build", recordedVersion: "1.0.77", launchesOnValidate: true, productionGap: null }),
 });
 
 // The sentence of the Antigravity gap: no live file exists for it, because `agy` was never observed.
@@ -934,11 +957,24 @@ export interface HostCommandDrive {
   readonly restore: readonly string[];
   readonly warm?: boolean;
   readonly evidence?: RunEvidenceSettings;
+  // The Phase 48 members, all optional and inert when absent (the Phase 43 and 47 drives are unchanged):
+  // `rootArgs` adds arguments after `args` that name a path inside the scenario root (a per-run leader socket); `force` names scenario
+  // variables the recorder gives the real server with the ACCOUNT's value even though the host forwards another one (Grok Build runs with
+  // an isolated HOME, 48-CONTEXT E-48-10); `exitCodes` are the exit codes of the host command that are not a failure (default: 0);
+  // `boundedConnect` false drops the cold connect bound of a health check (the failure bound still applies; default true); `output` says
+  // what a diagnostic prints of the command's output (`first-line`, the default, or `check-names`: only the names of the doctor checks);
+  // `wire` is the assertion mode (default full; handshake-only only for a drive that sends no tools/list).
+  readonly rootArgs?: (scenarioRoot: string) => readonly string[];
+  readonly force?: readonly string[];
+  readonly exitCodes?: readonly number[];
+  readonly boundedConnect?: boolean;
+  readonly output?: "first-line" | "check-names";
+  readonly wire?: WireMode;
 }
 
 export type HostDrive = HostSessionDrive | HostCommandDrive;
 
-export type HostProductionId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code";
+export type HostProductionId = "claude" | "codex" | "opencode" | "kimi" | "kimi-code" | "muse-code" | "grok-build";
 
 export interface HostProductionOptions {
   readonly host: HostProductionId;
@@ -949,6 +985,9 @@ export interface HostProductionOptions {
   // The operator's real host configuration file: its sha256 must be equal before and after the run.
   readonly realFile: (home: string) => string;
   readonly drive?: HostDrive;
+  // Phase 48: the recipes the run installs, the host id the attach is attributed to and the audit rule. Absent: the five original hosts run
+  // exactly as before (their own recipe, no audit read, no argument check).
+  readonly attribution?: AttributionCheck;
 }
 
 // The line(s) of a host listing that name the realm server.
@@ -990,10 +1029,64 @@ function presenceEntries(stateDir: string, host: string): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
+// The directory of Grok Build's isolated HOME below the scenario root (48-CONTEXT E-48-10: Grok documents no relocation variable, so its
+// scenario runs with HOME set here and the recorder gives the real `realm mcp` the account's HOME).
+export const GROK_HOME_DIR = "grok-home";
+
+// What a production run saw of the attach before the host command: the number of host boot audit lines and the presence directories.
+interface AttributionBefore {
+  readonly auditLines: number;
+  readonly presence: readonly string[];
+}
+
+// The attach as the daemon and the state directory show it after the host command: the attach audit lines written since `before` (the
+// daemon's host boot audit file), the presence directories that are new (the attributed host's own counts even when it existed before, as
+// a directory cannot say who made it), and the attached boot reports of the attributed host in `realm metrics`.
+async function observeAttribution(inputs: LiveInputs, scenario: ScenarioEnvironment, projectDir: string, check: AttributionCheck, before: AttributionBefore): Promise<AttributionObserved> {
+  const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", projectDir], REALM_COMMAND_TIMEOUT_MS);
+  const wanted = `${check.attributedTo}-active`;
+  return {
+    attributedTo: check.attributedTo,
+    audit: attachAuditOf(bootAuditLinesOf(scenario.stateDir).slice(before.auditLines)),
+    createdPresence: presenceDirsOf(scenario.stateDir).filter((name) => name === wanted || !before.presence.includes(name)),
+    attachedBoots: metrics.exitCode === 0 ? attachedBootsOf(metrics.stdout, check.attributedTo) : 0,
+  };
+}
+
+// The attribution assertion of a run. A mandatory rule (the attribution tests) polls until the audit line, the presence directory and the
+// attached boot report all name the attributed host, and fails with the problems otherwise: the audit line is read, never inferred. A
+// diagnostic rule (the plain production tests) reads once and prints; the wire and the quiet end decide there.
+async function checkAttribution(t: TestContext, inputs: LiveInputs, scenario: ScenarioEnvironment, projectDir: string, check: AttributionCheck, before: AttributionBefore): Promise<void> {
+  const seen: { current?: AttributionObserved } = {};
+  const observe = async (): Promise<AttributionObserved> => {
+    seen.current = await observeAttribution(inputs, scenario, projectDir, check, before);
+    return seen.current;
+  };
+  if (check.audit === "required") {
+    const outcome = await pollUntil(
+      async () => {
+        const problems = attributionProblems(await observe());
+        return problems.length === 0 ? { done: true } : { done: false, detail: problems.join("; ") };
+      },
+      { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+    );
+    const last = seen.current;
+    if (last !== undefined) {
+      t.diagnostic(`attribution to ${check.attributedTo}: audit ${describeAudit(last.audit)}; presence directories [${last.createdPresence.join(", ")}]; attached boot reports ${String(last.attachedBoots)}`);
+    }
+    assert.ok(outcome.ok, `the attach must be attributed to ${check.attributedTo}: ${outcome.detail}`);
+    return;
+  }
+  const once = await observe();
+  t.diagnostic(`attribution to ${check.attributedTo} (diagnostic): audit ${describeAudit(once.audit)}; presence directories [${once.createdPresence.join(", ")}]; attached boot reports ${String(once.attachedBoots)}${once.attachedBoots === 0 ? "; the host left before the realm was ready (judged from the wire)" : ""}`);
+}
+
 // The host's own configuration home inside the scenario, created here: Claude a `cfg` directory named by CLAUDE_CONFIG_DIR, Codex a
 // `codex` directory named by CODEX_HOME, OpenCode the `opencode` directory beside the scenario's realm/config.json (both tools read
 // their own subdirectory of one XDG_CONFIG_HOME), Kimi a `kimi` directory named by KIMI_SHARE_DIR, Kimi Code a `kimi-code` directory named
-// by KIMI_CODE_HOME. Returns the override variables to add to the scenario environment. A host that is none of these is a programming error.
+// by KIMI_CODE_HOME, Muse Code the `muse` directory of the scenario's XDG_CONFIG_HOME (as OpenCode), Grok Build a HOME of its own
+// (GROK_HOME_DIR; no relocation variable exists). Returns the override variables to add to the scenario environment. A host that is none
+// of these is a programming error.
 export function productionOverrides(host: HostProductionId, scenarioRoot: string, configHome: string): Record<string, string> {
   const overrides: Record<string, string> = {};
   switch (host) {
@@ -1011,6 +1104,12 @@ export function productionOverrides(host: HostProductionId, scenarioRoot: string
       break;
     case "kimi-code":
       overrides["KIMI_CODE_HOME"] = join(scenarioRoot, "kimi-code");
+      break;
+    case "muse-code":
+      mkdirSync(join(configHome, "muse"), { recursive: true });
+      break;
+    case "grok-build":
+      overrides["HOME"] = join(scenarioRoot, GROK_HOME_DIR);
       break;
     default:
       throw new Error(`no production configuration home is defined for host ${String(host)}`);
@@ -1139,20 +1238,33 @@ async function keepRunEvidence(t: TestContext, kept: KeptRun): Promise<void> {
   }
 }
 
-// The production-tier scenario of claude, codex, opencode, kimi and kimi-code. The default drive is the real host's own health check (`<host> mcp list`):
+// The production-tier scenario of claude, codex, opencode, kimi, kimi-code, muse-code and grok-build. The default drive is the real host's own health check (`<host> mcp list`):
 // it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The session drive (codex, kimi-code) runs the host as a
 // session against a refusing loopback provider and ends it once the daemon shows the boot and the recorder shows the tool listing. The
-// command drive (kimi) runs `kimi mcp test realm` and gives the recorder the scenario variables the legacy CLI does not forward. The
-// registered `realm` is a wire recorder: it forwards the stream to the real CLI and logs method names and tool names. The gate has
+// command drive (kimi, muse-code, grok-build) runs the host's own command (`kimi mcp test realm`, `muse exec --provider echo`, `grok mcp doctor`) and gives the recorder the scenario variables the host does not forward. The
+// registered `realm` is a wire recorder: it forwards the stream to the real CLI and logs method names, tool names and the server start. The gate has
 // already passed. The host's configuration home is isolated (CLAUDE_CONFIG_DIR, CODEX_HOME, KIMI_SHARE_DIR, KIMI_CODE_HOME, or the
-// scenario's own XDG_CONFIG_HOME for opencode); HOME stays the account's, because the daemon the host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile
-// HOME). The operator's real host file must be byte-equal afterwards. No model turn happens and no credential is used.
+// scenario's own XDG_CONFIG_HOME for opencode and muse-code); HOME stays the account's, because the daemon the host starts needs it (Phase 22 measured AGENTOS_STOP_FAILED with a profile
+// HOME). The one exception is Grok Build, which has no relocation variable (48-CONTEXT E-48-10): it runs with HOME set to a scenario directory and the recorder
+// gives the real `realm mcp` the account's HOME (forced, names logged, never values). The operator's real host file must be byte-equal afterwards. No model turn happens and no credential is used.
+// With `attribution` (Phase 48) the run also installs the named recipes, asserts the server start (exactly `mcp --host ID`, once), and reads the attach audit line, the presence directory and the attached boot report of the attributed host.
 export async function runHostProduction(t: TestContext, options: HostProductionOptions): Promise<void> {
   const { host } = options;
+  const { attribution } = options;
+  // The recipes the run installs and the host id the attach is attributed to: the host's own, unless the attribution says otherwise.
+  const installs: readonly string[] = attribution?.installs ?? [host];
+  const attributedTo: string = attribution?.attributedTo ?? host;
+  const touched: readonly string[] = [...new Set<string>([host, ...installs, attributedTo])];
   const inputs: LiveInputs = readLiveInputs(options.env, options.cliPath);
   const hostsDir = inputs.driverStateDir === undefined ? undefined : join(inputs.driverStateDir, "hosts");
   const hostsDirExisted = hostsDir !== undefined && existsSync(hostsDir);
-  const presenceDirExisted = hostsDir !== undefined && existsSync(join(hostsDir, `${host}-active`));
+  const presenceExisted = new Map<string, boolean>(touched.map((id): [string, boolean] => [id, hostsDir !== undefined && existsSync(join(hostsDir, `${id}-active`))]));
+  // A recipe the run installs beside the host's own (the Claude file) must not collide with a real install: its receipt must be absent.
+  for (const id of installs) {
+    if (id !== host && hostsDir !== undefined) {
+      assert.equal(existsSync(join(hostsDir, `${id}.receipt.json`)), false, `the shared state directory already holds a Realm host receipt for ${id}; refusing to touch a real install`);
+    }
+  }
 
   const scenario: ScenarioEnvironment = createScenarioEnvironment(inputs, { image: inputs.image });
   const hostHome = scenario.cliEnvironment["HOME"];
@@ -1161,6 +1273,8 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   assert.ok(configHome !== undefined, "the scenario environment must name its configuration home");
   const realFile = options.realFile(hostHome);
   const realBefore = fileSha256(realFile);
+  const alsoReal = attribution?.alsoReal?.(hostHome) ?? [];
+  const alsoBefore = alsoReal.map((path) => fileSha256(path));
   // The cold snapshot of an evidence run is taken before this run creates anything (its project directory included).
   const evidence = options.drive?.kind === "command" ? options.drive.evidence : undefined;
   const cold = evidence === undefined ? false : await isColdStack(inputs, scenario);
@@ -1204,10 +1318,12 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     });
     await step(() => {
       if (hostsDir !== undefined) {
-        // The receipt and the presence directory of this run. Nothing that existed before the run is removed.
-        rmSync(join(hostsDir, `${host}.receipt.json`), { force: true });
-        if (!presenceDirExisted) {
-          rmSync(join(hostsDir, `${host}-active`), { recursive: true, force: true });
+        // The receipts and the presence directories of this run. Nothing that existed before the run is removed.
+        for (const id of touched) {
+          rmSync(join(hostsDir, `${id}.receipt.json`), { force: true });
+          if (presenceExisted.get(id) !== true) {
+            rmSync(join(hostsDir, `${id}-active`), { recursive: true, force: true });
+          }
         }
         if (!hostsDirExisted) {
           rmSync(hostsDir, { recursive: true, force: true });
@@ -1246,43 +1362,62 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     }
     restoreEnv[name] = value;
   }
+  // The names forced to the ACCOUNT's value (Grok's HOME): the scenario environment's own value, not the host's isolated one.
+  const forceEnv: Record<string, string> = {};
+  for (const name of drive?.kind === "command" ? (drive.force ?? []) : []) {
+    const value = scenario.cliEnvironment[name];
+    if (value === undefined) {
+      throw new Error(`the command drive forces ${name}, which the scenario environment does not define`);
+    }
+    forceEnv[name] = value;
+  }
+  const wireMode: WireMode = drive?.kind === "command" ? (drive.wire ?? "full") : "full";
   const serverStderrFile = join(scenario.root, "server-stderr.txt");
   writeWireRecorder(shimDir, {
     nodePath: process.execPath,
     target: [process.execPath, options.cliPath],
     logFile: wireLog,
     ...(drive?.kind === "command" ? { restoreEnv } : {}),
+    ...(Object.keys(forceEnv).length === 0 ? {} : { forceEnv }),
     ...(evidence === undefined ? {} : { stderrFile: serverStderrFile }),
   });
 
   const realmHost = (words: readonly string[]): Promise<CliResult> => runCli(["host", ...words], { env, now: () => new Date() });
   const realmStatus = (): Promise<CommandResult> => realmCliWithWorkspace(inputs, scenario, ["status"], projectDir, REALM_COMMAND_TIMEOUT_MS);
   const liveSessionsOf = async (): Promise<number> => {
-    const row = cliJson(await realmHost(["status", host]), `realm host status ${host}`);
+    const row = cliJson(await realmHost(["status", attributedTo]), `realm host status ${attributedTo}`);
     const plugin = row["plugin"];
     const sessions = isRecord(plugin) ? plugin["sessions"] : undefined;
     const live = isRecord(sessions) ? sessions["live"] : undefined;
     return typeof live === "number" ? live : 0;
   };
 
-  // Install through the real table against the scenario's state directory.
-  const planned = cliJson(await realmHost(["install", host, "--dry-run"]), `realm host install ${host} --dry-run`);
-  assert.equal(planned["dryRun"], true, `the dry run must say so: ${describeValue(planned)}`);
-  const installed = cliJson(await realmHost(["install", host]), `realm host install ${host}`);
-  assert.equal(installed["status"], "installed", `the install must report installed: ${describeValue(installed)}`);
-  const afterInstall = cliJson(await realmHost(["status", host]), `realm host status ${host}`);
-  assert.equal(afterInstall["status"], "installed", `realm host status ${host} must report installed: ${describeValue(afterInstall)}`);
-  assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
-  // From here on the cleanup uninstalls the recipe (a no-op when the body already did).
+  // Install through the real table against the scenario's state directory: the host's own recipe and, for the Grok attribution test, the
+  // Claude file beside it. From the first install on, the cleanup uninstalls what is installed (a no-op when the body already did).
+  const installedIds: string[] = [];
   recipe.uninstall = async () => {
-    const removedAtEnd = await realmHost(["uninstall", host]);
-    assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${host} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
+    for (const id of [...installedIds].reverse()) {
+      const removedAtEnd = await realmHost(["uninstall", id]);
+      assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${id} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
+    }
   };
+  for (const id of installs) {
+    const planned = cliJson(await realmHost(["install", id, "--dry-run"]), `realm host install ${id} --dry-run`);
+    assert.equal(planned["dryRun"], true, `the dry run must say so: ${describeValue(planned)}`);
+    const installed = cliJson(await realmHost(["install", id]), `realm host install ${id}`);
+    installedIds.push(id);
+    assert.equal(installed["status"], "installed", `the install must report installed: ${describeValue(installed)}`);
+    const afterInstall = cliJson(await realmHost(["status", id]), `realm host status ${id}`);
+    assert.equal(afterInstall["status"], "installed", `realm host status ${id} must report installed: ${describeValue(afterInstall)}`);
+    assert.equal(afterInstall["launch"], "on-path", `the shim realm must resolve on PATH: ${describeValue(afterInstall)}`);
+  }
 
   // The warm control, a diagnostic variant of the command drive only (see warmControl above).
   if (drive?.kind === "command" && drive.warm === true) {
     await warmControl(inputs, scenario, projectDir, realmStatus);
   }
+  // What the attach audit and the presence directories hold before the host command: the attribution reads only what is new.
+  const before: AttributionBefore = { auditLines: bootAuditLinesOf(scenario.stateDir).length, presence: presenceDirsOf(scenario.stateDir) };
 
   // The host attaches cold: nothing has started the daemon or the sandbox for this run's new project directory, so the host's own
   // `realm mcp` creates both. The host command is run from a directory under the pinned workspace root with the production PATH
@@ -1314,7 +1449,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     // The host's own command (`kimi mcp test realm`): it launches the registered server through the recorder, connects, lists the tools
     // and returns. The legacy CLI's success wording is not known in advance (43-CONTEXT OQ-43-02), so no connected word is asserted:
     // the exit code, the elapsed time and the wire carry the proof, and the first line of its output is recorded.
-    const ran = await runHost(options.bin, drive.args, env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
+    const ran = await runHost(options.bin, [...drive.args, ...(drive.rootArgs?.(scenario.root) ?? [])], env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
     const ranMs = Date.now() - startedAt;
     commandElapsedMs = ranMs;
     const label = `${host} ${drive.args.join(" ")}`;
@@ -1335,16 +1470,29 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
       });
     }
     requireReturned(ran, label);
-    assert.equal(ran.exitCode, 0, `${label}: ${describeRun(ran)}`);
+    if (drive.exitCodes === undefined) {
+      assert.equal(ran.exitCode, 0, `${label}: ${describeRun(ran)}`);
+    } else {
+      assert.ok(ran.exitCode !== undefined && drive.exitCodes.includes(ran.exitCode), `${label}: the exit code must be one of [${drive.exitCodes.join(", ")}]; ${describeRun(ran)}`);
+      t.diagnostic(`${label} exited ${String(ran.exitCode)} (accepted exit codes [${drive.exitCodes.join(", ")}])`);
+    }
     const commandMs = ranMs;
-    const firstLine =
-      stripAnsi(`${ran.stdout}\n${ran.stderr}`)
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line !== "") ?? "";
-    t.diagnostic(`${label} printed: ${JSON.stringify(firstLine.slice(0, 200))}`);
+    if (drive.output === "check-names") {
+      t.diagnostic(`${label} printed the checks [${doctorCheckNames(stripAnsi(`${ran.stdout}\n${ran.stderr}`)).join(", ")}]`);
+    } else {
+      const firstLine =
+        stripAnsi(`${ran.stdout}\n${ran.stderr}`)
+          .split("\n")
+          .map((line) => line.trim())
+          .find((line) => line !== "") ?? "";
+      t.diagnostic(`${label} printed: ${JSON.stringify(firstLine.slice(0, 200))}`);
+    }
     t.diagnostic(`${label} returned after ${String(commandMs)} ms; the recorder restored [${wireSummary(readWireLog(wireLog)).restoredNames.join(", ")}]`);
-    assert.ok(commandMs < COLD_CONNECT_BOUND_MS, `${label} must return below ${String(COLD_CONNECT_BOUND_MS)} ms on a cold attach; it took ${String(commandMs)} ms`);
+    if (drive.boundedConnect === false) {
+      t.diagnostic(`${label} has no cold connect bound; its failure bound is ${String(scaledMs(REAL_HOST_TIMEOUT_MS))} ms`);
+    } else {
+      assert.ok(commandMs < COLD_CONNECT_BOUND_MS, `${label} must return below ${String(COLD_CONNECT_BOUND_MS)} ms on a cold attach; it took ${String(commandMs)} ms`);
+    }
   } else {
     // A session may or may not outlive its handshake. While it runs, poll for the boot evidence (the recorder shows the tool listing,
     // `realm status` answers active and the daemon counts an attached boot report) and end the process group once it holds. A host that
@@ -1386,10 +1534,20 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     summary.hostMethods.includes("initialize") || summary.hostMethods.includes("server/discover"),
     `the host must have sent initialize or server/discover to realm mcp; methods seen: [${summary.hostMethods.join(", ")}]; ${wireText()}`,
   );
+  if (attribution !== undefined) {
+    const problem = productionWireProblem({ summary, starts: readRecorderStarts(wireLog), host: attributedTo, mode: wireMode });
+    assert.equal(problem, undefined, `${problem ?? "the wire"}; ${wireText()}`);
+  }
   // The listing is part of every cold attach: the host connected, listed the Realm tools through the recorder, and may have left before
-  // the realm was ready. The ready transition on one connection is proved by test/integration/cold-attach-live.test.ts, not here.
-  assert.equal(summary.answered, true, `the host must have listed the Realm tools through the recorder: ${wireText()}`);
-  assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools: ${wireText()}`);
+  // the realm was ready. The ready transition on one connection is proved by test/integration/cold-attach-live.test.ts, not here. A
+  // handshake-only wire (a drive that sends no tools/list) asserts none of it and requires the attach to be counted instead.
+  if (wireMode === "full") {
+    assert.equal(summary.answered, true, `the host must have listed the Realm tools through the recorder: ${wireText()}`);
+    assert.deepEqual([...summary.toolNames], [...REALM_TOOL_NAMES], `the listed tools must be the six Realm tools: ${wireText()}`);
+  }
+  if (attribution !== undefined) {
+    await checkAttribution(t, inputs, scenario, projectDir, wireMode === "handshake-only" ? { ...attribution, audit: "required" } : attribution, before);
+  }
 
   if (drive?.kind === "session") {
     // The provider saw no foreign credential and no foreign peer. Counts, flags and addresses only: never a header value.
@@ -1416,12 +1574,12 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   const quiet = await pollUntil(
     async () => {
       const live = await liveSessionsOf();
-      const markers = presenceEntries(scenario.stateDir, host);
+      const markers = touched.flatMap((id) => presenceEntries(scenario.stateDir, id));
       return live === 0 && markers.length === 0 ? { done: true } : { done: false, detail: `live sessions ${String(live)}, presence markers ${String(markers.length)}` };
     },
     { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
   );
-  assert.ok(quiet.ok, `realm host status ${host} must show 0 live sessions and an empty presence directory after the command ends: ${quiet.detail}`);
+  assert.ok(quiet.ok, `realm host status ${attributedTo} must show 0 live sessions and an empty presence directory after the command ends: ${quiet.detail}`);
 
   const stopped = await realmCliWithWorkspace(inputs, scenario, ["down"], projectDir, DOWN_TIMEOUT_MS);
   assert.ok(downAcceptable(stopped), `realm down: ${describeResult(stopped)}`);
@@ -1434,11 +1592,18 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     assert.deepEqual(containers.items, [], `no container of ${sandbox} may remain after realm down`);
   }
 
-  const removed = cliJson(await realmHost(["uninstall", host]), `realm host uninstall ${host}`);
-  assert.equal(removed["status"], "removed", `the uninstall must report removed: ${describeValue(removed)}`);
-  const afterUninstall = cliJson(await realmHost(["status", host]), `realm host status ${host}`);
-  assert.notEqual(afterUninstall["status"], "installed", `realm host status ${host} must no longer report installed: ${describeValue(afterUninstall)}`);
+  for (const id of [...installs].reverse()) {
+    const removed = cliJson(await realmHost(["uninstall", id]), `realm host uninstall ${id}`);
+    assert.equal(removed["status"], "removed", `the uninstall must report removed: ${describeValue(removed)}`);
+    const afterUninstall = cliJson(await realmHost(["status", id]), `realm host status ${id}`);
+    assert.notEqual(afterUninstall["status"], "installed", `realm host status ${id} must no longer report installed: ${describeValue(afterUninstall)}`);
+  }
   assert.equal(fileSha256(realFile), realBefore, "the operator's real host configuration must be byte-identical after the run");
+  assert.deepEqual(
+    alsoReal.map((path) => fileSha256(path)),
+    alsoBefore,
+    "the operator's other real host files must be byte-identical after the run",
+  );
 }
 
 // ---- Helpers shared by the live files --------------------------------------------------------------------------------------

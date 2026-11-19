@@ -261,7 +261,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   // Source: contract page, Phase 25 table (T2: pi mcp list, launches, skips below pi 1.3.0, no result recorded) and OQ-25-09.
   pi: record({ id: "pi", family: "json-merge", suites: [WAVE2_SUITE], snippet: "pi.md", live: "pi", t2: null, t3: WAVE2_T3, deferral: null }),
   // Source: 40-CONTEXT D-40-02 and D-40-07 (the Phase 40 evidence E-40-02 to E-40-05). Live stays null (D-40-07: the test has a file of its own), so the T2
-  // text names the gate and the test file. Ran 2026-11-18 in an isolated home with a stub realm (no production stack): PASS; no production tier is defined (D-40-06).
+  // text names the gate and the test file. Ran 2026-11-18 in an isolated home with a stub realm (no production stack): PASS. T3: Phase 48 (48-01 drive table,
+  // 48-02 wiring): the production tier is defined and has not been run; plan 48-04 writes the dated result.
   "muse-code": record({
     id: "muse-code",
     family: "json-merge",
@@ -274,10 +275,14 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "PASS; covers 1.4.23 only; the real recipe install equals the snippet, the entry stayed value-identical after muse mcp add, exec launched it with mcp --host muse-code and listed six tools, uninstall removed the seed-only file (gate REALM_LIVE_MUSE=1, test/integration/host-live-muse.test.ts)",
       command: "realm host install muse-code, muse mcp list/get, muse mcp add, muse exec --provider echo, realm host uninstall (launches), gated test/integration/host-live-muse.test.ts, REALM_LIVE_MUSE=1",
     },
-    t3: WAVE2_T3,
+    t3: {
+      status: "not-run",
+      note: "no dated result: the production tier is defined (gate REALM_LIVE_PRODUCTION=1 plus REALM_LIVE_MUSE=1; command drive muse exec --provider echo --trust-workspace through the wire recorder, cold, from a new project directory; Phase 48 plan 48-02) and has not been run",
+    },
     deferral: null,
   }),
   // Source: 40-CONTEXT D-40-02 (E-40-06). Its live tier is the wave-2 table (D-40-07). Ran 2026-11-18 in an isolated home with a stub realm: PASS.
+  // T3: 48-01 blocker B-48-02 (no credential-free command starts the registered server), recorded as a gap.
   "prime-agent": record({
     id: "prime-agent",
     family: "json-merge",
@@ -290,10 +295,14 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "PASS; covers 0.10.2 only; the host's own add left Realm's entry value-identical (status installed)",
       command: "prime-agent mcp list, prime-agent mcp get realm (parse only), prime-agent mcp add, gated wave 2 validator tier, REALM_LIVE_PRIME_AGENT=1",
     },
-    t3: WAVE2_T3,
+    t3: {
+      status: "gap",
+      note: "B-48-02: no credential-free command starts the registered server on Prime Agent 0.10.2 (observed 2026-11-19, Phase 48 plan 48-01): mcp list, get, add, remove, status and doctor read or write the file and start nothing, and a start needs a model tool call, so no production tier can be run without a model credential",
+    },
     deferral: null,
   }),
   // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). Its live tier is the wave-2 table (D-40-07). Ran 2026-11-18 in an isolated home with a stub realm: PASS.
+  // T3: Phase 48 (48-01 drive table, 48-02 wiring): the production tier is defined and has not been run; plan 48-04 writes the dated result.
   "grok-build": record({
     id: "grok-build",
     family: "toml-table",
@@ -306,7 +315,10 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       result: "PASS; covers 1.0.77 only; the host's own add left the Realm table byte-identical (status installed)",
       command: "grok mcp list, grok mcp doctor (launches), grok mcp add, gated wave 2 validator tier, REALM_LIVE_GROK_BUILD=1",
     },
-    t3: WAVE2_T3,
+    t3: {
+      status: "not-run",
+      note: "no dated result: the production tier is defined (gate REALM_LIVE_PRODUCTION=1 plus REALM_LIVE_GROK_BUILD=1; health-check drive grok mcp doctor with HOME set to a scenario directory and a per-run leader socket, through the wire recorder, cold, from a new project directory; an attribution test with realm in config.toml and in the Claude file, and a Claude-file-alone control; Phase 48 plan 48-02) and has not been run",
+    },
     deferral: null,
   }),
 });

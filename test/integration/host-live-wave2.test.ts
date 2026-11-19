@@ -1,5 +1,6 @@
 // The eleven wave-2 hosts against their real CLIs (WAVE2-07, 25-CONTEXT D-25-08 and D-25-09). The validator tier only, table-driven from
-// test/support/host-live-wave2.ts: no wave-2 host has a production tier (config-only hosts, D-25-08), and `antigravity` has no live file
+// test/support/host-live-wave2.ts: no wave-2 host has a production tier here (config-only hosts, D-25-08; the Phase 48 production tier of Grok Build
+// and the blocker of Prime Agent are in host-live-wave2-production.test.ts), and `antigravity` has no live file
 // at all (ANTIGRAVITY_GAP, E-AG2: `agy` was never observed).
 //
 // Per host the real recipe (json-merge, yaml-map or toml-table) installs, through `realm host install <id>` with the real table, into an isolated HOME and the host's own
