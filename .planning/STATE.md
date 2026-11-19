@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v7.0
-milestone_name: Carried findings closure (Planned)
-status: Planned
-stopped_at: Phases 45 to 48 planned (16 plans), ready to execute phase 46 first
-last_updated: "2026-11-19T06:36:00.000Z"
+milestone_name: Carried findings closure (Complete)
+status: Complete
+stopped_at: v7.0 shipped with accepted limitations (phases 45 to 48 complete, 15/16 plans with summaries, 47-03 skipped by branch rule)
+last_updated: "2026-11-19T08:00:00.000Z"
 last_activity: 2026-11-19
-last_activity_desc: Phases 45 to 48 planned
-state_head: 1b0e63b
+last_activity_desc: v7.0 shipped with accepted limitations
+state_head: 3160320
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 4
   total_plans: 16
-  completed_plans: 0
-  percent: 0
-current_phase: 46
+  completed_plans: 15
+  percent: 100
+current_phase: 48
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase: 46
 See: .planning/PROJECT.md (updated 2026-11-19)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v7.0, Carried findings closure (phases 45 to 48, release line 0.7.x). The four phases are independent in code and queue for the shared live window; the documentation edits of Phases 47 and 48 land in that order. Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v6.0 close-out is `.planning/milestones/v6.0-MILESTONE-AUDIT.md`.
+**Current focus:** Milestone v7.0 **shipped 2026-11-19 (release line 0.7.x, phases 45 to 48 complete, 11 of 19 requirements Complete; audit `.planning/v7.0-MILESTONE-AUDIT.md`, passed with accepted limitations). Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v6.0 close-out is `.planning/milestones/v6.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: 46 (Rapid stop then up, F-41-1), planned, ready to execute
-Plan: 46-01 next
-Status: Phases 45 to 48 planned (four plans each, 16 in all), ready to execute phase 46 first. Phase order: 46 first, then 47, then 48 (documentation edits of 47 land before 48), then the Phase 45 live windows by need; the hermetic parts of Phase 45 (plans 45-02 and 45-03) can run in parallel with the others, and its calibration and verdict windows take the shared live lock one at a time.
-Last activity: 2026-11-19 — Phases 45 to 48 planned
+Phase: 48 (Grok Build attribution and production tiers), complete
+Plan: all 16 plans complete (15 summaries; 47-03 skipped by its own branch rule — Branch D + E-B, no change to exercise)
+Status: v7.0 shipped with accepted limitations. Phase 45 VOID twice (OMPV-04 not met; OMPR-01/06 + OI-11 stay carried); Phase 46 F-41-1 never reproduced (no STOP met; F-46-1 fixed hermetically); Phase 47 NOT-REPRODUCED/NOT-ESTABLISHED (KIMV-02 carried; GAP-43-01 accepted-residual); Phase 48 Muse `proven`, Prime blocked B-48-02, Grok failed on harness defect GAP-48-03 (HTIER-01 live + HTIER-04 carried).
+Last activity: 2026-11-19 — v7.0 shipped with accepted limitations
 
 ## Current Recovery Boundaries
 

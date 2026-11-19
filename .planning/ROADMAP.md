@@ -22,7 +22,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v4.0 Anda removal, MCP hardening and production boot proof** — Phases 27 to 32 (shipped 2026-11-18, release line 0.4.x; archived in `milestones/v4.0-ROADMAP.md`)
 - 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
 - 🗄 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 44 (shipped 2026-11-19, release line 0.6.x; archived in `milestones/v6.0-ROADMAP.md`)
-- 🚧 **v7.0 Carried findings closure** — Phases 45 to 48 (in progress, release line 0.7.x)
+- ✅ **v7.0 Carried findings closure** — Phases 45 to 48 (shipped 2026-11-19, release line 0.7.x; audit `.planning/v7.0-MILESTONE-AUDIT.md`, passed with accepted limitations)
 
 ## Phases
 
@@ -242,14 +242,16 @@ Plans:
 - [x] **Phase 43: Kimi and kimi-code rehearsal** - Both CLIs are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02). (completed 2026-11-18)
 - [x] **Phase 44: Omp non-blocking cold attach (owner-directed from loaded-host evidence)** - The Omp extension path is made lighter and later at the start of the attach (the daemon-launch module split so the extension no longer loads the CLI graph, the attach started one turn after the session handler), the responsiveness harness reads its verdict from the Omp ready frame with a labelled control-relative secondary measure, and the change is re-proved by a paired before/after comparison on the loaded host, labelled loaded and paired, on the owner's override of the VOID outcome of Phase 38 (D-44-01, 2026-11-18/19). (completed 2026-11-19)
 
-### 🚧 v7.0 Carried findings closure (In progress, release line 0.7.x)
+### ✅ v7.0 Carried findings closure (Shipped 2026-11-19)
 
 **Milestone Goal:** Every finding v6.0 carried is closed with evidence or stays carried with a stated, tested reason: the Omp responsiveness gets a valid measurement (OMPR-01, OMPR-06, OI-11), `realm up` after a rapid stop no longer fails (F-41-1), the legacy kimi production-tier failure and its environment forwarding are root-caused (GAP-43-03, GAP-43-01), and Grok Build is attributed to itself while Muse Code, Prime Agent and Grok Build reach a production tier or have a named blocker (GAP-40-01).
 
-- [ ] **Phase 45: Omp responsiveness, a measurement that can yield a valid verdict** - A feasibility record of the host-isolation primitives, a deterministic in-process stall probe, a live harness that gates on scoped contention and attributes each stall, alternating order with a frozen baseline bound, and a live window that ends in PASS, FINDING, NOT-REPRODUCED or VOID, resolving OMPR-01, OMPR-06 and OI-11 from the outcome (Linear SPE-34730).
-- [ ] **Phase 46: Rapid stop then up (F-41-1)** - `realm up` right after the stop of a daemon with a sandbox of the same name, which failed once with `OPENSHELL_START_FAILED`, is reproduced live, its cause is established and recorded, and the fix or bound is proved by a hermetic test and by at least 20 live stop-then-up iterations (Linear SPE-34731).
-- [ ] **Phase 47: Legacy kimi production tier and environment forwarding** - The legacy kimi-cli 1.51.0 production-tier failure is reproduced with the logs kept and its cause established (client, `realm mcp` or stack), fixed where it is in `realm mcp`, and GAP-43-01 (the environment the legacy CLI forwards) is closed by live evidence, with the recipe, the docs and the matrix agreeing (Linear SPE-34732).
-- [ ] **Phase 48: Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build** - A Grok Build session is attributed `grok-build` even beside the shared Claude files (GAP-40-01), and Muse Code, Prime Agent and Grok Build each have a production tier on the production stack or a named blocker, with the registry, matrix and docs agreeing (Linear SPE-34733).
+**Outcome (2026-11-19):** shipped with accepted limitations, listed in `.planning/v7.0-MILESTONE-AUDIT.md`: OMPV-04 not met (Phase 45 VOID twice, no frozen bound; OMPR-01, OMPR-06, OI-11 stay carried), no STOP requirement met (F-41-1 never reproduced; F-46-1 fixed hermetically), KIMV-02 not met (NOT-REPRODUCED / NOT-ESTABLISHED), HTIER-01 live half and HTIER-04 not met (Grok harness defect GAP-48-03); 11 of 19 v7.0 requirements ticked Complete. The owner completed the milestone on this evidence with no relabelling: VOID stays VOID, NOT-REPRODUCED stays NOT-REPRODUCED, failed stays failed.
+
+- [x] **Phase 45: Omp responsiveness, a measurement that can yield a valid verdict** - A feasibility record of the host-isolation primitives, a deterministic in-process stall probe, a live harness that gates on scoped contention and attributes each stall, alternating order with a frozen baseline bound, and a live window that ends in PASS, FINDING, NOT-REPRODUCED or VOID, resolving OMPR-01, OMPR-06 and OI-11 from the outcome (Linear SPE-34730). (completed 2026-11-19; outcome VOID twice, no frozen bound, OMPV-04 not met — see `45-VERIFICATION.md`)
+- [x] **Phase 46: Rapid stop then up (F-41-1)** - `realm up` right after the stop of a daemon with a sandbox of the same name, which failed once with `OPENSHELL_START_FAILED`, is reproduced live, its cause is established and recorded, and the fix or bound is proved by a hermetic test and by at least 20 live stop-then-up iterations (Linear SPE-34731). (completed 2026-11-19; F-41-1 never reproduced, no STOP met, F-46-1 fixed hermetically — see `46-VERIFICATION.md`)
+- [x] **Phase 47: Legacy kimi production tier and environment forwarding** - The legacy kimi-cli 1.51.0 production-tier failure is reproduced with the logs kept and its cause established (client, `realm mcp` or stack), fixed where it is in `realm mcp`, and GAP-43-01 (the environment the legacy CLI forwards) is closed by live evidence, with the recipe, the docs and the matrix agreeing (Linear SPE-34732). (completed 2026-11-19; NOT-REPRODUCED/NOT-ESTABLISHED, GAP-43-01 accepted-residual — see `47-VERIFICATION.md`)
+- [x] **Phase 48: Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build** - A Grok Build session is attributed `grok-build` even beside the shared Claude files (GAP-40-01), and Muse Code, Prime Agent and Grok Build each have a production tier on the production stack or a named blocker, with the registry, matrix and docs agreeing (Linear SPE-34733). (completed 2026-11-19; Muse `proven`, Prime blocked B-48-02, Grok failed on harness defect GAP-48-03 — see `48-VERIFICATION.md`)
 
 ## Phase Details
 
@@ -1038,13 +1040,13 @@ Plans:
   3. The live harness decides validity from the contention the Omp process tree experienced and not from the one-minute load average, attributes each unanswered-probe interval to on-CPU time, run-queue delay or sleep, alternates the order of control and cold attach inside each pair, and keeps every verdict threshold and the Phase 38 constants unchanged; the validity constants, the recalibrated baseline bound and the decision table are code with a hermetic test written before the first live run.
   4. A live window on the production stack ends in exactly one of PASS, FINDING with a named cause, NOT-REPRODUCED or VOID by that rule; every number is labelled with its tier, the host facts, commit, Omp version and isolation are recorded in the phase and in `docs/integration/omp.md`, and the stack is left with zero containers, sandboxes, workspace entries and daemons.
   5. OMPR-01, OMPR-06 and OI-11 read the outcome: closed with the evidence on PASS or FINDING (OMPR-06 on the valid pairs the rule needs), carried with the owner's options on VOID, and never closed on VOID or on the hermetic probe alone; if the finding names the extension, the fix keeps fail closed, is shown red first, and any growth beyond the `src/omp/plugin.ts` ceiling goes to a new module; the status of UI-01 stays the owner's call.
-**Plans:** 0/4 plans complete
+**Plans:** 4/4 plans complete
 
 Plans:
-- [ ] 45-01-PLAN.md: the dated feasibility record of the isolation and contention primitives as the realm account (human), and the design frozen from it (wave 1)
-- [ ] 45-02-PLAN.md: the hermetic in-process stall probe, red first on a seeded blocking attach and load invariant (wave 1)
-- [ ] 45-03-PLAN.md: the harness: scoped runs, contention validity, stall attribution, alternating order, calibration derivation, the verdict table and the paired validity cutover, as code with hermetic tests (wave 2)
-- [ ] 45-04-PLAN.md: the calibration and its freeze, the live verdict window (blocking human), the record, the resolution of OMPR-01, OMPR-06 and OI-11, and the conditional fix (wave 3)
+- [x] 45-01-PLAN.md: the dated feasibility record of the isolation and contention primitives as the realm account (human), and the design frozen from it (wave 1)
+- [x] 45-02-PLAN.md: the hermetic in-process stall probe, red first on a seeded blocking attach and load invariant (wave 1)
+- [x] 45-03-PLAN.md: the harness: scoped runs, contention validity, stall attribution, alternating order, calibration derivation, the verdict table and the paired validity cutover, as code with hermetic tests (wave 2)
+- [x] 45-04-PLAN.md: the calibration and its freeze, the live verdict window (blocking human), the record, the resolution of OMPR-01, OMPR-06 and OI-11, and the conditional fix (wave 3) — outcome VOID (calibration) twice; no frozen bound
 
 ### Phase 46: Rapid stop then up (F-41-1)
 
@@ -1056,13 +1058,13 @@ Plans:
   2. The cause is recorded in `docs/integration/runtime-decision.md` in place of the INFERENCE paragraph: the component whose late teardown or missing wait reaches the new sandbox, with timestamps and the cause code of the refusal.
   3. The cause is fixed or bounded in the code with an explicit timeout on every wait, fail closed and the no-orphan guarantee kept, the `daemon.stopped` contract and the 29-code error catalogue unchanged, and a hermetic test that fails without the change and passes with it.
   4. A live run does at least 20 consecutive stop-then-up iterations on one sandbox name with zero `OPENSHELL_START_FAILED`, `failedTeardowns` 0 in every `daemon.stopped` row and zero residue; the variant c stop of Phase 41 that wrote no `daemon.stopped` row is explained or recorded as a finding.
-**Plans:** 0/4 plans complete
+**Plans:** 4/4 plans complete
 
 Plans:
-- [ ] 46-01-PLAN.md: Rapid stop-then-up live harness, hermetic helpers, the timeline of every component (STOP-01, STOP-04) (wave 1)
-- [ ] 46-02-PLAN.md: HUMAN-NEEDED live reproduction window, 50 consecutive iterations per variant, frozen outcome word (STOP-01, STOP-02) (wave 2)
-- [ ] 46-03-PLAN.md: Cause record, red-first hermetic test, fix or bound, runtime-decision paragraph (STOP-02, STOP-03) (wave 3)
-- [ ] 46-04-PLAN.md: HUMAN-NEEDED 20-iteration live verification and the variant c row explanation (STOP-04) (wave 4)
+- [x] 46-01-PLAN.md: Rapid stop-then-up live harness, hermetic helpers, the timeline of every component (STOP-01, STOP-04) (wave 1)
+- [x] 46-02-PLAN.md: HUMAN-NEEDED live reproduction window, 50 consecutive iterations per variant, frozen outcome word (STOP-01, STOP-02) (wave 2) — outcome OTHER-FAILURE (F-46-1)
+- [x] 46-03-PLAN.md: Cause record, red-first hermetic test, fix or bound, runtime-decision paragraph (STOP-02, STOP-03) (wave 3) — F-46-1 containerConfirm fix
+- [x] 46-04-PLAN.md: HUMAN-NEEDED 20-iteration live verification and the variant c row explanation (STOP-04) (wave 4) — outcome VOID; 20/20 per variant but VOID by rule
 
 ### Phase 47: Legacy kimi production tier and environment forwarding
 
@@ -1074,13 +1076,13 @@ Plans:
   2. The cause is recorded as the legacy client, `realm mcp` or the stack; a cause in `realm mcp` is fixed with a hermetic test that fails without the fix and the production tier passes, and a cause in the client leaves the tier passing in a documented variant or the owner's decision to retire the archived row recorded (OQ-24-01).
   3. Which of `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` and `REALM_DRIVER_SOCKET` a legacy kimi user needs to reach a non-default stack is shown live with no names restored by the recorder; if any is needed the `kimi` recipe writes an `env` block of those names only, equal to what the host's own writer produces, with a migration note; if none is needed GAP-43-01 closes as not needed, or the owner retires the row (OQ-43-03).
   4. `GAP-24-02`, `GAP-43-01`, `GAP-43-03`, the support matrix, `docs/integration/wave1-boot-matrix.md`, the host registry note and the contract checker agree; the scratch installs are removed and the stack is left as found.
-**Plans:** 0/4 plans complete
+**Plans:** 4/4 plans complete (47-03 skipped by its own branch rule, no summary)
 
 Plans:
-- [ ] 47-01-PLAN.md: Timeline recorder, frozen classification and attribution rules as code, evidence and reach support, variant switches, the two probes and the early-close characterization (test support only) (wave 1)
-- [ ] 47-02-PLAN.md: Scratch reinstall of kimi-cli 1.51.0 and the owner-supervised window: controls, reproduction with the logs kept, cause attribution, environment ablation and probes (the dated record 47-WINDOW.md) (wave 2)
-- [ ] 47-03-PLAN.md: Act on the cause and the environment result: the realm mcp fix with a red-first test, a documented variant, the recipe env block or the accepted-residual, and the live re-run where something changed (wave 3)
-- [ ] 47-04-PLAN.md: Registry, gap rows, support matrix, wave 1 page, snippet, contract page and checker agree; migration note; scratch removal; stack as found (wave 4)
+- [x] 47-01-PLAN.md: Timeline recorder, frozen classification and attribution rules as code, evidence and reach support, variant switches, the two probes and the early-close characterization (test support only) (wave 1)
+- [x] 47-02-PLAN.md: Scratch reinstall of kimi-cli 1.51.0 and the owner-supervised window: controls, reproduction with the logs kept, cause attribution, environment ablation and probes (the dated record 47-WINDOW.md) (wave 2) — NOT-REPRODUCED / NOT-ESTABLISHED
+- [x] 47-03-PLAN.md: Act on the cause and the environment result: the realm mcp fix with a red-first test, a documented variant, the recipe env block or the accepted-residual, and the live re-run where something changed (wave 3) — Branch D + E-B only; no change exercised, live re-run skipped by rule
+- [x] 47-04-PLAN.md: Registry, gap rows, support matrix, wave 1 page, snippet, contract page and checker agree; migration note; scratch removal; stack as found (wave 4) — GAP-43-01 accepted-residual
 
 ### Phase 48: Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build
 
@@ -1092,10 +1094,10 @@ Plans:
   2. For each of Muse Code, Prime Agent and Grok Build, a cold attach on the production stack with no warm-up and a new project directory shows the host launching `realm mcp --host ID`, the handshake, `tools/list` and the six tools on the wire, with the installed version and the date recorded and the registry tier updated; or a named blocker is recorded.
   3. The registry rows, the support matrix, `docs/integration/host-plugin-contract.md` (the statement that no wave 2 host has a production tier and the Phase 40 evidence table), `docs/integration/host-plugin-gaps.md`, the host pages and the pinning tests agree with each other.
   4. `test/integration/enforce-default.test.ts` still attaches and completes a call for every host id under the default, and any launcher the attribution mechanism adds is covered by the labelled-launcher guard test.
-**Plans:** 0/4 plans complete
+**Plans:** 4/4 plans complete
 
 Plans:
-- [ ] 48-01-PLAN.md: Probe matrix of what the three hosts do without a credential and which Grok Build source wins; the GAP-40-01 attribution outcome by the rule of D-48-05; a gated validator step; a Grok-owned launcher only if the matrix shows a cell it fixes (wave 1)
-- [ ] 48-02-PLAN.md: Production-tier tests for Muse Code, Prime Agent and Grok Build (or registry blockers), hermetic helper rows, registry T3 entries, regenerated matrix block (wave 2)
-- [ ] 48-03-PLAN.md: HUMAN-NEEDED live window as the realmlive account: Grok Build attribution attach with its Claude-alone control and the three production tiers, evidence outside the repository, stack as found (wave 3)
-- [ ] 48-04-PLAN.md: Registry, matrix, wave 1 page, contract page, gap rows, host pages and pinning tests agree with the window results only (wave 4)
+- [x] 48-01-PLAN.md: Probe matrix of what the three hosts do without a credential and which Grok Build source wins; the GAP-40-01 attribution outcome by the rule of D-48-05; a gated validator step; a Grok-owned launcher only if the matrix shows a cell it fixes (wave 1) — Outcome A
+- [x] 48-02-PLAN.md: Production-tier tests for Muse Code, Prime Agent and Grok Build (or registry blockers), hermetic helper rows, registry T3 entries, regenerated matrix block (wave 2)
+- [x] 48-03-PLAN.md: HUMAN-NEEDED live window as the realmlive account: Grok Build attribution attach with its Claude-alone control and the three production tiers, evidence outside the repository, stack as found (wave 3) — Muse passed, Grok failed at install (GAP-48-03)
+- [x] 48-04-PLAN.md: Registry, matrix, wave 1 page, contract page, gap rows, host pages and pinning tests agree with the window results only (wave 4) — Muse `proven`
