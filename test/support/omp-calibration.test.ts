@@ -1,7 +1,7 @@
 // The hermetic test of test/support/omp-calibration.ts (Phase 45, OMPV-04; 45-CONTEXT D-45-06 and D-45-08): the four calibrated constants
-// are unset until plan 45-04 freezes them, and while they are unset no verdict is possible. Plan 45-04 Task 4 froze them from a recorded
-// calibration; on an underivable calibration (2026-11-19: three attempts, all refused V0, zero valid controls) Task 7 pins the underivable
-// derivation instead, and no bound is frozen. Pure: no process, no clock, no file, no host.
+// were frozen by Phase 49 (Step 3) from 16 recorded scoped no-extension controls (all 16 mechanically valid and passing, digest below).
+// The test pins the frozen values, the freeze date and digest, and the fact that decideVerdict now reads the frozen bounds. Pure: no
+// process, no clock, no file, no host.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -23,37 +23,42 @@ function passShapedRuns(): RunObservation[] {
   return [1, 2, 3, 4, 5].map((pair) => ({ arm: "after", pair, runIndex: runIndexOf(pair, "after"), tier: TIER_SCOPED, refusal: null, mechanicsHeld: true, control: goodWindow(), cold: goodWindow() }));
 }
 
-void test("OMPV-04 the four calibrated constants are unset until plan 45-04 freezes them", () => {
-  assert.equal(CALIBRATED_BOUNDS, null);
-  assert.equal(CALIBRATION_FREEZE, null);
+void test("OMPV-04 the four calibrated constants are frozen by Phase 49 from the recorded 2026-11-19 calibration", () => {
+  assert.deepEqual(CALIBRATED_BOUNDS, {
+    stallShareMax: 0.008853242320819113,
+    runqShareMax: 0.00547431048269137,
+    controlSelfMaxMs: 1000,
+    controlSelfP95Ms: 500,
+  });
+  assert.deepEqual(CALIBRATION_FREEZE, { date: "2026-11-19", digest: "af0adf3076cc4df0613da6a448569e0e95011faec07d8a871a285266eeac247d" });
 });
 
-void test("OMPV-04 while the bounds are unset decideVerdict returns VOID, uncalibrated, on an otherwise PASS-shaped set of five runs", () => {
+void test("OMPV-04 with the frozen bounds decideVerdict reads them: the PASS-shaped runs breach the frozen contention maxima, so the window is VOID for invalidity, not for being uncalibrated", () => {
   const verdict = decideVerdict(passShapedRuns(), CALIBRATED_BOUNDS);
   assert.equal(verdict.outcome, "VOID");
-  assert.match(verdict.reason, /^uncalibrated/);
+  assert.match(verdict.reason, /^0 valid runs/);
   assert.equal(verdict.quietClaim, false);
-  // The same five runs are a PASS under any bounds that admit them: the refusal is the unset state, not the runs.
+  // The same five runs are a PASS under any bounds that admit them: the refusal is the frozen maxima, not the runs.
   const admitting: Bounds = { stallShareMax: 0.5, runqShareMax: 0.5, controlSelfMaxMs: 1000, controlSelfP95Ms: 500 };
   assert.equal(decideVerdict(passShapedRuns(), admitting).outcome, "PASS");
 });
 
-void test("OMPV-04 the day the bounds are set they are four numbers, the stall share possibly null under the unscoped tier", () => {
+void test("OMPV-04 the frozen bounds are four numbers, the stall share a number under the scoped tier", () => {
   const bounds: Bounds | null = CALIBRATED_BOUNDS;
   if (bounds !== null) {
     assert.equal(typeof bounds.runqShareMax, "number");
     assert.equal(typeof bounds.controlSelfMaxMs, "number");
     assert.equal(typeof bounds.controlSelfP95Ms, "number");
-    assert.ok(bounds.stallShareMax === null || typeof bounds.stallShareMax === "number");
+    assert.equal(typeof bounds.stallShareMax, "number");
   }
 });
 
-void test("OMPV-04 deriveBounds on zero valid controls (the recorded 2026-11-19 calibration: three attempts, all refused V0) is underivable, so no bound is frozen", () => {
+void test("OMPV-04 deriveBounds on zero valid controls (the recorded 2026-11-19 phase-45 calibration: three attempts, all refused V0) is underivable, and the Phase 49 freeze stands", () => {
   const derivation = deriveBounds([]);
   if (derivation.derivable) {
     assert.fail("deriveBounds over zero valid controls must be underivable");
   }
   assert.match(derivation.reason, /^0 of 0 calibration controls met the thresholds, fewer than 5$/);
-  assert.equal(CALIBRATED_BOUNDS, null);
-  assert.equal(CALIBRATION_FREEZE, null);
+  assert.notEqual(CALIBRATED_BOUNDS, null);
+  assert.notEqual(CALIBRATION_FREEZE, null);
 });

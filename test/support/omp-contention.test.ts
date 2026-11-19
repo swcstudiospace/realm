@@ -155,6 +155,39 @@ void test("OMPV-03 attributeInterval: a residual of 5 ms below zero is rounding 
   assert.deepEqual(attributed(attributeInterval([reading(0, 10, 0), reading(1000, 5, 0)], 0, 1000)), { onCpuMs: 0, runqMs: 0, sleepMs: 1000 });
 });
 
+// The bracket cases of Phase 49 (Step 2): they pin the frozen clamp rule on the shapes of the recorded 2026-11-19 calibration
+// failures (11 of 16 attempts threw "inconsistent readings", 45-MEASUREMENT.md Part 1b). None of them failed on the pre-fix tree: the
+// bracket arithmetic already clamps only the 5 ms rounding and keeps a larger residual an error, so there was no arithmetic defect to fix.
+void test("OMPV-03 attributeInterval: the recorded attempt-1 shape (697.54 ms of thread time in a span of 633 ms) stays an inconsistent reading error", () => {
+  assert.throws(() => attributeInterval([reading(9783, 0, 0), reading(10416, 697.54, 0)], 9783, 10416), /inconsistent readings/);
+});
+
+void test("OMPV-03 attributeInterval: the recorded attempt-2 shape (80.04 ms of thread time in a span of 11 ms) stays an inconsistent reading error", () => {
+  assert.throws(() => attributeInterval([reading(0, 0, 0), reading(11, 80.04, 0)], 0, 11), /inconsistent readings/);
+});
+
+void test("OMPV-03 attributeInterval: on a short span the same 5 ms rounding rule applies (4 ms clamped, 6 ms an error)", () => {
+  assert.deepEqual(attributed(attributeInterval([reading(0, 0, 0), reading(11, 15, 0)], 0, 11)), { onCpuMs: 15, runqMs: 0, sleepMs: 0 });
+  assert.throws(() => attributeInterval([reading(0, 0, 0), reading(11, 17, 0)], 0, 11), /inconsistent readings/);
+});
+
+void test("OMPV-03 attributeInterval: a mixed busy and run-queue interval on a slack bracket is attributed over the span the readings cover", () => {
+  const readings = [reading(0, 0, 0), reading(1100, 700, 300)];
+  assert.deepEqual(attributed(attributeInterval(readings, 30, 1070)), { onCpuMs: 700, runqMs: 300, sleepMs: 100 });
+});
+
+void test("OMPV-03 attributeInterval: a thread busy for the whole bracket span (thread time exceeds the requested interval, not the span) is attributed, not an error", () => {
+  const readings = [reading(0, 0, 0), reading(1100, 1100, 0)];
+  assert.deepEqual(attributed(attributeInterval(readings, 30, 1070)), { onCpuMs: 1100, runqMs: 0, sleepMs: 0 });
+});
+
+void test("OMPV-03 attributeInterval: a bracket inside the slack on one side and beyond it on the other does not bracket the interval", () => {
+  const readings = [reading(100, 0, 0), reading(900, 100, 0)];
+  assert.equal(attributeInterval(readings, 150, 850).attributed, true);
+  assert.equal(attributeInterval(readings, 151, 850).attributed, false);
+  assert.equal(attributeInterval(readings, 150, 849).attributed, false);
+});
+
 // ---- selfSamples -----------------------------------------------------------------------------------------------------------------
 
 // The shape of the recorded attempt 1 of Phase 38: a probe answered after 9906 ms and ten probes unanswered at 10 000 ms, with 9000 ms
