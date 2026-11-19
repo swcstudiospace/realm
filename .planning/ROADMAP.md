@@ -11,6 +11,7 @@ Milestone v5.0, Cold attach, enforced capability tokens and evidence, makes `rea
 Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt, tried to measure the Omp cold attach on a quiet host (Phase 38: outcome VOID, one valid run in six attempts), proves that a timed-out exec is killed and not merely finished (Phase 39), gives Muse Code, Prime Agent and Grok Build host ids so they work under the enforce default (Phase 40), finds and bounds the daemon teardown report `failedTeardowns=1` after about 30 s (Phase 41), pays the evidence debt of v5.0 (Phase 42), rehearses kimi and kimi-code (Phase 43), and, by the owner's decision of 2026-11-19 on the loaded-host evidence, corrects the responsiveness harness, makes the Omp attach lighter and later and runs a paired loaded A/B window that ended VOID (Phase 44). It has seven phases, 38 to 44, on release line 0.6.x; it shipped 2026-11-19 with OMPR-01 carried and OMPR-06 partial.
 
 Milestone v7.0, Carried findings closure, closes the findings v6.0 carried, on release line 0.7.x. It gives the Omp cold-attach responsiveness a measurement that can yield a valid verdict on a shared host (a scoped-contention gate in place of the host load average, a deterministic in-process stall probe, alternating order, a frozen baseline validity bound) and resolves OMPR-01, OMPR-06 and OI-11 from its outcome (Phase 45), reproduces and fixes the failure of `realm up` right after a rapid stop, F-41-1 (Phase 46), root-causes the legacy kimi-cli production-tier failure and its environment forwarding, GAP-43-01 (Phase 47), and closes the Grok Build attribution, GAP-40-01, with production tiers for Muse Code, Prime Agent and Grok Build (Phase 48). It has four phases, 45 to 48, which are independent in code and queue for the shared live window.
+Milestone v8.0, Shared sandboxes and durable recovery, retests the eight requirements v7.0 carried and sketches the shared-sandbox steps, on release line 0.8.x. It recalibrates the Omp measurement after the bracket-arithmetic fix so a bound can be frozen (Phase 49), fixes the Grok harness defect GAP-48-03 and reruns the live Grok attach and production tier (Phase 50), reruns the stop-then-up windows for F-41-1 to the iteration bar (Phase 51), establishes or narrows the legacy kimi GAP-43-03 cause (Phase 52), and, as owner-approved (HITL) scope, freezes designs for concurrent sandbox binding (Phase 53) and durable workspace snapshots (Phase 54). It has six phases, 49 to 54; the four retest phases are independent in code and queue for the shared live window, and the two design phases produce frozen designs only.
 
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
@@ -23,6 +24,7 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
 - 🗄 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 44 (shipped 2026-11-19, release line 0.6.x; archived in `milestones/v6.0-ROADMAP.md`)
 - ✅ **v7.0 Carried findings closure** — Phases 45 to 48 (shipped 2026-11-19, release line 0.7.x; audit `.planning/v7.0-MILESTONE-AUDIT.md`, passed with accepted limitations)
+- 🚧 **v8.0 Shared sandboxes and durable recovery** — Phases 49 to 54 (in progress, release line 0.8.x; retests for OMPV-04, STOP-01..04, KIMV-02, HTIER-01, HTIER-04 plus owner-approved design phases CBIND and SNAP)
 
 ## Phases
 
@@ -252,6 +254,17 @@ Plans:
 - [x] **Phase 46: Rapid stop then up (F-41-1)** - `realm up` right after the stop of a daemon with a sandbox of the same name, which failed once with `OPENSHELL_START_FAILED`, is reproduced live, its cause is established and recorded, and the fix or bound is proved by a hermetic test and by at least 20 live stop-then-up iterations (Linear SPE-34731). (completed 2026-11-19; F-41-1 never reproduced, no STOP met, F-46-1 fixed hermetically — see `46-VERIFICATION.md`)
 - [x] **Phase 47: Legacy kimi production tier and environment forwarding** - The legacy kimi-cli 1.51.0 production-tier failure is reproduced with the logs kept and its cause established (client, `realm mcp` or stack), fixed where it is in `realm mcp`, and GAP-43-01 (the environment the legacy CLI forwards) is closed by live evidence, with the recipe, the docs and the matrix agreeing (Linear SPE-34732). (completed 2026-11-19; NOT-REPRODUCED/NOT-ESTABLISHED, GAP-43-01 accepted-residual — see `47-VERIFICATION.md`)
 - [x] **Phase 48: Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build** - A Grok Build session is attributed `grok-build` even beside the shared Claude files (GAP-40-01), and Muse Code, Prime Agent and Grok Build each have a production tier on the production stack or a named blocker, with the registry, matrix and docs agreeing (Linear SPE-34733). (completed 2026-11-19; Muse `proven`, Prime blocked B-48-02, Grok failed on harness defect GAP-48-03 — see `48-VERIFICATION.md`)
+### 🚧 v8.0 Shared sandboxes and durable recovery (In Progress)
+
+**Milestone Goal:** The eight requirements v7.0 carried are retested with corrected instruments (OMPV-04, STOP-01 to STOP-04, KIMV-02, HTIER-01 and HTIER-04), and two owner-approved (HITL) design phases freeze designs for concurrent sandbox binding (CBIND) and durable workspace snapshots (SNAP) before any code.
+
+- [ ] **Phase 49: Omp calibration repeat** - The bracket-arithmetic fix lands red-first, a recalibration freezes `CALIBRATED_BOUNDS` on this host, and a live window re-resolves OMPR-01, OMPR-06 and OI-11 (OMPV-04)
+- [ ] **Phase 50: Grok harness fix and production re-run** - `productionOverrides` creates `<grok-home>/.grok` so install reaches the host, then the live Grok attach and production tier rerun with registry, matrix and docs agreeing (HTIER-01, HTIER-04; GAP-48-03)
+- [ ] **Phase 51: Rapid stop then up repeat (F-41-1)** - Fresh live windows take `realm up` right after a rapid stop to the 50-per-variant bar, or pin the suspected mechanism hermetically and carry F-41-1 with that evidence (STOP-01 to STOP-04)
+- [ ] **Phase 52: Legacy kimi cause (GAP-43-03)** - The narrowed cause is established or narrowed further with a tested reason from live or hermetic evidence (KIMV-02)
+- [ ] **Phase 53: Concurrent binding design (HITL, owner-approved scope)** - A frozen design for concurrent binding of sandboxes, with HITL owner decisions settled before any code (CBIND-01 to CBIND-02)
+- [ ] **Phase 54: Snapshots design (HITL, owner-approved scope)** - A frozen design for durable workspace snapshots built on the RES-04 checkpoint mechanism, with HITL owner decisions settled before any code (SNAP-01 to SNAP-02)
+
 
 ## Phase Details
 
@@ -617,6 +630,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutable state: Omp 12, 15, 16; runtime 14, 17, 18, 19; pipeline 13, 20. The Depends on line of each phase governs; the numeric order above is the default sequence when one worker runs them all. Live runs on the shared realm stack take a lock and run one at a time.
 
 Milestone v7.0 phases (45 to 48) are independent in code and each depends on Phase 44 only. Each needs a live window on the shared realm stack, which queue on the live lock and run one at a time; the documentation edits of Phases 47 and 48 (registry rows, support matrix, gap rows) land in that order.
+Milestone v8.0 phases (49 to 54) are independent in code and each depends on Phase 48 only. Phases 49 to 52 each need a live window on the shared realm stack, which queue on the live lock and run one at a time; Phases 53 and 54 are design-only (frozen designs, no live window, no code) and their HITL owner decisions are settled before any dependent implementation phase is planned.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -671,10 +685,16 @@ Milestone v7.0 phases (45 to 48) are independent in code and each depends on Pha
 | 42. Evidence debt | 3/3 | Complete    | 2026-11-19 |
 | 43. Kimi and kimi-code rehearsal | 2/2 | Complete    | 2026-11-18 |
 | 44. Omp non-blocking cold attach | 3/3 | Complete    | 2026-11-19 |
-| 45. Omp responsiveness, a measurement that can yield a valid verdict | 0/4 | Planned | - |
-| 46. Rapid stop then up (F-41-1) | 0/4 | Planned | - |
-| 47. Legacy kimi production tier and environment forwarding | 0/4 | Planned | - |
-| 48. Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build | 0/4 | Planned | - |
+| 45. Omp responsiveness, a measurement that can yield a valid verdict | 4/4 | Complete | 2026-11-19 |
+| 46. Rapid stop then up (F-41-1) | 4/4 | Complete | 2026-11-19 |
+| 47. Legacy kimi production tier and environment forwarding | 3/4 with summaries (47-03 skipped by branch rule) | Complete | 2026-11-19 |
+| 48. Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build | 4/4 | Complete | 2026-11-19 |
+| 49. Omp calibration repeat | 0/0 | Planned | - |
+| 50. Grok harness fix and production re-run | 0/0 | Planned | - |
+| 51. Rapid stop then up repeat (F-41-1) | 0/0 | Planned | - |
+| 52. Legacy kimi cause (GAP-43-03) | 0/0 | Planned | - |
+| 53. Concurrent binding design (HITL, owner-approved scope) | 0/0 | Planned | - |
+| 54. Snapshots design (HITL, owner-approved scope) | 0/0 | Planned | - |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -1101,3 +1121,69 @@ Plans:
 - [x] 48-02-PLAN.md: Production-tier tests for Muse Code, Prime Agent and Grok Build (or registry blockers), hermetic helper rows, registry T3 entries, regenerated matrix block (wave 2)
 - [x] 48-03-PLAN.md: HUMAN-NEEDED live window as the realmlive account: Grok Build attribution attach with its Claude-alone control and the three production tiers, evidence outside the repository, stack as found (wave 3) — Muse passed, Grok failed at install (GAP-48-03)
 - [x] 48-04-PLAN.md: Registry, matrix, wave 1 page, contract page, gap rows, host pages and pinning tests agree with the window results only (wave 4) — Muse `proven`
+
+### Phase 49: Omp calibration repeat
+
+**Goal:** The Omp cold-attach measurement gets a frozen bound on this host: the bracket-arithmetic fix lands red-first, a recalibration freezes `CALIBRATED_BOUNDS`, and a live window under the frozen design re-resolves OMPV-04 with OMPR-01, OMPR-06 and OI-11 carried honestly.
+**Depends on:** Phase 48
+**Requirements**: OMPV-04
+**Success Criteria** (what must be TRUE):
+  1. The bracket-arithmetic fix in the calibration harness is shown red first by a hermetic test and passes after the fix, with the counted numbers recorded.
+  2. A recalibration on this host freezes `CALIBRATED_BOUNDS` in code before the first verdict run, from recorded runs only, and no constant changes after a verdict is seen.
+  3. A live window on the production stack under the frozen design ends in exactly one of PASS, FINDING, NOT-REPRODUCED or VOID by a rule that is code with a hermetic test before the first live run; every number is labelled with its tier and host facts, commit, Omp version and isolation.
+  4. OMPV-04 is met on the frozen bound or carried with a stated, tested reason; OMPR-01, OMPR-06 and OI-11 close only on PASS or FINDING with the valid pairs the rule needs, never on VOID or on the hermetic probe alone.
+**Plans**: TBD
+
+### Phase 50: Grok harness fix and production re-run
+
+**Goal:** The Grok Build install reaches the host: `productionOverrides` creates `<grok-home>/.grok`, and the live Grok attach and production tier rerun with registry, matrix and docs agreeing.
+**Depends on:** Phase 48
+**Requirements**: HTIER-01, HTIER-04
+**Success Criteria** (what must be TRUE):
+  1. The harness fix is covered by a hermetic test: `productionOverrides` creates `<grok-home>/.grok` so install runs instead of failing with `config-home-missing` (GAP-48-03).
+  2. A live Grok Build session on the production stack writes an audit line attributed `grok-build` with the host launching `realm mcp --host grok-build`, the handshake, `tools/list` and the six tools on the wire; or a named blocker replaces the pass with the missing host feature named.
+  3. Grok Build has a production tier by the HTIER-02 standard, or a named blocker; the registry row, support matrix, `docs/integration/host-plugin-gaps.md` and host pages agree with the result.
+  4. `test/integration/enforce-default.test.ts` still attaches and completes a call for every host id under the default.
+**Plans**: TBD
+
+### Phase 51: Rapid stop then up repeat (F-41-1)
+
+**Goal:** `realm up` right after a rapid stop is retested live to the iteration bar: 50 consecutive stop-then-up iterations per variant, or the suspected mechanism is pinned hermetically and F-41-1 stays carried with that evidence.
+**Depends on:** Phase 48
+**Requirements**: STOP-01, STOP-02, STOP-03, STOP-04
+**Success Criteria** (what must be TRUE):
+  1. F-41-1 is reproduced live (`OPENSHELL_START_FAILED` on an immediate up after a stop, with no settle, also under CPU load) with iteration count and the timeline of daemon, gateway, driver, supervisor and Podman kept outside the repository; if 50 per variant do not reproduce it, the non-reproduction is recorded and the suspected mechanism pinned hermetically.
+  2. The cause is established from that evidence and recorded in `docs/integration/runtime-decision.md`, or carried with the hermetic pin and a stated reason.
+  3. The cause is fixed or bounded with every wait bounded, and a live run does at least 20 consecutive stop-then-up iterations with no `OPENSHELL_START_FAILED`; a fix never weakens teardown bounds or the no-orphan guarantee.
+**Plans**: TBD
+
+### Phase 52: Legacy kimi cause (GAP-43-03)
+
+**Goal:** The narrowed legacy kimi cause is established or narrowed further: live evidence names the component that fails (client, `realm mcp` or stack), or the narrowed cause is recorded with the evidence that bounds it.
+**Depends on:** Phase 48
+**Requirements**: KIMV-02
+**Success Criteria** (what must be TRUE):
+  1. A live rerun keeps the logs and names the failing component, or records which ablation step bounds the narrowed cause, with version and date recorded.
+  2. KIMV-02 is met with the cause established and recorded in the phase and the gap rows, or carried with a stated, tested reason; GAP-43-03 is not relabelled.
+  3. Any `realm mcp` fix keeps fail closed and is shown red first; recipe, docs and matrix agree with the result.
+**Plans**: TBD
+
+### Phase 53: Concurrent binding design (HITL, owner-approved scope)
+
+**Goal:** A frozen design for concurrent binding of sandboxes exists and the owner has approved it: the binding semantics, the conflict rules and the failure modes are decided, and no code is written until they are.
+**Depends on:** Phase 48
+**Requirements**: CBIND-01, CBIND-02
+**Success Criteria** (what must be TRUE):
+  1. A dated design record states the concurrent-binding semantics (what binds, what conflicts, what waits), the identity of a binding, and the failure modes, each with the owner decision that settled it; the HITL owner decisions are listed as owner-approved scope.
+  2. The design names the code surfaces it would touch and the contract changes it would need, with a migration note where an existing contract changes; no compatibility shims are left in the design.
+**Plans**: TBD
+
+### Phase 54: Snapshots design (HITL, owner-approved scope)
+
+**Goal:** A frozen design for durable workspace snapshots exists and the owner has approved it: the snapshot contents, durability guarantees and restore semantics are decided on top of the RES-04 checkpoint mechanism, and no code is written until they are.
+**Depends on:** Phase 48
+**Requirements**: SNAP-01, SNAP-02
+**Success Criteria** (what must be TRUE):
+  1. A dated design record states the snapshot contents, the durability guarantee (what survives a daemon restart and a crash), and the restore semantics (byte-for-byte return to prior content), each with the owner decision that settled it; the HITL owner decisions are listed as owner-approved scope.
+  2. The design states how it composes with RES-04 checkpoint create/restore, the scratch volume and the no-orphan guarantee, and the code surfaces and contract changes it would need; no compatibility shims are left in the design.
+**Plans**: TBD

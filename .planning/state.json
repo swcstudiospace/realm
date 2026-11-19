@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v7.0",
+  "milestone": "v8.0",
   "phases": [
     {
       "number": "1",
@@ -277,6 +277,36 @@
       "number": "48",
       "name": "Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build",
       "status": "pending"
+    },
+    {
+      "number": "49",
+      "name": "Omp calibration repeat",
+      "status": "pending"
+    },
+    {
+      "number": "50",
+      "name": "Grok harness fix and production re-run",
+      "status": "pending"
+    },
+    {
+      "number": "51",
+      "name": "Rapid stop then up repeat (F-41-1)",
+      "status": "pending"
+    },
+    {
+      "number": "52",
+      "name": "Legacy kimi cause (GAP-43-03)",
+      "status": "pending"
+    },
+    {
+      "number": "53",
+      "name": "Concurrent binding design (HITL, owner-approved scope)",
+      "status": "pending"
+    },
+    {
+      "number": "54",
+      "name": "Snapshots design (HITL, owner-approved scope)",
+      "status": "pending"
     }
   ],
   "next": {
@@ -284,5 +314,5 @@
     "label": "Show progress",
     "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-19T06:36:00.000Z"
+  "updated_at": "2026-11-19T09:00:00.000Z"
 }
