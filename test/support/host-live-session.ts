@@ -5,7 +5,9 @@
 // launch `realm mcp --host codex` and list its tools. This module holds the pieces of that drive and of the evidence of it:
 //   - the refusing loopback provider and the Codex argument list that points `codex exec` at it
 //   - the wire recorder: a `realm` shim that forwards the host's stdio to the real server byte for byte and logs only JSON-RPC
-//     method names and, for the `tools/list` response, tool names (never parameters, results, headers, paths or content)
+//     method names and, for the `tools/list` response, tool names (never parameters, results, headers, paths or content), plus, since
+//     phase 47, a millisecond mark on every line, the error flag and numeric code of a response (never its message), the `_meta` flag of
+//     a request (never its content) and lifecycle lines (child start and exit, the host closing its end, a signal)
 //   - a fake MCP stdio server for the validator-tier session test and the hermetic tests, and the readers of both logs
 //   - runHostUntil: the process-group runner that waits for a condition instead of an exit (a Codex session never exits by itself)
 //
@@ -16,14 +18,16 @@
 //   REALM_TOOL_NAMES, SESSION_PROMPT, CODEX_FORWARDED_ENV     the six Realm tool names, the fixed prompt, the three forwarded names
 //   startRefusingProvider, isLoopbackPeer                      the 503 loopback provider and the peer check
 //   codexSessionArgs                                           the `codex exec` argument list
-//   writeFakeMcpServer, readFakeServerLog, withoutShellNames   the fake MCP server, the reader of its log, the shell-added-name filter
-//   writeWireRecorder, readWireLog, wireSummary                the recorder shim, the reader of its log, and the summary of it
+//   writeFakeMcpServer, readFakeServerLog, withoutShellNames   the fake MCP server (optionally digesting named env values), the reader of
+//                                                              its log, the shell-added-name filter
+//   writeWireRecorder, readWireLog, wireSummary                the recorder shim, the reader of its log, and the summary of it (the
+//                                                              timeline reader is readWireTimeline in wire-timeline.ts)
 //   runHostUntil                                               the bounded process-group runner that waits for a condition
 
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { Readable } from "node:stream";
 import { Capture, GROUP_KILL_GRACE_MS, PIPE_CLOSE_GRACE_MS, shellQuote, signalGroup, type HostRunResult } from "./host-live.js";
 import { isRecord } from "./omp-live.js";
@@ -139,21 +143,26 @@ export function codexSessionArgs(options: CodexSessionOptions): string[] {
 
 // ---- The fake MCP stdio server ---------------------------------------------------------------------------------------------
 
-// The text of a Node script (builtins only) that speaks line-delimited JSON-RPC on stdio. `logFile` is fixed into it.
-function fakeServerSource(logFile: string): string {
+// The text of a Node script (builtins only) that speaks line-delimited JSON-RPC on stdio. `logFile` is fixed into it. `hashNames` are
+// the environment names whose value the start line digests (a short hash, never the value).
+function fakeServerSource(logFile: string, hashNames: readonly string[]): string {
   return [
+    'import { createHash } from "node:crypto";',
     'import { appendFileSync } from "node:fs";',
     'import { basename } from "node:path";',
     'import { createInterface } from "node:readline";',
     "",
     `const LOG = ${JSON.stringify(logFile)};`,
     `const TOOLS = ${JSON.stringify(REALM_TOOL_NAMES)};`,
+    `const HASH_NAMES = ${JSON.stringify(hashNames)};`,
     "const argv = process.argv.slice(2);",
     'const eofAt = argv.indexOf("--exit-on-eof");',
     "const eofCode = eofAt >= 0 ? Number(argv[eofAt + 1]) : 0;",
     'const toolsError = argv.includes("--tools-error");',
     'const note = (value) => { appendFileSync(LOG, JSON.stringify(value) + "\\n"); };',
-    'note({ event: "start", pid: process.pid, argv, env: Object.keys(process.env).sort(), cwd: basename(process.cwd()) });',
+    'const hashes = {};',
+    'for (const name of HASH_NAMES) { const value = process.env[name]; if (value !== undefined) { hashes[name] = createHash("sha256").update(value).digest("hex").slice(0, 12); } }',
+    'note({ event: "start", pid: process.pid, argv, env: Object.keys(process.env).sort(), cwd: basename(process.cwd()), ...(HASH_NAMES.length > 0 ? { hashes } : {}) });',
     'const write = (message) => { process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n"); };',
     "const resultOf = (message) => {",
     '  const params = message.params !== null && typeof message.params === "object" ? message.params : {};',
@@ -185,12 +194,15 @@ function fakeServerSource(logFile: string): string {
 // protocol version), `server/discover`, `tools/list` (the six Realm tool names, each with a description carrying the marker
 // FAKE-DESCRIPTION-MARKER and an empty-object input schema) and any other request with an empty result, and ignores notifications. At
 // start it appends one JSON line to `logFile`: its pid, its argv after the script name, the sorted NAMES of its environment
-// variables (never values) and the basename of its working directory. It appends an EOF line when stdin ends and exits 0, or with
-// the code that follows an `--exit-on-eof` argument. A `--tools-error` argument makes its `tools/list` answer a JSON-RPC error.
-export function writeFakeMcpServer(dir: string, logFile: string): string {
+// variables (never values) and the basename of its working directory. With a non-empty `hashNames` the line also holds `hashes`: for
+// each listed name present in its environment, the first 12 hex characters of the SHA-256 of the value, and never the value (a
+// 48-bit prefix classifies a few known candidates; it is no means to recover a value). With no list the line is unchanged. It appends an
+// EOF line when stdin ends and exits 0, or with the code that follows an `--exit-on-eof` argument. A `--tools-error` argument makes its
+// `tools/list` answer a JSON-RPC error.
+export function writeFakeMcpServer(dir: string, logFile: string, options: { readonly hashNames?: readonly string[] } = {}): string {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "fake-mcp-server.mjs");
-  writeFileSync(path, fakeServerSource(logFile));
+  writeFileSync(path, fakeServerSource(logFile, options.hashNames ?? []));
   chmodSync(path, 0o644);
   return path;
 }
@@ -201,6 +213,23 @@ export interface FakeServerStart {
   // Sorted names of the environment variables the server was started with.
   readonly env: readonly string[];
   readonly cwd: string;
+  // Present only for a server written with `hashNames`: the 12 hex character digest of each listed name's value that was present.
+  readonly hashes?: Readonly<Record<string, string>>;
+}
+
+// The `hashes` member of a start line: names to 12 hex character digests; undefined for any other shape.
+function hashesOf(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const hashes: Record<string, string> = {};
+  for (const [name, digest] of Object.entries(value)) {
+    if (typeof digest !== "string" || !/^[0-9a-f]{12}$/.test(digest)) {
+      return undefined;
+    }
+    hashes[name] = digest;
+  }
+  return hashes;
 }
 
 export interface FakeServerLog {
@@ -239,8 +268,9 @@ export function readFakeServerLog(file: string): FakeServerLog {
       const argv = stringArray(parsed["argv"]);
       const env = stringArray(parsed["env"]);
       const { pid, cwd } = parsed;
+      const hashes = hashesOf(parsed["hashes"]);
       if (argv !== undefined && env !== undefined && typeof pid === "number" && typeof cwd === "string") {
-        starts.push({ pid, argv, env, cwd });
+        starts.push({ pid, argv, env, cwd, ...(hashes === undefined ? {} : { hashes }) });
       }
     }
   }
@@ -269,13 +299,23 @@ export interface WireRecorderOptions {
   // absent from its own environment and logs the sorted NAMES it added, never a value. The pairs are written to a file of mode 0600
   // next to the tee, never to an argument. A name the host did forward keeps the host's value.
   readonly restoreEnv?: Readonly<Record<string, string>>;
+  // An absolute path the target's stderr is copied to (created with mode 0600 and appended to) while it is still forwarded to the tee's
+  // own stderr. Absent: the target's stderr is inherited and nothing is copied. The path is written into the tee script, never an
+  // argument, and adds no file to the recorder directory unless the caller names one there.
+  readonly stderrFile?: string;
 }
 
-// The text of the tee: spawns `target + received arguments` with stdin and stdout piped and stderr inherited, forwards the host's
-// stdin to the child and the child's stdout to the host byte for byte (`pipe`), and reads a line-buffered COPY of each direction to
-// write the log. The log line holds the direction, the kind, the method name, the request id and, on the response to `tools/list`,
-// the tool names. Parameters, results, headers, paths and content are never copied. A log write error is swallowed, after the forward.
-function teeSource(prefixLength: number, restore: boolean): string {
+// The text of the tee: spawns `target + received arguments` with stdin and stdout piped and stderr inherited (or piped, when `stderrFile`
+// names a copy), forwards the host's stdin to the child and the child's stdout to the host byte for byte (`pipe`), and reads a
+// line-buffered COPY of each direction to write the log. Every log line carries `t`, an integer millisecond mark from the tee's start
+// (monotonic, non-decreasing in file order). A wire line holds the direction, the kind, the method name, the request id and, on the
+// response to `tools/list`, the tool names; on a response the `error` flag and the numeric `errorCode` of a JSON-RPC error (never its
+// message); on a request the `meta` flag (a `_meta` member was present, never its content); on a host line that is not a JSON-RPC 2.0
+// message object the `invalid` flag. Lifecycle lines (`kind` "lifecycle") mark the child starting (`child-start`), the host closing its
+// end (`host-stdin-end`), a signal the tee received (`host-signal`, logged before it is forwarded) and the child exiting (`child-exit`
+// with its code or signal). Parameters, results, headers, paths and content are never copied. A log write error is swallowed, after the
+// forward. The old reader readWireLog skips lifecycle lines and the new fields.
+function teeSource(prefixLength: number, restore: boolean, stderrFile: string | undefined): string {
   return [
     'import { spawn } from "node:child_process";',
     restore ? 'import { appendFileSync, readFileSync } from "node:fs";' : 'import { appendFileSync } from "node:fs";',
@@ -289,7 +329,7 @@ function teeSource(prefixLength: number, restore: boolean): string {
     "const target = argv.slice(1, 1 + PREFIX);",
     "const extra = argv.slice(1 + PREFIX);",
     "const pendingLists = new Set();",
-    'const record = (entry) => { try { appendFileSync(logFile, JSON.stringify(entry) + "\\n"); } catch { /* the log never blocks the forward */ } };',
+    'const record = (entry) => { try { appendFileSync(logFile, JSON.stringify({ t: Math.round(performance.now()), ...entry }) + "\\n"); } catch { /* the log never blocks the forward */ } };',
     "const toolNamesOf = (message) => {",
     "  const result = message.result;",
     '  if (result === null || typeof result !== "object" || !Array.isArray(result.tools)) { return undefined; }',
@@ -297,18 +337,25 @@ function teeSource(prefixLength: number, restore: boolean): string {
     "};",
     "const scan = (dir, line) => {",
     "  let message;",
-    '  try { message = JSON.parse(line); } catch { record({ dir, kind: "other" }); return; }',
-    '  if (message === null || typeof message !== "object" || Array.isArray(message)) { record({ dir, kind: "other" }); return; }',
+    '  try { message = JSON.parse(line); } catch { record(dir === "host-to-realm" ? { dir, kind: "other", invalid: true } : { dir, kind: "other" }); return; }',
+    '  if (message === null || typeof message !== "object" || Array.isArray(message)) { record(dir === "host-to-realm" ? { dir, kind: "other", invalid: true } : { dir, kind: "other" }); return; }',
     '  const id = typeof message.id === "string" || typeof message.id === "number" ? message.id : undefined;',
     "  const entry = { dir };",
+    '  if (dir === "host-to-realm" && message.jsonrpc !== "2.0") { entry.invalid = true; }',
     '  if (typeof message.method === "string") {',
     '    entry.kind = id === undefined ? "notification" : "request";',
     "    entry.method = message.method;",
     "    if (id !== undefined) { entry.id = id; }",
+    '    if (id !== undefined && message.params !== null && typeof message.params === "object" && "_meta" in message.params) { entry.meta = true; }',
     '    if (id !== undefined && dir === "host-to-realm" && message.method === "tools/list") { pendingLists.add(JSON.stringify(id)); }',
     '  } else if (id !== undefined && ("result" in message || "error" in message)) {',
     '    entry.kind = "response";',
     "    entry.id = id;",
+    '    if ("error" in message) {',
+    "      entry.error = true;",
+    '      const code = message.error !== null && typeof message.error === "object" ? message.error.code : undefined;',
+    '      if (typeof code === "number") { entry.errorCode = code; }',
+    "    }",
     '    if (dir === "realm-to-host" && pendingLists.delete(JSON.stringify(id))) {',
     "      const names = toolNamesOf(message);",
     "      if (names !== undefined) { entry.toolNames = names; }",
@@ -346,15 +393,25 @@ function teeSource(prefixLength: number, restore: boolean): string {
           'record({ dir: "host-to-realm", kind: "other", restored: restored.sort() });',
         ]
       : []),
-    `const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", "inherit"]${restore ? ", env: childEnv" : ""} });`,
+    `const child = spawn(target[0], [...target.slice(1), ...extra], { stdio: ["pipe", "pipe", ${stderrFile === undefined ? '"inherit"' : '"pipe"'}]${restore ? ", env: childEnv" : ""} });`,
+    'child.on("spawn", () => { record({ kind: "lifecycle", event: "child-start" }); });',
+    'child.on("exit", (code, signal) => { record({ kind: "lifecycle", event: "child-exit", code, signal }); });',
+    ...(stderrFile === undefined
+      ? []
+      : [
+          `const STDERR_FILE = ${JSON.stringify(stderrFile)};`,
+          'process.stderr.on("error", () => {});',
+          'child.stderr.on("data", (chunk) => { process.stderr.write(chunk); try { appendFileSync(STDERR_FILE, chunk); } catch { /* the copy never blocks the forward */ } });',
+        ]),
     'child.on("error", (error) => { process.stderr.write("wire-tee: cannot start the target: " + error.message + "\\n"); process.exit(127); });',
     'child.stdin.on("error", () => {});',
     'process.stdout.on("error", () => {});',
+    'process.stdin.on("end", () => { record({ kind: "lifecycle", event: "host-stdin-end" }); });',
     "process.stdin.pipe(child.stdin);",
     'process.stdin.on("data", tap("host-to-realm"));',
     "child.stdout.pipe(process.stdout);",
     'child.stdout.on("data", tap("realm-to-host"));',
-    'for (const signal of ["SIGTERM", "SIGINT"]) { process.on(signal, () => { child.kill(signal); }); }',
+    'for (const signal of ["SIGTERM", "SIGINT"]) { process.on(signal, () => { record({ kind: "lifecycle", event: "host-signal", signal }); child.kill(signal); }); }',
     'child.on("close", (code, signal) => {',
     "  process.exitCode = code !== null ? code : 128 + (signal === null ? 0 : (constants.signals[signal] ?? 0));",
     '  process.stdout.write("", () => { process.exit(); });',
@@ -369,7 +426,8 @@ function isRestorePair(name: string, value: unknown): boolean {
 
 // Writes `<dir>/realm` (mode 0755, a POSIX sh script: a shebang, then `exec` of the Node path, the tee script, the log path and the
 // target argv prefix, each shell-quoted, then "$@") and `<dir>/wire-tee.mjs` (mode 0644). Returns the shim path. The shim forwards
-// bytes, EOF, the child's exit code (or 128 plus its signal number) and SIGTERM and SIGINT; it only reads a copy of the stream.
+// bytes, EOF, the child's exit code (or 128 plus its signal number) and SIGTERM and SIGINT; it only reads a copy of the stream. With
+// `stderrFile` the file is created here (mode 0600) and the tee appends the target's stderr to it.
 export function writeWireRecorder(dir: string, options: WireRecorderOptions): string {
   const restore = options.restoreEnv;
   if (restore !== undefined) {
@@ -379,14 +437,22 @@ export function writeWireRecorder(dir: string, options: WireRecorderOptions): st
       }
     }
   }
+  const { stderrFile } = options;
+  if (stderrFile !== undefined && !isAbsolute(stderrFile)) {
+    throw new Error("stderrFile must be an absolute path; nothing was written");
+  }
   mkdirSync(dir, { recursive: true });
+  if (stderrFile !== undefined) {
+    writeFileSync(stderrFile, "", { mode: 0o600, flag: "a" });
+    chmodSync(stderrFile, 0o600);
+  }
   if (restore !== undefined) {
     const pairsFile = join(dir, "wire-restore.json");
     writeFileSync(pairsFile, JSON.stringify(restore), { mode: 0o600 });
     chmodSync(pairsFile, 0o600);
   }
   const tee = join(dir, "wire-tee.mjs");
-  writeFileSync(tee, teeSource(options.target.length, restore !== undefined));
+  writeFileSync(tee, teeSource(options.target.length, restore !== undefined, stderrFile));
   chmodSync(tee, 0o644);
   const shim = join(dir, "realm");
   const words = [options.nodePath, tee, options.logFile, ...options.target].map((word) => shellQuote(word)).join(" ");

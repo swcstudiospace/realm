@@ -46,12 +46,12 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import type { TestContext } from "node:test";
 import { runCli, type CliResult } from "../../src/cli/main.js";
 import { locateTomlTable } from "../../src/host/toml-table.js";
-import type { EnvironmentLike } from "../../src/session/paths.js";
+import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
 import { createCleanups, isRecord } from "./omp-live.js";
 import {
   type CommandResult,
@@ -60,7 +60,10 @@ import {
   describeValue,
   isDirectory,
   isSocket,
+  listContainers,
+  listRealmSandboxes,
   listSandboxContainers,
+  listSandboxesNamed,
   LIVE_PRODUCTION_VARIABLE,
   type LiveInputs,
   onPath,
@@ -77,6 +80,8 @@ import {
   stateOfStatus,
   waitForNoResidue,
 } from "./production-live.js";
+import { catalogueCodesIn, type RunEvidenceSettings, writeRunEvidence } from "./host-live-evidence.js";
+import { observeReach, REACH_WINDOW_MS, type ReachSeams } from "./host-live-reach.js";
 import { isLoopbackPeer, readWireLog, REALM_TOOL_NAMES, runHostUntil, type RefusingProvider, wireSummary, writeWireRecorder } from "./host-live-session.js";
 import { scaledMs } from "./timing.js";
 
@@ -920,10 +925,15 @@ export interface HostSessionDrive {
 // The command drive: the host command is the host binary run with `args` (a health check that launches the registered server and exits,
 // `kimi mcp test realm`). `restore` names the scenario variables the host does not forward to a stdio server (the legacy Kimi CLI
 // forwards HOME and PATH only, 43-CONTEXT E-43-09): the wire recorder gives them back to the server and logs the names, never a value.
+// The two optional members are the phase 47 switches and change nothing when absent: `warm` brings the project's session up before the
+// host command (a diagnostic control), and `evidence` keeps the run's wire log, full command output and server stderr in a checked
+// evidence directory outside the repository, written before any assertion of the run, with a reach observation after the command.
 export interface HostCommandDrive {
   readonly kind: "command";
   readonly args: readonly string[];
   readonly restore: readonly string[];
+  readonly warm?: boolean;
+  readonly evidence?: RunEvidenceSettings;
 }
 
 export type HostDrive = HostSessionDrive | HostCommandDrive;
@@ -1011,6 +1021,124 @@ export function productionOverrides(host: HostProductionId, scenarioRoot: string
   return overrides;
 }
 
+// The warm control of the command drive (phase 47, a diagnostic variant, never the production tier): the project's session is brought up
+// and answers active before the host command, so the host attaches to a stack that is no longer cold. Every wait is bounded; the cleanup
+// of the production scenario still brings the project down. It lives beside the other drive helpers, outside the production body, which
+// attaches cold and is pinned never to bring a session up itself.
+async function warmControl(inputs: LiveInputs, scenario: ScenarioEnvironment, projectDir: string, status: () => Promise<CommandResult>): Promise<void> {
+  const started = await realmCli(inputs, scenario, ["up", "--workspace", projectDir], scaledMs(DOWN_TIMEOUT_MS));
+  assert.equal(started.exitCode, 0, `the warm control: the session did not start: ${describeResult(started)}`);
+  const warmed = await pollUntil(
+    async () => {
+      const answer = await status();
+      return answer.exitCode === 0 && stateOfStatus(answer.stdout) === "active" ? { done: true } : { done: false, detail: describeResult(answer) };
+    },
+    { timeoutMs: scaledMs(POLL_TIMEOUT_MS), intervalMs: POLL_INTERVAL_MS },
+  );
+  assert.ok(warmed.ok, `the warm control: the session must be active before the host command: ${warmed.detail}`);
+}
+
+// The cold snapshot of an evidence run (47-CONTEXT D-47-04): no daemon of the account (no control socket), 0 containers, 0 sandboxes and an
+// empty workspace root. A listing that fails is not cold.
+async function isColdStack(inputs: LiveInputs, scenario: ScenarioEnvironment): Promise<boolean> {
+  try {
+    const containers = await listContainers(inputs);
+    const sandboxes = await listRealmSandboxes(inputs);
+    return containers.ok && containers.items.length === 0 && sandboxes.ok && sandboxes.items.length === 0 && readdirSync(inputs.workspaceRoot).length === 0 && !existsSync(controlSocketPath(scenario.stateDir));
+  } catch {
+    return false;
+  }
+}
+
+interface ReachSeamInputs {
+  readonly inputs: LiveInputs;
+  readonly scenario: ScenarioEnvironment;
+  readonly host: string;
+  readonly projectDir: string;
+  readonly sandbox: string;
+  readonly serverStderrFile: string;
+}
+
+// The production seams of the reach observation: `realm status`, the containers and sandboxes of the project, the attached boot reports of
+// `realm metrics`, and the catalogue codes of the server's stderr copy. A listing that fails throws, which the observation records as a
+// failed seam of that poll.
+function productionReachSeams(seam: ReachSeamInputs): ReachSeams {
+  const { inputs, scenario } = seam;
+  return {
+    status: async () => {
+      const status = await realmCliWithWorkspace(inputs, scenario, ["status"], seam.projectDir, REALM_COMMAND_TIMEOUT_MS);
+      return status.exitCode === 0 ? stateOfStatus(status.stdout) : undefined;
+    },
+    containers: async () => {
+      const listing = await listSandboxContainers(inputs, seam.sandbox);
+      if (!listing.ok) {
+        throw new Error("the container listing failed");
+      }
+      return listing.items.length;
+    },
+    sandboxes: async () => {
+      const listing = await listSandboxesNamed(inputs, seam.sandbox);
+      if (!listing.ok) {
+        throw new Error("the sandbox listing failed");
+      }
+      return listing.items.length;
+    },
+    attached: async () => {
+      const metrics = await realmCli(inputs, scenario, ["metrics", "--workspace", seam.projectDir], REALM_COMMAND_TIMEOUT_MS);
+      if (metrics.exitCode !== 0) {
+        throw new Error("realm metrics failed");
+      }
+      return attachedBootsOf(metrics.stdout, seam.host);
+    },
+    stderrCodes: () => Promise.resolve(existsSync(seam.serverStderrFile) ? catalogueCodesIn(readFileSync(seam.serverStderrFile, "utf8")) : []),
+    clock: {
+      now: () => performance.now(),
+      sleep: (ms) =>
+        new Promise<void>((done) => {
+          setTimeout(done, ms);
+        }),
+    },
+  };
+}
+
+interface KeptRun {
+  readonly evidence: RunEvidenceSettings;
+  readonly restore: readonly string[];
+  readonly warm: boolean;
+  readonly cold: boolean;
+  readonly elapsedMs: number;
+  readonly ran: HostRunResult;
+  readonly wireLog: string;
+  readonly serverStderrFile: string;
+  readonly seams: ReachSeams;
+}
+
+// Observes the reach of the stack, then writes the run folder. Every failure is a diagnostic: this never throws, so it cannot mask the
+// run's own failure, and the reach observation records a failing seam in its own record.
+async function keepRunEvidence(t: TestContext, kept: KeptRun): Promise<void> {
+  try {
+    const reach = await observeReach(kept.seams, { windowMs: scaledMs(REACH_WINDOW_MS) });
+    t.diagnostic(`reach: ${reach.reached ? "the stack was reached" : "the stack was not reached"} after ${String(reach.polls.length)} poll(s)${reach.failedSeams.length > 0 ? `; failed observations [${reach.failedSeams.join(", ")}]` : ""}`);
+    const written = writeRunEvidence({
+      settings: kept.evidence,
+      restore: kept.restore,
+      warm: kept.warm,
+      cold: kept.cold,
+      elapsedMs: kept.elapsedMs,
+      returned: !kept.ran.timedOut,
+      ...(kept.ran.exitCode === undefined ? {} : { exitCode: kept.ran.exitCode }),
+      wireLog: kept.wireLog,
+      stdout: kept.ran.stdout,
+      stderr: kept.ran.stderr,
+      serverStderrFile: kept.serverStderrFile,
+      reach,
+    });
+    t.diagnostic(`run evidence kept in the run folder ${basename(written.folder)}${written.failures.length > 0 ? `; members not written [${written.failures.join(", ")}]` : ""}`);
+  } catch {
+    t.diagnostic("run evidence could not be kept");
+  }
+}
+
 // The production-tier scenario of claude, codex, opencode, kimi and kimi-code. The default drive is the real host's own health check (`<host> mcp list`):
 // it performs a real MCP handshake (initialize or server/discover) against `realm mcp --host <id>` on the production stack. The session drive (codex, kimi-code) runs the host as a
 // session against a refusing loopback provider and ends it once the daemon shows the boot and the recorder shows the tool listing. The
@@ -1033,6 +1161,9 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
   assert.ok(configHome !== undefined, "the scenario environment must name its configuration home");
   const realFile = options.realFile(hostHome);
   const realBefore = fileSha256(realFile);
+  // The cold snapshot of an evidence run is taken before this run creates anything (its project directory included).
+  const evidence = options.drive?.kind === "command" ? options.drive.evidence : undefined;
+  const cold = evidence === undefined ? false : await isColdStack(inputs, scenario);
 
   const suffix = randomBytes(6).toString("hex");
   const projectDir = join(inputs.workspaceRoot, `host-boot-${host}-${suffix}`);
@@ -1115,7 +1246,14 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     }
     restoreEnv[name] = value;
   }
-  writeWireRecorder(shimDir, { nodePath: process.execPath, target: [process.execPath, options.cliPath], logFile: wireLog, ...(drive?.kind === "command" ? { restoreEnv } : {}) });
+  const serverStderrFile = join(scenario.root, "server-stderr.txt");
+  writeWireRecorder(shimDir, {
+    nodePath: process.execPath,
+    target: [process.execPath, options.cliPath],
+    logFile: wireLog,
+    ...(drive?.kind === "command" ? { restoreEnv } : {}),
+    ...(evidence === undefined ? {} : { stderrFile: serverStderrFile }),
+  });
 
   const realmHost = (words: readonly string[]): Promise<CliResult> => runCli(["host", ...words], { env, now: () => new Date() });
   const realmStatus = (): Promise<CommandResult> => realmCliWithWorkspace(inputs, scenario, ["status"], projectDir, REALM_COMMAND_TIMEOUT_MS);
@@ -1141,6 +1279,11 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     assert.equal(removedAtEnd.exitCode, 0, `realm host uninstall ${host} at cleanup: ${describeRun({ ...removedAtEnd, timedOut: false })}`);
   };
 
+  // The warm control, a diagnostic variant of the command drive only (see warmControl above).
+  if (drive?.kind === "command" && drive.warm === true) {
+    await warmControl(inputs, scenario, projectDir, realmStatus);
+  }
+
   // The host attaches cold: nothing has started the daemon or the sandbox for this run's new project directory, so the host's own
   // `realm mcp` creates both. The host command is run from a directory under the pinned workspace root with the production PATH
   // ahead of the host binary's directory (set above: the host spawns `realm mcp`, which runs `podman --version`, and the production
@@ -1151,6 +1294,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     const summary = wireSummary(readWireLog(wireLog));
     return `host methods [${summary.hostMethods.join(", ")}], tools [${summary.toolNames.join(", ")}]`;
   };
+  let commandElapsedMs: number | undefined;
   const startedAt = Date.now();
   if (drive === undefined) {
     // The host's own health check.
@@ -1171,10 +1315,28 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
     // and returns. The legacy CLI's success wording is not known in advance (43-CONTEXT OQ-43-02), so no connected word is asserted:
     // the exit code, the elapsed time and the wire carry the proof, and the first line of its output is recorded.
     const ran = await runHost(options.bin, drive.args, env, projectDir, scaledMs(REAL_HOST_TIMEOUT_MS));
+    const ranMs = Date.now() - startedAt;
+    commandElapsedMs = ranMs;
     const label = `${host} ${drive.args.join(" ")}`;
+    if (evidence !== undefined) {
+      // The evidence of the run is kept before any assertion, so a failing run still leaves it. A failure here is a diagnostic and never
+      // masks the run's own failure.
+      t.diagnostic(`run label: ${evidence.label}`);
+      await keepRunEvidence(t, {
+        evidence,
+        restore: drive.restore,
+        warm: drive.warm === true,
+        cold,
+        elapsedMs: ranMs,
+        ran,
+        wireLog,
+        serverStderrFile,
+        seams: productionReachSeams({ inputs, scenario, host, projectDir, sandbox: sandboxNameFor(projectDir), serverStderrFile }),
+      });
+    }
     requireReturned(ran, label);
     assert.equal(ran.exitCode, 0, `${label}: ${describeRun(ran)}`);
-    const commandMs = Date.now() - startedAt;
+    const commandMs = ranMs;
     const firstLine =
       stripAnsi(`${ran.stdout}\n${ran.stderr}`)
         .split("\n")
@@ -1214,7 +1376,7 @@ export async function runHostProduction(t: TestContext, options: HostProductionO
       assert.equal(session.endedBy, "ready", `${host} session ended by ${session.endedBy} before the boot was observed; wire: ${wireText()}; ${describeRun(session)}`);
     }
   }
-  const elapsedMs = Date.now() - startedAt;
+  const elapsedMs = commandElapsedMs ?? Date.now() - startedAt;
 
   const summary = wireSummary(readWireLog(wireLog));
   t.diagnostic(`${host} wire: ${wireText()}; the host command took ${String(elapsedMs)} ms`);
