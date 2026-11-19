@@ -1,6 +1,6 @@
 # Phase 53 summary: Concurrent binding design (CBIND-01, CBIND-02)
 
-**Date:** 2026-11-19. **Worktree:** `/root/wt/z53`. **Type:** design only — no `src` change, no contract change, nothing executed.
+**Date:** 2026-11-19. **Worktree:** `<worktree>`. **Type:** design only — no `src` change, no contract change, nothing executed.
 
 ## Files
 
