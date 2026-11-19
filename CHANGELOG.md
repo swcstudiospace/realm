@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-19
+
+### Documentation
+- docs(plan): plan phase 44, Omp non-blocking cold attach (owner-directed, OMPR-04..06) (#209) (445d2e1)
+- docs(phase-42): close phase 42, evidence debt (#208) (ea5f749)
+
 ## [0.6.4] - 2026-11-19
 
 ### Documentation
