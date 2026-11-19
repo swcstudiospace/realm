@@ -10,11 +10,28 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ## Current State
 
-Shipped: **v7.0 Carried findings closure** (2026-11-19, release line 0.7.x), and earlier v6.0 (2026-11-19, 0.6.x), v5.0 (2026-11-18, 0.5.x), v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md` (the latest release line). The record is in `.planning/milestones/`: for example `v6.0-ROADMAP.md`, `v6.0-REQUIREMENTS.md`, `v6.0-MILESTONE-AUDIT.md` and `v6.0-phases/`, and the same set for v2.0 to v5.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0); v7.0 is `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/v7.0-MILESTONE-AUDIT.md` and `.planning/phases/45-48/`.
+Shipped: **v7.0 Carried findings closure** (2026-11-19, release line 0.7.x), and milestone v8.0 is in progress. Earlier: v6.0 (2026-11-19, 0.6.x), v5.0 (2026-11-18, 0.5.x), v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md` (the latest release line). The record is in `.planning/milestones/`: for example `v6.0-ROADMAP.md`, `v6.0-REQUIREMENTS.md`, `v6.0-MILESTONE-AUDIT.md` and `v6.0-phases/`, and the same set for v2.0 to v5.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0); v7.0 is `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/v7.0-MILESTONE-AUDIT.md` and `.planning/phases/45-48/`.
 
 What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
 
 Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
+
+## Current Milestone: v8.0 Shared sandboxes and durable recovery
+
+**Goal:** The eight requirements v7.0 carried get a retest with corrected instruments (Omp calibration, Grok harness fix, stop windows, kimi cause), and two owner-approved (HITL) design phases sketch the shared-sandbox steps: concurrent binding and durable snapshots.
+
+**Target features:**
+
+- Omp calibration repeat (Phase 49): the bracket-arithmetic fix, then a recalibration that can freeze `CALIBRATED_BOUNDS`, resolving OMPV-04 with OMPR-01, OMPR-06 and OI-11 carried honestly
+- Grok harness fix and production re-run (Phase 50): create `<grok-home>/.grok` in `productionOverrides` as plan 48-02 owns the wiring, then the live Grok attach and production tier (HTIER-01, HTIER-04; GAP-48-03)
+- Rapid stop then up repeat (Phase 51): F-41-1 in fresh windows with the iteration bar met or pins the suspected mechanism hermetically (STOP-01 to STOP-04)
+- Legacy kimi cause (Phase 52): the GAP-43-03 cause established or narrowed with a tested reason (KIMV-02)
+- Concurrent binding design (Phase 53, HITL owner-approved scope): a frozen design for concurrent binding of sandboxes, with owner decisions settled before code (CBIND-01 to CBIND-02)
+- Snapshots design (Phase 54, HITL owner-approved scope): a frozen design for durable workspace snapshots built on the RES-04 checkpoint mechanism, with owner decisions settled before code (SNAP-01 to SNAP-02)
+
+The owner decisions of 2026-11-19 (v8.0 scope; HITL approval of the concurrent-binding and snapshots design phases) are recorded in `.planning/MILESTONE-CONTEXT.md`. The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (49 to 54) in `.planning/ROADMAP.md`. The ship-flow `--enforce` confirmation of DEBT-03 remains owner-side configuration; carried.
+
+**Carried, not in this milestone** (reasons and owners: `.planning/v7.0-MILESTONE-AUDIT.md`): GAP-48-02/04 (Prime Agent blockers, except as the Grok re-run touches them), GAP-40-01 (accepted-residual unless the Grok re-run produces a live audit line), FS-02 (accepted limitation), UI-01 status (the owner's call; Phase 49 supplies evidence only), Anda items, DEBT-03 ship-flow `--enforce` (unchanged). Owner decisions still open: none blocking; the HITL design decisions of Phases 53 and 54 are taken at their phase discussions and recorded in `MILESTONE-CONTEXT.md`.
 
 ## Last Milestone: v7.0 Carried findings closure (shipped 2026-11-19)
 
@@ -165,4 +182,4 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-11-19 after starting milestone v7.0*
+*Last updated: 2026-11-19 after starting milestone v8.0*

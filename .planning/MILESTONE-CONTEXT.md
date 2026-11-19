@@ -1,42 +1,45 @@
-# Milestone v7.0 context: Carried findings closure
+# Milestone v8.0 context: Shared sandboxes and durable recovery
 
-The v6.0 context is archived at `.planning/milestones/v6.0-MILESTONE-CONTEXT.md`; the v5.0 context at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md`; the v3.0 context (owner decisions D1 to D6 of 2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. This file holds v7.0 only.
+The v7.0 context is archived at `.planning/milestones/v7.0-MILESTONE-CONTEXT.md`; the v6.0 context at `.planning/milestones/v6.0-MILESTONE-CONTEXT.md`; the v5.0 context at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md`; the v3.0 context (owner decisions D1 to D6 of 2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. This file holds v8.0 only.
 
-Scope source: the owner's decision of 2026-11-19 (below); the v6.0 audit (`.planning/milestones/v6.0-MILESTONE-AUDIT.md`: OMPR-01 and OMPR-06 carried, findings F-41-1 and F-44-01, GAP-40-01 and GAP-43-01 to GAP-43-03, the "v7.0 candidates" list); the phase records of Phases 38, 40, 41, 43 and 44 under `.planning/milestones/v6.0-phases/` (notably `38-MEASUREMENT.md`, `44-MEASUREMENT.md`, `41-VERIFICATION.md`, `43-VERIFICATION.md`, `40-VERIFICATION.md`); the gap rows in `docs/integration/host-plugin-gaps.md`; `docs/integration/omp.md`; `docs/integration/runtime-decision.md` (the F-41-1 paragraph); and the Linear tickets SPE-34730 to SPE-34733. Planners and executors read those files; they do not work from memory.
+Scope source: the owner's decisions of 2026-11-19 (below); the v7.0 audit (`.planning/v7.0-MILESTONE-AUDIT.md`: the eight carried requirements — OMPV-04; STOP-01 to STOP-04; KIMV-02; HTIER-01 and HTIER-04 — with finding F-41-1, GAP-43-03, GAP-48-01/03 and GAP-40-01, and the "v8.0 candidates" list); the phase records of Phases 45 to 48 under `.planning/phases/` (notably `45-VERIFICATION.md`, `46-VERIFICATION.md`, `47-VERIFICATION.md`, `48-VERIFICATION.md`); the gap rows in `docs/integration/host-plugin-gaps.md`; `docs/integration/omp.md`; `docs/integration/runtime-decision.md` (the F-41-1 paragraph). Planners and executors read those files; they do not work from memory.
 
 ## Goal
 
-Every finding v6.0 carried is closed with evidence or stays carried with a stated, tested reason. The Omp cold-attach responsiveness gets a measurement that can yield a valid verdict on a shared host, so OMPR-01, OMPR-06 and OI-11 are resolved honestly. A `realm up` right after a rapid stop no longer fails once with `OPENSHELL_START_FAILED`. The legacy kimi-cli production-tier failure and its environment forwarding (GAP-43-01) are root-caused. Grok Build is attributed to itself, and Muse Code, Prime Agent and Grok Build each reach a production tier or have a named blocker.
+The eight requirements v7.0 carried are retested with corrected instruments and close only on a valid verdict, live evidence or a frozen design. The Omp calibration gets a defensible bound (OMPV-04, with OMPR-01, OMPR-06 and OI-11). The Grok harness reaches the host (GAP-48-03) and the live Grok attach and production tier rerun (HTIER-01, HTIER-04). `realm up` after a rapid stop is retested to the iteration bar (F-41-1, STOP-01 to STOP-04) and the legacy kimi cause is established or narrowed (KIMV-02, GAP-43-03). Two owner-approved (HITL) design phases sketch the shared-sandbox steps: concurrent binding (CBIND) and durable snapshots (SNAP).
 
 ## Release line
 
-The release line is 0.7.x. `release/milestone.json` is `{"milestone":"v7.0","minor":7}`; the start of the milestone carries the owner's approval of that exact one-line change (HITL 2026-11-19), as PR 186 did for v6.0. A phase that changes a documented contract incompatibly uses `!` in its commit subjects so the release notes list it (Phase 47 is the likely case if the `kimi` recipe starts to write an `env` block that an existing install must refresh).
+The release line is 0.8.x. `release/milestone.json` is `{"milestone":"v8.0","minor":8}`; the start of the milestone carries the owner's approval of that exact one-line change (HITL 2026-11-19), as PR 216 did for v7.0. A phase that changes a documented contract incompatibly uses `!` in its commit subjects so the release notes list it.
 
 ## Owner decisions (2026-11-19, HITL)
 
-- **D-v7-1, start milestone v7.0** "Carried findings closure", four items, all ticked by the owner: phases 45 to 48, numbering continues from Phase 44, release line 0.7.x.
-- **D-v7-2, Omp responsiveness (Phase 45; Linear SPE-34730):** fix the harness so a window can yield a valid outcome on this shared host (the paired and quiet-slot windows of v6.0 were void because of load gating and a baseline bound too tight for a shared host), and resolve OMPR-01, OMPR-06 and OI-11 honestly. The measurement design is the planner's to freeze (see "Measurement design" below).
-- **D-v7-3, F-41-1 (Phase 46; Linear SPE-34731):** root-cause and fix `realm up` failing once with `OPENSHELL_START_FAILED` right after a rapid stop, with a live reproduction.
-- **D-v7-4, legacy kimi (Phase 47; Linear SPE-34732):** root-cause the legacy kimi-cli 1.51.0 production-tier failure (GAP-43-03) and the environment forwarding of GAP-43-01.
-- **D-v7-5, Grok attribution and production tiers (Phase 48; Linear SPE-34733):** close GAP-40-01 (a Grok Build session is attributed `grok-build`) and add production tiers for Muse Code, Prime Agent and Grok Build.
-- **D-v7-6, supported versions:** the latest release line is supported: currently 0.6.x, and 0.7.x from its first release, 0.7.0. `SECURITY.md`, the Safety bullet of `AGENTS.md` and the README status bullet say so.
-- **D-v7-7, Notion skipped:** the Notion tracker sync is skipped for this milestone start because the Notion workspace is payment-locked. Linear (SPE-34730 to SPE-34733) and the planning files are the record.
+- **D-v8-1, start milestone v8.0** "Shared sandboxes and durable recovery", six items, all ticked by the owner: phases 49 to 54, numbering continues from Phase 48, release line 0.8.x.
+- **D-v8-2, Omp calibration repeat (Phase 49):** fix the bracket arithmetic red-first, recalibrate on this host and freeze `CALIBRATED_BOUNDS`, then rerun a live window; resolve OMPV-04 with OMPR-01, OMPR-06 and OI-11 honestly.
+- **D-v8-3, Grok harness fix and production re-run (Phase 50):** wire `<grok-home>/.grok` creation into `productionOverrides` as plan 48-02 owns the wiring, then rerun the live Grok attach and production tier (HTIER-01, HTIER-04; GAP-48-03).
+- **D-v8-4, stop windows repeat (Phase 51):** rerun F-41-1 to the 50-per-variant bar, or pin the suspected mechanism hermetically and carry F-41-1 with that evidence (STOP-01 to STOP-04).
+- **D-v8-5, kimi cause (Phase 52):** establish or narrow the GAP-43-03 cause with a tested reason (KIMV-02).
+- **D-v8-6, concurrent binding design (Phase 53; HITL, owner-approved scope):** a frozen design for concurrent sandbox binding; the HITL owner decisions are settled before any code (CBIND-01 to CBIND-02).
+- **D-v8-7, snapshots design (Phase 54; HITL, owner-approved scope):** a frozen design for durable workspace snapshots built on the RES-04 checkpoint mechanism; the HITL owner decisions are settled before any code (SNAP-01 to SNAP-02).
+- **D-v8-8, supported versions:** the latest release line is supported: currently 0.7.x, and 0.8.x from its first release, 0.8.0. `SECURITY.md`, the Safety bullet of `AGENTS.md` and the README status bullet say so.
 
-## Scope: four phases (numbering continues at 45)
+## Scope: six phases (numbering continues at 49)
 
-| Phase | Name | Requirements | Carries | Linear |
-|-------|------|--------------|---------|--------|
-| 45 | Omp responsiveness: a measurement that can yield a valid verdict | OMPV-01..06 | OMPR-01, OMPR-06, OI-11, F-44-01 | SPE-34730 |
-| 46 | Rapid stop then up: F-41-1 | STOP-01..04 | F-41-1 (Phase 41) | SPE-34731 |
-| 47 | Legacy kimi production tier and environment forwarding | KIMV-01..04 | GAP-43-03, GAP-43-01, GAP-24-02 (legacy half), OQ-24-01, OQ-43-03 | SPE-34732 |
-| 48 | Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build | HTIER-01..05 | GAP-40-01, D-40-06 (no production tier), HOSTID-02 partial | SPE-34733 |
+| Phase | Name | Requirements | Carries | Notes |
+|-------|------|--------------|---------|-------|
+| 49 | Omp calibration repeat | OMPV-04 | OMPR-01, OMPR-06, OI-11 | bracket-arithmetic fix, then recalibration |
+| 50 | Grok harness fix and production re-run | HTIER-01, HTIER-04 | GAP-48-03, GAP-40-01, GAP-48-01 | `<grok-home>/.grok` in `productionOverrides` |
+| 51 | Rapid stop then up repeat (F-41-1) | STOP-01..04 | F-41-1 (Phase 41) | 50-per-variant bar, else hermetic pin |
+| 52 | Legacy kimi cause (GAP-43-03) | KIMV-02 | GAP-43-03 | establish or narrow with a tested reason |
+| 53 | Concurrent binding design (HITL, owner-approved scope) | CBIND-01..02 | — | frozen design only, no code |
+| 54 | Snapshots design (HITL, owner-approved scope) | SNAP-01..02 | RES-04 mechanism | frozen design only, no code |
 
 ## Ordering and dependencies
 
-- The four phases are independent in code. Each depends on Phase 44 only as the last phase of v6.0. Phases 45, 46, 47 and 48 each need a live window on the production stack; the shared live lock serialises them, and the startup reap is account-wide, so only one live run is active at a time.
-- Phases 47 and 48 both edit the host registry rows, the support matrix, `docs/integration/host-plugin-gaps.md` and `docs/integration/wave1-boot-matrix.md`; their documentation edits land in order 47 then 48 (or are rebased), so the generated matrix block does not conflict.
-- Phase 45 touches `src/omp/` (the plugin module is at the 1000-line ceiling: any growth goes to a new module) and `test/support/`; Phase 46 touches the daemon stop and start path (`src/lifecycle/controller.ts`, `src/runtime/`, `src/daemon/`); neither touches the other's files.
-- Each phase ships through the ship flow (pull request, Greptile 5 of 5, squash merge, release on the `0.7.x` line). A phase may ship as several pull requests.
+- The six phases are independent in code. Each depends on Phase 48 only as the last phase of v7.0. Phases 49, 50, 51 and 52 each need a live window on the production stack; the shared live lock serialises them, and the startup reap is account-wide, so only one live run is active at a time. Phases 53 and 54 are design-only (frozen designs, no live window, no code) and their HITL owner decisions are settled before any dependent implementation phase is planned.
+- Phase 50 edits the host registry rows, the support matrix and `docs/integration/host-plugin-gaps.md` for the Grok re-run; its documentation edits land after any Phase 52 gap-row edits (or are rebased), so the generated matrix block does not conflict.
+- Phase 49 touches the calibration harness (`test/support/omp-*`, `test/integration/omp-responsiveness*`); Phase 51 touches the daemon stop and start path (`src/lifecycle/controller.ts`, `src/runtime/`, `src/daemon/`); neither touches the other's files. Phases 53 and 54 touch no code and no source files; their designs live under `.planning/phases/53-*/` and `.planning/phases/54-*/`.
+- Each phase ships through the ship flow (pull request, Greptile 5 of 5, squash merge, release on the `0.8.x` line). A phase may ship as several pull requests.
 
 ## Measurement design (Phase 45; a proposal the planner freezes after the feasibility record of OMPV-01)
 
@@ -61,13 +64,13 @@ Proposal, in four parts, each testable:
 ## Limits
 
 - Live phases depend on this host: rootless Podman 5.7.1, the OpenShell gateway, and the installed host CLIs (Muse Code, Prime Agent, Grok Build and Omp were on the PATH of the planning account on 2026-11-19; the legacy kimi-cli 1.51.0 and Kimi Code need a scratch install outside the repository, as in Phase 43). An item that cannot run is carried with a named reason, not claimed.
-- Isolation primitives (a delegated cgroup, `cpuset`, per-cgroup `cpu.pressure`) are available to the realm account only if the host grants them; Phase 45 records which are, and designs for what it finds.
-- Capability tokens still give no defence against a same-uid reader (Phases 30, 32 and 35 records); the new attribution of Grok Build does not change that, and the host label stays a self-declared attribution, not an identity.
+- Isolation primitives (a delegated cgroup, `cpuset`, per-cgroup `cpu.pressure`) are available to the realm account only if the host grants them; Phase 49 reuses the Phase 45 feasibility record and states what it finds again before the verdict window.
+- Capability tokens still give no defence against a same-uid reader (Phases 30, 32 and 35 records); the Grok re-run does not change that, and the host label stays a self-declared attribution, not an identity.
 
 ## Open owner questions
 
-None blocking. Defaults taken: the measurement design above is a proposal and Phase 45 freezes it after the feasibility record; if the legacy kimi failure is not in `realm mcp`, the owner chooses between a documented limit and dropping the archived row (OQ-24-01) at the Phase 47 discussion; whether the `kimi` recipe writes an `env` block (OQ-43-03) is decided from the Phase 47 live evidence, and the default is to write it only for the names the evidence shows are needed and are not secrets.
+None blocking. Defaults taken: the Phase 49 calibration rerun reuses the frozen Phase 45 design and states its feasibility again before the verdict window; the Phase 52 kimi cause rerun decides from live evidence whether the failing component is the client, `realm mcp` or the stack, and the HITL decisions of Phases 53 and 54 are taken at their phase discussions and recorded here.
 
 ## Out of scope
 
-The ship-flow `--enforce` confirmation of DEBT-03 (owner-side configuration; carried), FS-02 closure (accepted limitation), UI-01 status (the owner's call; Phase 45 supplies evidence only), TD-06, the TD-10 repository settings, a model-driven tool call through a host (GAP-31-02, unless a scripted provider seam makes it a by-product of a production tier), and any change to the product spec.
+The ship-flow `--enforce` confirmation of DEBT-03 (owner-side configuration; carried), FS-02 closure (accepted limitation), UI-01 status (the owner's call; Phase 49 supplies evidence only), TD-06, the TD-10 repository settings, a model-driven tool call through a host (GAP-31-02, unless a scripted provider seam makes it a by-product of a production tier), any implementation of CBIND or SNAP (Phases 53 and 54 are design only), and any change to the product spec.
