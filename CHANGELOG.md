@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-11-19
+
+### Documentation
+- docs(phase-48): production tier window recorded: Muse passed, Grok failed on harness defect, Prime blocked (48-03) (24ec020)
+
 ## [0.7.7] - 2026-11-19
 
 ### Documentation
