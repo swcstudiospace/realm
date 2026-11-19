@@ -219,6 +219,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [ ] **OMPR-01**: The Omp cold attach is measured on a quiet host (one-minute load per CPU below 0.5) with `test/integration/omp-responsiveness.test.ts`: `get_state` answered across the attach, with the number of probes, the maximum and the 95th percentile recorded, and the result recorded as a pass or a finding (OI-11; Linear SPE-34662)
 - [ ] **OMPR-02**: If the quiet-host measurement exceeds the harness thresholds, the Omp extension path is made non-blocking (it answers before `up` completes, as `realm mcp` does since Phase 33), fail closed is kept (no mutation before the session is ready), and the measurement is repeated and recorded; if it passes, the phase records that no code change was needed
 - [ ] **OMPR-03**: The numbers and the host facts (load, CPU count, Omp version, date) are recorded in the phase and in `docs/integration/omp.md` either way, and the OI-11 row of the v1.0 open items reads closed on that evidence
+- [ ] **OMPR-04**: The responsiveness harness reads the cold-attach verdict over the window that starts at Omp's ready frame (probes before it are recorded as boot samples), with every threshold and the Phase 38 decision constants unchanged; a control-relative comparison and the host CPU pressure are recorded as a labelled secondary measure that is never a verdict; the baseline instability (five of nine no-extension baselines missed their 500 ms bound at 0.17 to 0.36 load per CPU) is recorded as a finding with its cause unestablished; the attribution of the one valid quiet-host run is written down with evidence tiers (owner override of the VOID outcome, D-44-01)
+- [ ] **OMPR-05**: The Omp extension path is changed on the owner's override of the VOID outcome: the daemon-launch functions move to src/daemon/launch.ts with every importer migrated and no re-export, so the extension's static import closure reaches no CLI, doctor, MCP or ACP module; the attach starts through an injected deferral, one event-loop turn after the session handler, skipping an ended or superseded session; fail closed is kept (no mutation or tool call reaches the daemon before the session is ready), shown by an attach-window test and the unedited Omp suites; the lint and gate allowlists name the new module in place of the old one without widening
+- [ ] **OMPR-06**: The change is measured by a paired before/after comparison on the loaded host (at least five valid pairs, interleaved, each arm against its own no-extension control in the same test) under a decision rule fixed as code before the first run; the outcome (EFFECT, NO-EFFECT, REGRESSION, NOT-REPRODUCED or VOID), the per-pair numbers and the host facts are recorded in the phase and in docs/integration/omp.md, labelled loaded and paired and never cited as a quiet-host measurement; OI-11 is recorded Carried with the owner override and the paired outcome
 - [x] **EXEC-01**: A live closeout test runs a sleeper that outlives the timeout window; after `TOOL_TIMEOUT` the sleeper is dead (not merely finished) within a stated bound, shown by a check independent of the sleeper's own run time (a sleeper longer than the observation window and a process-state check inside the sandbox) (finding F-3; Linear SPE-34663)
 - [x] **EXEC-02**: If the sleeper survives, the kill path of the dispatcher and driver is fixed so that a timed-out exec's process tree is killed, the session stays usable, and a hermetic test pins the behaviour
 - [x] **EXEC-03**: The timeout contract is unchanged for callers (the retryable `TOOL_TIMEOUT` reply, the per-call bound, the audit line), and the docs and the finding F-3 record state what the proof shows and its limits
@@ -227,9 +230,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **HOSTID-03**: The contract checker, the support matrix, the host-plugin docs, the policy reference and the migration notes are updated and agree with the registry, and the docs site build and `check:docs` pass
 - [x] **TEAR-01**: The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, and its cause is found and recorded
 - [x] **TEAR-02**: The cause is fixed or bounded, with a hermetic test that fails without the fix and a live run on the production stack that stops with a sandbox container and reports `failedTeardowns=0`
-- [ ] **DEBT-01**: The whole unit suite runs as a non-root user (uid 5002) and the result is recorded (EVID-01 Set B), including any failure as a finding
-- [ ] **DEBT-02**: A script under `scripts/check`, with tests, reports every commit subject in a pull request range that is breaking (by the repository's own rules) and lacks the `!` marker, unless the pull request lands as a merge commit; it is wired into the gate conventions of the repository
-- [ ] **DEBT-03**: The guard is enforcing where the existing gate conventions allow it without a workflow change; where enforcement needs a change under `.github/workflows/**` the guard stays report-only and the needed change is recorded for human review
+- [x] **DEBT-01**: The whole unit suite runs as a non-root user (uid 5002) and the result is recorded (EVID-01 Set B), including any failure as a finding
+- [x] **DEBT-02**: A script under `scripts/check`, with tests, reports every commit subject in a pull request range that is breaking (by the repository's own rules) and lacks the `!` marker, unless the pull request lands as a merge commit; it is wired into the gate conventions of the repository
+- [x] **DEBT-03**: The guard is enforcing where the existing gate conventions allow it without a workflow change; where enforcement needs a change under `.github/workflows/**` the guard stays report-only and the needed change is recorded for human review
 - [x] **KIMI-01**: Kimi CLI and Kimi Code CLI are installed in a scratch location outside the repository, and the validator and production tiers are run as for claude, opencode and codex, with each result recorded with version and date
 - [x] **KIMI-02**: Anything that cannot run has a named blocker, and `GAP-24-02` and the support matrix are updated to the evidence tier reached
 
@@ -290,7 +293,7 @@ v3.0 requirements: 52 total, 52 mapped
 
 v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Complete (ENF-04 with a recorded partial). Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`
 
-v6.0 requirements: 16 total (OMPR-01..03, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 16 mapped to phases 38 to 43, all Planned
+v6.0 requirements: 19 total (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 19 mapped to phases 38 to 44
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
@@ -434,6 +437,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | OMPR-01 | Phase 38 | Planned |
 | OMPR-02 | Phase 38 | Planned |
 | OMPR-03 | Phase 38 | Planned |
+| OMPR-04 | Phase 44 | Planned |
+| OMPR-05 | Phase 44 | Planned |
+| OMPR-06 | Phase 44 | Planned |
 | EXEC-01 | Phase 39 | Complete |
 | EXEC-02 | Phase 39 | Complete |
 | EXEC-03 | Phase 39 | Complete |
@@ -442,9 +448,9 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | HOSTID-03 | Phase 40 | Complete |
 | TEAR-01 | Phase 41 | Complete |
 | TEAR-02 | Phase 41 | Complete |
-| DEBT-01 | Phase 42 | Planned |
-| DEBT-02 | Phase 42 | Planned |
-| DEBT-03 | Phase 42 | Planned |
+| DEBT-01 | Phase 42 | Complete |
+| DEBT-02 | Phase 42 | Complete |
+| DEBT-03 | Phase 42 | Complete (partial: the ship-flow --enforce run is owner-side configuration, unconfirmed) |
 | KIMI-01 | Phase 43 | Complete |
 | KIMI-02 | Phase 43 | Complete |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
