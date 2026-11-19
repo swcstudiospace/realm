@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-19
+
+### Maintenance
+- test(daemon): rapid stop-then-up chain harness and frozen outcome rules (46-01, STOP-01) (#218) (a30d330)
+
 ## [0.7.1] - 2026-11-19
 
 ### Changed
