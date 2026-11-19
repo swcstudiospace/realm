@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-11-19
+
+### Documentation
+- docs(phase-46): verification window recorded: VOID, variant a 20 of 20 clean; variant b start failure under load observed (46-04) (#226) (c479c8d)
+
+### Maintenance
+- test(host): production-tier harness for Muse Code and Grok Build, Grok attribution tests, Prime Agent blocker (48-02) (#227) (999cb2f)
+
 ## [0.7.6] - 2026-11-19
 
 ### Documentation
