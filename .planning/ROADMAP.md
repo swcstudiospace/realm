@@ -235,7 +235,7 @@ Plans:
 - [x] **Phase 39: Timed-out exec kill proof** - A live closeout test shows that a sleeper outliving the timeout window is dead, not merely finished, after `TOOL_TIMEOUT`, by a proof independent of the sleeper's own run time; the kill path is fixed if the sleeper survives (finding F-3). (completed 2026-11-18)
 - [x] **Phase 40: Host ids for Muse Code, Prime Agent and Grok Build** - The three hosts get host ids and manifests, recipes or launcher labels so they attach under the enforce default, `GAP-34-01` is closed, and the contract checker, the support matrix and the docs agree. (completed 2026-11-18)
 - [x] **Phase 41: Daemon teardown flake** - The report `daemon.stopped code=REALM_STOPPING failedTeardowns=1` after about 30 s in a stop with a sandbox container is reproduced, its cause found, and the fix or bound proved by a hermetic test and a live run. (completed 2026-11-18)
-- [ ] **Phase 42: Evidence debt** - The whole unit suite runs as uid 5002 (EVID-01 Set B), and a script under `scripts/check` reports breaking commit subjects without the `!` marker on a pull request range, report-only where enforcement needs a workflow change.
+- [x] **Phase 42: Evidence debt** - The whole unit suite runs as uid 5002 (EVID-01 Set B), and a script under `scripts/check` reports breaking commit subjects without the `!` marker on a pull request range, report-only where enforcement needs a workflow change. (completed 2026-11-19)
 - [x] **Phase 43: Kimi and kimi-code rehearsal** - Both CLIs are installed in a scratch location outside the repository and run through the validator and production tiers as for claude, opencode and codex, with results or named blockers recorded (GAP-24-02). (completed 2026-11-18)
 
 ## Phase Details
@@ -651,7 +651,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 | 39. Timed-out exec kill proof | 3/3 | Complete    | 2026-11-18 |
 | 40. Host ids for Muse Code, Prime Agent and Grok Build | 3/3 | Complete    | 2026-11-18 |
 | 41. Daemon teardown flake | 2/2 | Complete    | 2026-11-18 |
-| 42. Evidence debt | 0/0 | Not started | - |
+| 42. Evidence debt | 3/3 | Complete    | 2026-11-19 |
 | 43. Kimi and kimi-code rehearsal | 2/2 | Complete    | 2026-11-18 |
 
 ### Phase 21: Host plugin contract and installer
@@ -965,12 +965,12 @@ Plans:
   3. The guard is wired into the repository's gate conventions; where enforcement would need a change under `.github/workflows/**` it stays report-only and the needed change is written down for human review.
   4. The `check:docs` and `check:gates` gates pass with the new script.
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 42-01-PLAN.md: Build the breaking-change marker guard and wire it into the repository's gate conventions: a script under scripts/check  (wave 1)
-- [ ] 42-02-PLAN.md: Pay the second half of the breaking-change debt: show what the guard does on the history that produced the ENF-04 partia (wave 2)
-- [ ] 42-03-PLAN.md: Run the whole unit suite as a regular user (the realmlive account, uid 5002) on the finished v6.0 code, and record the t (wave 3)
+- [x] 42-01-PLAN.md: Build the breaking-change marker guard and wire it into the repository's gate conventions: a script under scripts/check  (wave 1)
+- [x] 42-02-PLAN.md: Pay the second half of the breaking-change debt: show what the guard does on the history that produced the ENF-04 partia (wave 2)
+- [x] 42-03-PLAN.md: Run the whole unit suite as a regular user (the realmlive account, uid 5002) on the finished v6.0 code, and record the t (wave 3)
 
 ### Phase 43: Kimi and kimi-code rehearsal
 
