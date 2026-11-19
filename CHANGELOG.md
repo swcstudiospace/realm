@@ -4,6 +4,34 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-19
+
+### Added
+- feat(host): host ids and recipes for Muse Code, Prime Agent and Grok Build; launchers carry --host (40-02) (#196) (dbd42cf)
+- feat(host): json-merge seed and refuseIfPresent, multi-line toml args in the contract checker (40-01) (#192) (8c4c62b)
+
+### Fixed
+- fix(exec): end a timed-out exec's process group inside the sandbox (39-02, EXEC-02) (#194) (d80c79a)
+- fix(daemon): derive the teardown bound from the stage bounds so a stop no longer expires at 30 s with REALM_STOPPING (41-01) (#193) (4accb71)
+
+### Documentation
+- docs(phase-38): quote the plan frontmatter entries that broke the docs site build (#206) (d188721)
+- docs(phase-42): whole-suite non-root result (Set B), summaries and verification (#204) (57181f9)
+- docs(phase-39,40,41,43): close four v6.0 phases (#202) (de54c49)
+- docs(phase-40): host id validator-tier results, summaries and verification (#201) (5de4180)
+- docs(phase-42): guard replay on PR 162 and 168, D42-1, CI wiring options awaiting the owner (42-02) (#200) (9b1697b)
+- docs(phase-41): live stop-after-session result, finding F-41-1, summaries and verification (#198) (500ea73)
+- docs(phase-43): kimi and kimi-code live rehearsal results, gaps and verification (#195) (1632571)
+- docs(plan): plans for phases 38 to 43 (v6.0) (#188) (59b18dd)
+
+### Maintenance
+- test(exec): the watchdog tests deny group kill through an exported bash function so a scrubbed environment keeps the denial (#203) (62b85fe)
+- test(host): live validator tiers for Muse Code (real install), Prime Agent and Grok Build; Q10 migration table (40-03 code) (#199) (2faf19a)
+- test(daemon): live repeat of stop-after-session with a container timeline (41-02 code) (#197) (24e7722)
+- test(host): kimi and kimi-code live tiers, gate and registry (43-01) (#191) (6063212)
+- test(exec): process-tree kill proof for timed-out exec, live closeout C rewritten, C2 and D added (39-01, baseline) (#190) (34b6dd2)
+- test(omp): frozen decision rule as code, control run and per-run record for the responsiveness window (38-01 code) (#189) (861b8ff)
+
 ## [0.6.1] - 2026-11-18
 
 ### Added
