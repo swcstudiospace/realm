@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { gateClosure, gateViolations } from "./gate-closure.mjs";
+import { FORBIDDEN_MODULES, gateClosure, gateViolations, specifiersOf } from "./gate-closure.mjs";
 
 async function withFixture(files, run) {
   const root = await mkdtemp(join(tmpdir(), "gate-closure-"));
@@ -148,6 +148,45 @@ test("a dynamic import that reaches a forbidden module is reported", async () =>
       assert.equal(violations.length, 1);
       assert.equal(violations[0].module, "src/doctor/checks.ts");
       assert.deepEqual(violations[0].chain, ["src/core/policy.ts", "src/doctor/checks.ts"]);
+    },
+  );
+});
+
+test("the forbidden list names the daemon launch module beside the CLI entry", () => {
+  assert.ok(FORBIDDEN_MODULES.includes("src/daemon/launch.ts"));
+  assert.ok(FORBIDDEN_MODULES.includes("src/cli/main.ts"));
+});
+
+test("a closure that reaches the daemon launch module is reported with its import chain", async () => {
+  await withFixture(
+    {
+      "src/core/policy.ts": 'import { start } from "../daemon/launch.js";\nexport const gate = start;\n',
+      "src/daemon/launch.ts": "export const start = 1;\n",
+    },
+    async (root) => {
+      const violations = gateViolations({ root, entries: ["src/core/policy.ts"], forbidden: FORBIDDEN_MODULES });
+      assert.equal(violations.length, 1);
+      assert.equal(violations[0].module, "src/daemon/launch.ts");
+      assert.deepEqual(violations[0].chain, ["src/core/policy.ts", "src/daemon/launch.ts"]);
+      assert.equal(violations[0].reason, "is a module the exec gate must not reach");
+    },
+  );
+});
+
+test("the gate counts type-only imports and the value-only walk leaves them out", async () => {
+  const source = 'import type { A } from "./a.js";\nimport { b } from "./b.js";\nexport type { C } from "./c.js";\nexport const x = b;\n';
+  assert.deepEqual(specifiersOf(source), ["./a.js", "./b.js", "./c.js"]);
+  assert.deepEqual(specifiersOf(source, "module.ts", { valueOnly: true }), ["./b.js"]);
+  await withFixture(
+    {
+      "src/core/policy.ts": 'import type { Shape } from "./shape.js";\nexport const gate: Shape | undefined = undefined;\n',
+      "src/core/shape.ts": 'import { spawn } from "node:child_process";\nexport type Shape = typeof spawn;\n',
+    },
+    async (root) => {
+      const entries = ["src/core/policy.ts"];
+      assert.equal(gateViolations({ root, entries, forbidden: [] }).length, 1);
+      assert.deepEqual([...gateClosure({ root, entries }).modules.keys()].sort(), ["src/core/policy.ts", "src/core/shape.ts"]);
+      assert.deepEqual([...gateClosure({ root, entries, valueOnly: true }).modules.keys()], ["src/core/policy.ts"]);
     },
   );
 });

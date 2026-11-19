@@ -8,12 +8,15 @@
 // the plugin's onAttach and onSessionEnd callbacks; none of the three ever changes an attach outcome.
 //
 // Attach means: ensure a daemon answers on the control socket (spawn it detached when absent), connect,
-// and run the idempotent up for the workspace. The daemon owns the sandbox; this host only attaches.
+// and run the idempotent up for the workspace. The daemon owns the sandbox; this host only attaches. The attach starts one
+// event-loop turn after the session_start handler returns (deferStart, set to setImmediate here), so the handler returns first.
+// The detached daemon is started through src/daemon/launch.ts, which keeps the CLI, doctor, MCP and ACP modules out of this
+// module's static imports; until a client is adopted every Realm tool call is refused with REALM_NOT_ACTIVE.
 //
 // The log level is REALM_LOG_LEVEL when that variable is set and error when it is not, so a default session writes nothing new
 // to stderr (Omp paints its own status item); REALM_LOG_LEVEL=debug shows the host.boot lines.
 
-import { startDetachedDaemon } from "../cli/main.js";
+import { startDetachedDaemon } from "../daemon/launch.js";
 import { fileURLToPath } from "node:url";
 import { connectDaemon } from "../daemon/client.js";
 import { CONTROL_TIMEOUT_MS, sendRequest } from "../daemon/channel.js";
@@ -123,6 +126,10 @@ export default function realmExtension(pi: OmpExtensionApi): void {
     attachDaemon,
     bounds,
     reattach: { enabled: bounds.reattach.enabled, random: Math.random },
+    // The attach starts one event-loop turn after session_start returns (the plugin skips it when the session ended or was superseded).
+    deferStart: (start: () => void): void => {
+      setImmediate(start);
+    },
     onAttach: (outcome: PluginAttachOutcome): void => {
       if (attachedSessionId === null) {
         return;

@@ -916,3 +916,45 @@ void test("CAPT-06: the Omp extension attaches its capability token as the host 
   const attach = seen.find((request) => request.method === "capability-attach");
   assert.deepEqual(attach?.params, { selection: { workspaceRoot: root, sessionId: sessionIdOfWorkspace(root) }, host: "omp" });
 });
+
+// OMPR-05 (K2): the entry passes the plugin a deferral set to setImmediate, so the attach starts one event-loop turn after the
+// session_start handler returns. The global is replaced by a recorder for the window and restored before the callbacks run.
+void test("OMPR-05: the real entry starts the attach through setImmediate, one turn after session_start returns", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  const hits: Hit[] = [];
+  await serveDaemon(t, socketPath, hits, (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  realmExtension(host.pi);
+  t.after(() => {
+    host.handlers.get("session_shutdown")?.();
+  });
+  const realSetImmediate = globalThis.setImmediate;
+  const recorded: Array<() => void> = [];
+  const restore = (): void => {
+    globalThis.setImmediate = realSetImmediate;
+  };
+  t.after(restore);
+  globalThis.setImmediate = ((callback: () => void) => {
+    recorded.push(callback);
+    return realSetImmediate(() => undefined);
+  }) as unknown as typeof setImmediate;
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start, "the extension registers a session_start handler");
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  // A few turns of the real loop pass; the recorded callback has not run, so the attach has not started.
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise<void>((resolve) => {
+      realSetImmediate(resolve);
+    });
+  }
+  restore();
+  assert.equal(recorded.length, 1, "the entry handed the attach's start to setImmediate once");
+  assert.deepEqual(hits, [], "no stand-in socket was dialled while the deferral is held");
+  assert.ok(statuses.length > 0 && statuses.every((text) => !text.includes("realm active")), "the status item shows connecting");
+
+  recorded[0]?.();
+  await pollUntil(() => statuses.some((text) => text.includes("realm active")), "the attach proceeds once the deferral runs");
+  assert.ok(hits.length > 0, "the stand-in answered the attach");
+});

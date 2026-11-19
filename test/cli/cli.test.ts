@@ -20,8 +20,8 @@ import {
   type CliResult,
   type ConnectDaemon,
   type SendControlRequest,
-  type SpawnDaemon,
 } from "../../src/cli/main.js";
+import type { SpawnDaemon } from "../../src/daemon/launch.js";
 import { CONTROL_TIMEOUT_MS, DaemonAbsentError, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";

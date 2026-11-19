@@ -9,7 +9,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
-import { runCli, type ConnectDaemon, type SpawnDaemon } from "../../src/cli/main.js";
+import { runCli, type ConnectDaemon } from "../../src/cli/main.js";
+import type { SpawnDaemon } from "../../src/daemon/launch.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
 import type { ControlSelection } from "../../src/daemon/channel.js";
 import { makeRealmError } from "../../src/core/errors.js";

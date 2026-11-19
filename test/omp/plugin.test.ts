@@ -937,6 +937,8 @@ void test("timers: session shutdown clears the attach budget and the poll, and a
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
+  // The attach's start is a microtask that skips an ended session, so one turn lets the attach begin before the shutdown.
+  await yieldTurn();
   const budgetHandle = armedTimer(fixture.ctx, STARTUP_BUDGET_MS).handle;
   const pollHandle = pollOf(fixture.ctx).handle;
 
@@ -2545,6 +2547,8 @@ void test("onAttach: a superseded attempt reports nothing", async () => {
     extra: { onAttach: (outcome) => { events.push(outcome); }, onSessionEnd: () => { ends.push("end"); } },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
+  // The first attempt's start is a microtask that skips a superseded attempt, so one turn lets it begin and hold before the second start.
+  await yieldTurn();
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitUntil(() => events.length === 1);
   assert.deepEqual(ends, ["end"], "the replaced session ended once");

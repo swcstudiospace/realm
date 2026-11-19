@@ -10,12 +10,10 @@
 // (main hands over the host environment once, at the entry edge), so every command path stays
 // hermetic under test.
 
-import { spawn } from "node:child_process";
-import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
 import type { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
 import { dialWithin } from "../core/timeout.js";
-import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
 import { packageVersion } from "../core/package-version.js";
 import {
   sendRequest,
@@ -26,9 +24,8 @@ import {
   type ControlSelection,
 } from "../daemon/channel.js";
 import { connectDaemon, selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
-import { findNodeBinary } from "../daemon/node-runtime.js";
-import { daemonSpawnEnv } from "../daemon/spawn-env.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
+import { defaultSpawnDaemon, launchFilteredDaemon, type SpawnDaemon } from "../daemon/launch.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
@@ -162,20 +159,6 @@ function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   return undefined;
 }
 
-export interface SpawnedProcess {
-  unref(): void;
-}
-
-export type SpawnDaemon = (
-  file: string,
-  args: readonly string[],
-  options: {
-    readonly detached: true;
-    readonly stdio: readonly ["ignore", number, number];
-    readonly env: EnvironmentLike;
-  },
-) => SpawnedProcess;
-
 export type SendControlRequest = (
   socketPath: string,
   request: ControlRequest,
@@ -282,16 +265,6 @@ function defaultSend(
   return sendRequest(socketPath, request, { timeoutMs });
 }
 
-function defaultSpawnDaemon(
-  file: string,
-  args: readonly string[],
-  options: Parameters<SpawnDaemon>[2],
-): SpawnedProcess {
-  const child = spawn(file, [...args], { detached: options.detached, stdio: [...options.stdio], env: options.env });
-  child.unref();
-  return child;
-}
-
 // The compiled daemon entry beside this module (dist/src/daemon/main.js). Derived from
 // import.meta.url with the global URL: node:url is outside the P6-D7 allowlist.
 function defaultDaemonEntry(): string {
@@ -390,25 +363,6 @@ function upResult(reply: ControlReply): CliResult {
   return { exitCode: 1, stdout: `${renderResult(reply.result)}\n`, stderr: `${code}: ${reason}\n` };
 }
 
-// The daemon's startup log: <stateDir>/daemon.log, append-only and owner-only. The state directory is
-// made at 0700 when missing, because the log opens before the daemon creates it. The child keeps its own
-// copy of the descriptor, so the parent closes its copy once the spawn returns.
-function withDaemonLog(stateDir: string, launch: (log: number) => void): void {
-  // Missing ancestors take the default mode; only the state directory itself is made 0700.
-  const cut = stateDir.lastIndexOf("/");
-  if (cut > 0) {
-    mkdirSync(stateDir.slice(0, cut), { recursive: true });
-  }
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const log = openSync(daemonLogPath(stateDir), "a", 0o600);
-  try {
-    fchmodSync(log, 0o600);
-    launch(log);
-  } finally {
-    closeSync(log);
-  }
-}
-
 // The line a failed attach adds to stderr, naming the startup log so the user can read the daemon's own
 // error. The log's contents are never printed.
 function daemonLogHint(stateDir: string): string {
@@ -427,41 +381,6 @@ function spawnDetachedDaemon(deps: ResolvedDeps): () => void {
     const entry = deps.daemonEntry ?? defaultDaemonEntry();
     launchFilteredDaemon(entry, deps.stateDir, deps.env, deps.spawn);
   };
-}
-
-// Starts the daemon entry detached with the allowlisted environment (D-1505). The CLI spawn and
-// startDetachedDaemon both go through here, so a sentinel variable reaches neither child.
-export function launchFilteredDaemon(
-  entry: string,
-  stateDir: string,
-  source: EnvironmentLike,
-  spawnImpl: SpawnDaemon = defaultSpawnDaemon,
-  findNode: (pathValue: string | undefined) => string | null = findNodeBinary,
-): void {
-  // Under a Bun host process.execPath is the Omp binary, which would read the entry as a prompt and run an unsupervised
-  // agent session, so it is never used there. The daemon runs on the Node found in an absolute directory of the handed-in
-  // PATH; with none, the attach refuses with REALM_NOT_ACTIVE and no child exists.
-  let runtime = process.execPath;
-  if (Object.hasOwn(process.versions, "bun")) {
-    const node = findNode(source.PATH);
-    if (node === null) {
-      throw makeRealmError("REALM_NOT_ACTIVE");
-    }
-    runtime = node;
-  }
-  withDaemonLog(stateDir, (log) => {
-    spawnImpl(runtime, [entry], {
-      detached: true,
-      stdio: ["ignore", log, log],
-      env: daemonSpawnEnv(source),
-    });
-  });
-}
-
-// The documented CLI daemon spawn (P6-D1). The Omp extension imports it. The child receives the allowlisted
-// environment only; a stale REALM_DRIVER_*_ROOT variable is not passed.
-export function startDetachedDaemon(entry: string, stateDir: string): void {
-  launchFilteredDaemon(entry, stateDir, process.env);
 }
 
 // One control request's bound: an injected timeoutMs overrides it; otherwise the method's own
