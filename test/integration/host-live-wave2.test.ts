@@ -18,6 +18,9 @@
 //   A  dry run names the recipe's file and writes nothing
 //   B  install writes the recipe's value; status installed, launch on-path (the stub realm directory is on the isolated PATH)
 //   C  each validator command: exit, the expected output, and the stub argv (launches) or no stub run (prints only)
+//   C2 Grok Build only (48-01, D-48-05): the source cells. With the real recipe's config.toml entry and the Claude file both present the
+//      server named realm carries grok-build; with the Claude file alone it carries claude; both from `grok mcp doctor --json` and from the
+//      stub's recorded arguments. The HOME is put back before step D
 //   D  the host's own add command, when there is one: Realm's entry value-identical or recorded as drifted; the host's entry present
 //   E  uninstall removes Realm's entry (and the file and directories install created, when the host never touched the file); the host's
 //      own entries survive. A drifted entry is refused by uninstall; that refusal is recorded and asserted instead
@@ -60,7 +63,7 @@ import {
   stripAnsi,
   VALIDATOR_TIMEOUT_MS,
 } from "../support/host-live.js";
-import { parseLooseJson, valueAt, WAVE2_LIVE, WAVE2_LIVE_IDS, wave2Recipe, type Wave2LiveId } from "../support/host-live-wave2.js";
+import { doctorRealmLabel, parseLooseJson, valueAt, WAVE2_LIVE, WAVE2_LIVE_IDS, wave2Recipe, type Wave2LiveId } from "../support/host-live-wave2.js";
 import { isRecord } from "../support/omp-live.js";
 import { scaledMs, testTimeout } from "../support/timing.js";
 
@@ -122,7 +125,7 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
   const afterInstall = await hostStatusOf(rig, host);
   assert.equal(afterInstall["status"], "installed", JSON.stringify(afterInstall));
   assert.equal(afterInstall["launch"], "on-path", JSON.stringify(afterInstall));
-  const installedHash = fileSha256(file);
+  let installedHash = fileSha256(file);
 
   // C: the host's own commands.
   for (const validator of script.validators) {
@@ -153,6 +156,34 @@ async function scenario(t: TestContext, host: Wave2LiveId, gate: HostLiveGate): 
   }
   const afterValidators = await hostStatusOf(rig, host);
   t.diagnostic(`after the host's own commands: file ${fileSha256(file) === installedHash ? "untouched" : "rewritten"} by the host; realm host status ${String(afterValidators["status"])}`);
+
+  // C2: the source-precedence cells (48-01, CONTEXT D-48-05): the label the started server carries, per cell, from the stub's recorded arguments
+  // and from the doctor JSON. A Grok Build that changes the precedence fails here with the cell name, the label seen and the version.
+  if (script.sourceMatrix !== undefined) {
+    const matrix = script.sourceMatrix;
+    for (const cell of matrix.cells) {
+      for (const words of cell.setup) {
+        const step = cliJson(await rig.realm(words), `realm host ${words.join(" ")}`);
+        assert.ok(step["status"] === "installed" || step["status"] === "removed", `${cell.name}: realm host ${words.join(" ")}: ${JSON.stringify(step)}`);
+      }
+      const before = rig.stubInvocations().length;
+      const result = await rig.host(matrix.doctorArgs(rig), { timeoutMs: scaledMs(VALIDATOR_TIMEOUT_MS) });
+      requireReturned(result, `${spec.defaultBinary} ${matrix.doctorArgs(rig).slice(0, 3).join(" ")}`);
+      const seen = doctorRealmLabel(stripAnsi(result.stdout));
+      const calls = rig.stubInvocations().slice(before);
+      t.diagnostic(`source cell "${cell.name}": ${hostVersionNote(host, gate)}; the server named realm carried ${seen}; the stub was started ${String(calls.length)} time(s)`);
+      assert.equal(seen, cell.expectLabel, `source cell "${cell.name}": the doctor JSON must show the server named realm with --host ${cell.expectLabel}: ${describeRun(result)}`);
+      assert.ok(calls.length >= 1, `source cell "${cell.name}": doctor must start the registered command: ${describeRun(result)}`);
+      for (const call of calls) {
+        assert.deepEqual(call, ["mcp", "--host", cell.expectLabel], `source cell "${cell.name}": the stub must see exactly realm mcp --host ${cell.expectLabel}`);
+      }
+    }
+    for (const words of matrix.restore) {
+      const step = cliJson(await rig.realm(words), `realm host ${words.join(" ")}`);
+      assert.ok(step["status"] === "installed" || step["status"] === "removed", `restore: realm host ${words.join(" ")}: ${JSON.stringify(step)}`);
+    }
+    installedHash = fileSha256(file);
+  }
 
   // D: the host's own add command, when there is one.
   let drifted = afterValidators["status"] === "drifted";
