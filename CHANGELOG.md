@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-11-19
+
+### Documentation
+- docs(host): record legacy kimi window in registry, gaps, matrix and snippet (47-04) (#225) (3775439)
+
 ## [0.7.5] - 2026-11-19
 
 ### Fixed
