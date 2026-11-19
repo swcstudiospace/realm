@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-19
+
+### Changed
+- perf(omp): split the daemon launch out of the CLI and defer the Omp attach start one turn (44-02, OMPR-05) (#211) (1c7fac8)
+
 ## [0.6.6] - 2026-11-19
 
 ### Maintenance
