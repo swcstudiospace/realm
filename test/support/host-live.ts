@@ -1085,8 +1085,9 @@ async function checkAttribution(t: TestContext, inputs: LiveInputs, scenario: Sc
 // `codex` directory named by CODEX_HOME, OpenCode the `opencode` directory beside the scenario's realm/config.json (both tools read
 // their own subdirectory of one XDG_CONFIG_HOME), Kimi a `kimi` directory named by KIMI_SHARE_DIR, Kimi Code a `kimi-code` directory named
 // by KIMI_CODE_HOME, Muse Code the `muse` directory of the scenario's XDG_CONFIG_HOME (as OpenCode), Grok Build a HOME of its own
-// (GROK_HOME_DIR; no relocation variable exists). Returns the override variables to add to the scenario environment. A host that is none
-// of these is a programming error.
+// (GROK_HOME_DIR; no relocation variable exists) with the `.grok` config home below it, created here so the plan-time
+// config-home-missing refusal (src/host/install.ts: Realm never creates a host home) does not fire. Returns the override
+// variables to add to the scenario environment. A host that is none of these is a programming error.
 export function productionOverrides(host: HostProductionId, scenarioRoot: string, configHome: string): Record<string, string> {
   const overrides: Record<string, string> = {};
   switch (host) {
@@ -1110,6 +1111,7 @@ export function productionOverrides(host: HostProductionId, scenarioRoot: string
       break;
     case "grok-build":
       overrides["HOME"] = join(scenarioRoot, GROK_HOME_DIR);
+      mkdirSync(join(scenarioRoot, GROK_HOME_DIR, ".grok"), { recursive: true });
       break;
     default:
       throw new Error(`no production configuration home is defined for host ${String(host)}`);
