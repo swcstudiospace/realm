@@ -62,7 +62,7 @@ function record(init: RegistryRecord): RegistryRecord {
 
 const WAVE2_SUITE = "test/host/wave2-json-recipes.test.ts";
 
-// 25-CONTEXT OQ-25-09 and docs/integration/host-plugin-contract.md ("no wave 2 host has a production tier").
+// 25-CONTEXT OQ-25-09 and docs/integration/host-plugin-contract.md ("no wave 2 host other than Muse Code, Prime Agent and Grok Build has a production tier").
 const WAVE2_T3: RegistryT3 = { status: "none-defined", note: "config-only host: no production tier is defined (OQ-25-09)" };
 
 // The three deferrals were approved by the owner on 2026-11-17 (docs/hosts/snippets/deferred-hosts.md); each lift condition lives there.
@@ -261,8 +261,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
   // Source: contract page, Phase 25 table (T2: pi mcp list, launches, skips below pi 1.3.0, no result recorded) and OQ-25-09.
   pi: record({ id: "pi", family: "json-merge", suites: [WAVE2_SUITE], snippet: "pi.md", live: "pi", t2: null, t3: WAVE2_T3, deferral: null }),
   // Source: 40-CONTEXT D-40-02 and D-40-07 (the Phase 40 evidence E-40-02 to E-40-05). Live stays null (D-40-07: the test has a file of its own), so the T2
-  // text names the gate and the test file. Ran 2026-11-18 in an isolated home with a stub realm (no production stack): PASS. T3: Phase 48 (48-01 drive table,
-  // 48-02 wiring): the production tier is defined and has not been run; plan 48-04 writes the dated result.
+  // text names the gate and the test file. Ran 2026-11-18 in an isolated home with a stub realm (no production stack): PASS. T3: Phase 48 window
+  // 2026-11-19 (48-03): passed cold, Muse Code 1.4.24; the runtime tier is proven under owner decision OD-48-1 (plan 48-04).
   "muse-code": record({
     id: "muse-code",
     family: "json-merge",
@@ -276,8 +276,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       command: "realm host install muse-code, muse mcp list/get, muse mcp add, muse exec --provider echo, realm host uninstall (launches), gated test/integration/host-live-muse.test.ts, REALM_LIVE_MUSE=1",
     },
     t3: {
-      status: "not-run",
-      note: "no dated result: the production tier is defined (gate REALM_LIVE_PRODUCTION=1 plus REALM_LIVE_MUSE=1; command drive muse exec --provider echo --trust-workspace through the wire recorder, cold, from a new project directory; Phase 48 plan 48-02) and has not been run",
+      status: "rehearsed",
+      note: "Muse Code 1.4.24, 2026-11-19, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: muse exec --provider echo --trust-workspace returned after 5891 ms against the 300000 ms failure bound, the wire shows initialize, notifications/initialized and tools/list and the six Realm tools, the host left before the realm was ready by design, zero live sessions and an empty presence directory afterwards, clean before and after; the validator tier passed the same day; evidence kept outside the repository",
     },
     deferral: null,
   }),
@@ -302,7 +302,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     deferral: null,
   }),
   // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). Its live tier is the wave-2 table (D-40-07). Ran 2026-11-18 in an isolated home with a stub realm: PASS.
-  // T3: Phase 48 (48-01 drive table, 48-02 wiring): the production tier is defined and has not been run; plan 48-04 writes the dated result.
+  // T3: Phase 48 window 2026-11-19 (48-03): rehearsal failed at realm host install grok-build --dry-run (config-home-missing, POLICY_DENIED);
+  // the harness fix (create the grok config home in productionOverrides) is carried as GAP-48-03; the tier stays config-only (plan 48-04).
   "grok-build": record({
     id: "grok-build",
     family: "toml-table",
@@ -316,8 +317,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       command: "grok mcp list, grok mcp doctor (launches), grok mcp add, gated wave 2 validator tier, REALM_LIVE_GROK_BUILD=1",
     },
     t3: {
-      status: "not-run",
-      note: "no dated result: the production tier is defined (gate REALM_LIVE_PRODUCTION=1 plus REALM_LIVE_GROK_BUILD=1; health-check drive grok mcp doctor with HOME set to a scenario directory and a per-run leader socket, through the wire recorder, cold, from a new project directory; an attribution test with realm in config.toml and in the Claude file, and a Claude-file-alone control; Phase 48 plan 48-02) and has not been run",
+      status: "gap",
+      note: "rehearsal failed: Grok Build 1.0.77, 2026-11-19, production stack (realmlive account, Podman 5.7.1): realm host install grok-build --dry-run exited 1 with config-home-missing (candidate POLICY_DENIED) because the scenario creates an isolated grok-home but Realm never creates a host home (src/host/install.ts); the host command grok mcp doctor never ran, no wire and no audit line were produced; the harness fix (create the grok config home in productionOverrides of test/support/host-live.ts) is carried as GAP-48-03",
     },
     deferral: null,
   }),

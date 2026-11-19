@@ -18,7 +18,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const MCP_CONFIG_IDS: readonly HostId[] = HOST_IDS.filter((id) => HOST_RUNTIMES[id].integration === "mcp-config");
 
 // Each shipped file that is one host's own launcher, and the id it carries (a copy of another host's label fails). The Claude bundle is
-// shared with Grok Build by the Grok Build page and stays labelled claude (GAP-40-01).
+// shared with Grok Build by the Grok Build page and stays labelled claude (GAP-40-01, accepted-residual: the live both-files attach was not shown in Phase 48).
 const OWN_ID_OF_FILE: readonly (readonly [string, HostId])[] = [
   ["adapters/muse-code/mcp-settings.snippet.json", "muse-code"],
   ["docs/hosts/snippets/muse-code.md", "muse-code"],

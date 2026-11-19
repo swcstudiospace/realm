@@ -62,7 +62,7 @@ void test("HOSTID-01 muse-code: the row is the golden entry of `muse mcp add` pl
   assert.deepEqual(recipe.seed, { schema_version: 1 });
   assert.deepEqual(recipe.refuseIfPresent, ["mcp_servers"]);
   assert.deepEqual(parseDoc(MUSE_MCP_ADD_FILE)["mcpServers"], { realm: MUSE_MCP_ADD_ENTRY });
-  assert.equal(HOST_RUNTIMES["muse-code"].tier, "config-only");
+  assert.equal(HOST_RUNTIMES["muse-code"].tier, "proven");
 });
 
 void test("HOSTID-01 muse-code: a file Realm creates holds schema_version then the entry, and the dry run writes nothing", async (t) => {

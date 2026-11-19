@@ -1,5 +1,5 @@
-// BOOTP-01 and BOOTP-02 (31-CONTEXT D-31-09): docs/integration/wave1-boot-matrix.md is the production-stack boot status of the five wave 1
-// hosts. This test ties each row to the evidence registry (the Disposition is the T3 status of the host's record), requires a date and a
+// BOOTP-01 and BOOTP-02 (31-CONTEXT D-31-09, Phase 48): docs/integration/wave1-boot-matrix.md is the production-stack boot status of the five wave 1
+// hosts and the three Phase 48 hosts (muse-code, prime-agent, grok-build). This test ties each row to the evidence registry (the Disposition is the T3 status of the host's record), requires a date and a
 // version on a row that claims a result, requires every gap the page names to be on the gaps page, requires the three mandatory sections
 // and refuses a host-local path. Reads files only: nothing is written and no process starts.
 
@@ -15,7 +15,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const PAGE = join(REPO_ROOT, "docs", "integration", "wave1-boot-matrix.md");
 const GAPS_PAGE = join(REPO_ROOT, "docs", "integration", "host-plugin-gaps.md");
 
-const WAVE1 = ["claude", "codex", "opencode", "kimi", "kimi-code"] as const;
+const WAVE1 = ["claude", "codex", "opencode", "kimi", "kimi-code", "muse-code", "prime-agent", "grok-build"] as const;
 const DISPOSITIONS: readonly string[] = ["rehearsed", "failed", "not-run", "gap"];
 const FAILED_PREFIX = "rehearsal failed";
 
@@ -68,7 +68,7 @@ function expectedDisposition(host: (typeof WAVE1)[number]): string {
   }
 }
 
-void test("BOOTP: the matrix has exactly the five wave 1 hosts, in order, with a known disposition", () => {
+void test("BOOTP: the matrix has exactly the five wave 1 hosts and the three Phase 48 hosts, in order, with a known disposition", () => {
   assert.deepEqual(
     ROWS.map((row) => row.host),
     [...WAVE1],

@@ -8,11 +8,11 @@
 // production stack; that of kimi is a command drive (`kimi mcp test realm`, 43-CONTEXT). The production tier of codex and kimi-code is a
 // session drive (`codex exec`, `kimi -p` against a refusing loopback provider; 31-CONTEXT D-31-02, and for kimi-code one fixed non-secret
 // key) that makes the host launch the registered server and list its tools. In every production run the registered `realm` is a wire
-// recorder (test/support/host-live-session.ts) that logs method names and tool names. The eleven wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline, prime-agent, grok-build) share one
-// table-driven validator file, test/integration/host-live-wave2.test.ts, and have no production tier (config-only, 25-CONTEXT D-25-08), except Grok Build (Phase 48: the health
-// check `grok mcp doctor`, test/integration/host-live-wave2-production.test.ts) and Muse Code, which has a gated file of its own (test/integration/host-live-muse.test.ts; a command
-// drive, `muse exec --provider echo`). Prime Agent has no credential-free drive (48-01 blocker B-48-02, PRIME_AGENT_PRODUCTION_GAP).
-// Antigravity has no live file at all (ANTIGRAVITY_GAP).
+// The eleven wave-2 hosts (qwen, pi, hermes, cursor, kilo, copilot, augment, codebuddy, cline, prime-agent, grok-build) share one
+// table-driven validator file, test/integration/host-live-wave2.test.ts. The rest stay config-only with no production tier
+// (CONFIG_ONLY_GAP, 25-CONTEXT D-25-08). Grok Build has a production tier (Phase 48: the health check `grok mcp doctor`,
+// test/integration/host-live-wave2-production.test.ts), Muse Code has a gated file of its own (test/integration/host-live-muse.test.ts;
+// a command drive, `muse exec --provider echo`). Prime Agent has no credential-free drive (48-01 blocker B-48-02, PRIME_AGENT_PRODUCTION_GAP).
 //
 // Gate order of hostLiveSkipReason, the first failing check names the skip (no test ever sets a gate variable):
 //   1. the host's opt-in variable is exactly 1 (REALM_LIVE_<HOST>, for example REALM_LIVE_CLAUDE or REALM_LIVE_QWEN)

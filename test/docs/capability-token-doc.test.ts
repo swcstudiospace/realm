@@ -299,8 +299,9 @@ void test("HOSTID-03: each of the three snippet pages names the install command 
     for (const other of ids.filter((candidate) => candidate !== id)) {
       assert.ok(!page.includes(`--host ${other}`), `${id}: the page carries no launcher labelled ${other}`);
     }
-    assert.ok(page.includes("`config-only`"), `${id}: the page states the tier`);
-    assert.ok(page.includes("GAP-40-01") || page.includes("GAP-34-01"), `${id}: the page names the gap row`);
+    const tierWord = id === "muse-code" ? "proven" : "config-only";
+    assert.ok(page.includes(`\`${tierWord}\``), `${id}: the page states the tier`);
+    assert.ok(page.includes("GAP-40-01") || page.includes("GAP-34-01") || page.includes("GAP-48-01"), `${id}: the page names the gap row`);
   }
 });
 
@@ -341,10 +342,22 @@ void test("ENF-03: GAP-34-01 is closed on the gaps page, names the three hosts t
   }
 });
 
-void test("ENF-03: GAP-40-01 is an accepted residual naming Grok Build and the shared Claude configuration", () => {
+void test("ENF-03: GAP-40-01 is an accepted residual naming Grok Build and the shared Claude configuration, with the missing Grok Build feature named", () => {
   const page = read("docs/integration/host-plugin-gaps.md");
   const row = page.split("\n").find((line) => line.startsWith("| GAP-40-01 |"));
   assert.ok(row !== undefined, "GAP-40-01 exists");
+  const cells = cellsOf(row);
+  assert.equal(cells[3], "accepted-residual");
+  assert.equal(cells[4], "accepted");
+  assert.ok((cells[2] ?? "").includes("Grok Build"), "the row names Grok Build");
+  assert.ok((cells[2] ?? "").includes("Claude"), "the row names the Claude configuration");
+  assert.ok((cells[6] ?? "").includes("names the host in a shared file") || (cells[6] ?? "").includes("per-vendor MCP switch"), "the row names the missing Grok Build feature");
+});
+
+void test("ENF-03: GAP-48-01 is an accepted residual naming Grok Build and the Claude configuration", () => {
+  const page = read("docs/integration/host-plugin-gaps.md");
+  const row = page.split("\n").find((line) => line.startsWith("| GAP-48-01 |"));
+  assert.ok(row !== undefined, "GAP-48-01 exists");
   const cells = cellsOf(row);
   assert.equal(cells[3], "accepted-residual");
   assert.equal(cells[4], "accepted");
