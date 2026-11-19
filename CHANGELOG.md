@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-19
+
+### Documentation
+- docs(milestone): complete and archive v6.0 (phases 38 to 44), audit, bookkeeping, status docs (#213) (2fe19dc)
+- docs(phase-44): paired loaded A/B window recorded: VOID (3 valid pairs of 5), no effect claim (#212) (b7720c8)
+
 ## [0.6.7] - 2026-11-19
 
 ### Changed
