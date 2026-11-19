@@ -89,6 +89,8 @@ import {
   RAPID_ITERATIONS_VARIABLE,
   RAPID_MAX_FAILURES_VARIABLE,
   RAPID_VARIANTS_VARIABLE,
+  chainStartEvidenceLine,
+  recordChainStartFailure,
   chainStep,
   classifyStop,
   classifyUp,
@@ -204,6 +206,18 @@ function sleep(ms: number): Promise<void> {
 // A host reason: the stack, the lock or the harness itself is not in the state the chain needs. It ends the window as VOID, never
 // as a product failure.
 class ChainAbort extends Error {}
+
+// The settled first up of a chain failed (the up exited non-zero, or the session did not reach active, or the scratch exec failed).
+// It is a counted failure of its own kind, not a host reason: the chain is cleaned and a new chain starts.
+class ChainStartFailure extends Error {
+  constructor(
+    readonly chain: Chain,
+    readonly up: UpOutcome,
+    readonly active: boolean,
+  ) {
+    super("the settled first up of the chain failed");
+  }
+}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -396,6 +410,48 @@ async function execInSandbox(): Promise<boolean> {
   return executed.exitCode === 0;
 }
 
+// The evidence of a settled first up of a chain that failed, written before the chain's cleanup removes the scenario: the whole
+// request log and daemon log from the offsets taken before the up (the daemon's stderr is in daemon.log, so the AgentOS driver's
+// create failure line, which carries the exit code and the stderr of the OpenShell create, is in it), the unit journals and the
+// Podman events for the window, and the gateway status. A source that cannot be read is written as an unavailable line.
+async function captureChainStart(
+  chain: Chain,
+  offsets: { readonly request: number; readonly daemon: number },
+  sinceMs: number,
+): Promise<void> {
+  const stateDir = chain.environment.stateDir;
+  const untilMs = Date.now();
+  const write = (name: string, text: string): void => {
+    evidenceFile(chain.directory, `chain-start-${name}`, text);
+  };
+  write("request-log-slice.log", textFrom(requestLogPath(stateDir), offsets.request) ?? "unavailable: the request log could not be read\n");
+  write("daemon-log-slice.log", textFrom(daemonLogPathOf(stateDir), offsets.daemon) ?? "unavailable: the daemon log could not be read\n");
+  for (const [suffix, unit] of [
+    ["driver-journal.txt", driverUnit],
+    ["gateway-journal.txt", gatewayUnit],
+  ] as const) {
+    if (unit === undefined) {
+      write(suffix, "unset\n");
+      continue;
+    }
+    const journal = await hostCall(
+      "journalctl",
+      ["--user", "--unit", unit, "--since", journalTime(sinceMs - WINDOW_MARGIN_MS), "--until", journalTime(untilMs + 2 * WINDOW_MARGIN_MS), "--output", "short-iso-precise", "--no-pager"],
+      JOURNAL_CALL_MS,
+    );
+    write(suffix, journal.exitCode === 0 ? journal.stdout : unavailable(journal));
+  }
+  const events = await hostCall(
+    "podman",
+    ["events", "--since", new Date(sinceMs - WINDOW_MARGIN_MS).toISOString(), "--until", new Date(untilMs + WINDOW_MARGIN_MS).toISOString(), "--stream=false", "--format", "json"],
+    JOURNAL_CALL_MS,
+  );
+  write("podman-events.json", events.exitCode === 0 ? events.stdout : unavailable(events));
+  const gateway = await openshellCli(inputs(), ["status"], tmpdir(), HOST_CALL_MS);
+  write("gateway-status.txt", gateway.exitCode === 0 ? gateway.stdout : unavailable(gateway));
+  write("load.txt", `${String(cpuLoad())}\n`);
+}
+
 // Step 1 of a chain: a scenario environment, a settled stack, no daemon, and, for the variants that stop a daemon that holds a
 // session (a, b, s), a realm up that reaches active and one scratch exec. Variant c starts every iteration from this settled state.
 async function startChain(variant: RapidVariant, number: number): Promise<Chain> {
@@ -410,17 +466,18 @@ async function startChain(variant: RapidVariant, number: number): Promise<Chain>
   if (variant === "c") {
     return chain;
   }
+  const offsets = { request: fileSize(requestLogPath(environment.stateDir)), daemon: fileSize(daemonLogPathOf(environment.stateDir)) };
+  const upStartMs = Date.now();
   const started = await realmCli(live, environment, ["up", "--workspace", live.workspaceRoot], UP_TIMEOUT_MS);
   evidenceFile(directory, "chain-start-up.txt", upText(started));
   if (started.exitCode !== 0) {
-    throw new ChainAbort(`the settled first up of the chain failed: ${describeResult(started)}`);
+    await captureChainStart(chain, offsets, upStartMs);
+    throw new ChainStartFailure(chain, classifyUp(upRunOf(started), ""), false);
   }
   const active = await waitForActive(live, environment, ACTIVE_TIMEOUT_MS);
-  if (!active.ok) {
-    throw new ChainAbort(`the settled first up of the chain did not reach active: ${active.detail}`);
-  }
-  if (!(await execInSandbox())) {
-    throw new ChainAbort("the scratch exec of the chain start failed");
+  if (!active.ok || !(await execInSandbox())) {
+    await captureChainStart(chain, offsets, upStartMs);
+    throw new ChainStartFailure(chain, classifyUp(upRunOf(started), ""), active.ok);
   }
   return chain;
 }
@@ -1001,6 +1058,7 @@ async function runVariant(t: TestContext, variant: RapidVariant): Promise<void> 
     chainNumber += 1;
     let chain: Chain | undefined;
     let failure: unknown;
+    let startFailure: ChainStartFailure | undefined;
     try {
       chain = await startChain(variant, chainNumber);
       action = "continue";
@@ -1018,9 +1076,26 @@ async function runVariant(t: TestContext, variant: RapidVariant): Promise<void> 
         writeSummary(false);
       }
     } catch (error: unknown) {
-      failure = error;
+      if (error instanceof ChainStartFailure) {
+        startFailure = error;
+        chain = error.chain;
+      } else {
+        failure = error;
+      }
     }
     const cleaned = chain === undefined ? undefined : await endChain(chain);
+    if (startFailure !== undefined) {
+      // The settled first up of the chain failed: kept and counted as a failure of its own kind (never as a reproduction), the
+      // chain is cleaned, and a new chain starts unless the failure cap is reached.
+      const step = recordChainStartFailure(state);
+      state = step.state;
+      action = step.action;
+      const line = chainStartEvidenceLine(variant, chainNumber, startFailure.up, startFailure.active);
+      appendFileSync(join(evidenceDir, "iterations.txt"), `${line}\n`, { mode: 0o600 });
+      t.diagnostic(line);
+      setResult(variant, state, action === "variant-done-failed" ? "failure-cap" : "host");
+      writeSummary(false);
+    }
     if (failure !== undefined) {
       hostStops.push(failure instanceof ChainAbort ? "chain-abort" : "harness-error");
       evidenceFile(evidenceDir, `${variant}-chain${String(chainNumber)}-host-stop.txt`, `${describeError(failure)}\n`);

@@ -12,6 +12,8 @@ import {
   CONTROL_ITERATIONS,
   MID_UP_DELAY_MS,
   TARGET_CLEAN_ITERATIONS,
+  chainStartEvidenceLine,
+  recordChainStartFailure,
   chainStep,
   classifyStop,
   classifyUp,
@@ -365,6 +367,37 @@ void test("failureKindsOf: a failing realm down after a variant c iteration is a
   assert.equal(step.action, "restart-chain");
   assert.deepEqual(step.state.failures, [{ iteration: 1, kinds: ["down-failed"] }]);
   assert.equal(windowOutcome([{ variant: "c", state: step.state, ended: "host" }]).outcome, "OTHER-FAILURE");
+});
+
+void test("recordChainStartFailure: a failed settled first up is kept and counted, resets the consecutive count, and is never a reproduction", () => {
+  let state = newChainState("b", 20, 2);
+  state = chainStep(state, cleanOutcome()).state;
+  assert.equal(state.consecutiveClean, 1);
+  const first = recordChainStartFailure(state);
+  assert.equal(first.action, "restart-chain");
+  assert.equal(first.state.consecutiveClean, 0);
+  assert.equal(first.state.iterations, 1, "a chain start failure is not an iteration");
+  assert.equal(first.state.cleanIterations, 1);
+  assert.deepEqual(first.state.failures, [{ iteration: 1, kinds: ["chain-start-failed"] }]);
+  const second = recordChainStartFailure(first.state);
+  assert.equal(second.action, "variant-done-failed");
+  assert.equal(second.state.failures.length, 2);
+  // Even when the settled up failed with OPENSHELL_START_FAILED, the window reads OTHER-FAILURE, never REPRODUCED.
+  const window = windowOutcome([{ variant: "b", state: first.state, ended: "host" }]);
+  assert.equal(window.outcome, "OTHER-FAILURE");
+  assert.equal(window.counts[0]?.startFailed, 0);
+});
+
+void test("chainStartEvidenceLine: the up kind, its codes and whether the session reached active, in closed phrases", () => {
+  assert.equal(
+    chainStartEvidenceLine("b", 1, { kind: "start-failed", causeCode: undefined, notice: false }, false),
+    "variant=b chain=1 stage=chain-start result=failed up=start-failed upCode=none upCause=none active=no",
+  );
+  assert.equal(
+    chainStartEvidenceLine("a", 2, { kind: "other-failure", code: "REALM_STOPPING", notice: false }, false),
+    "variant=a chain=2 stage=chain-start result=failed up=other-failure upCode=REALM_STOPPING upCause=none active=no",
+  );
+  assert.equal(chainStartEvidenceLine("a", 3, { kind: "ok", notice: false }, false), "variant=a chain=3 stage=chain-start result=failed up=ok upCode=none upCause=none active=no");
 });
 
 void test("chainStep: a clean iteration continues until the consecutive count reaches the target, then the variant is done clean", () => {

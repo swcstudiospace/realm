@@ -106,3 +106,69 @@ OBS-C (the variant c stop with no `daemon.stopped` row) did not recur: 0 row-abs
 - F-46-1: cause established to the strength stated in 4.3 (INFERENCE with named support; the cause code of the failed step was not recorded). Classification: a request bound too tight for an occasional slow Podman container stop, plus a failure report that did not re-read the container. The fix is a bounded confirmation wait after a stop or force removal request that missed its request bound (PODMAN_MACHINE_DOWN): the container state is read every 500 ms for at most 10 s, success only when the container has ended, otherwise the same failed step as before. It adds one stage (10 s) to the session-end worst case: teardown bound 60 to 70 s, `down` client bound 75 to 85 s. A red-first hermetic test (`test/runtime/container-stop-confirm.test.ts`) failed on the unchanged code in the two cases that need the confirmation. Labelled: fixed hermetically, not verified live.
 - OBS-C and E-46-09 (SIGTERM during startup): not observed (the one variant c signal came after the startup report). No change is made; the owner's decision to fix it if the data confirms does not apply yet.
 - What plan 46-04 must run: the harness as corrected (a post-iteration `down` failure is the failure kind `down-failed`, not an abort); variant a for at least 20 consecutive stop-then-up iterations with zero `OPENSHELL_START_FAILED`, `failedTeardowns` 0 in every row, zero residue; variants b and c at 20 each as the no-regression check, and variant s only if a failure appears; the daemon exit bound of the harness is now 100 s. A stop that fails again must be kept with the container samples and the driver journal, and the cause code of the failed step should be recorded: that needs one more capture (a log line of the failed step and its cause code), proposed for the next window if a failure recurs.
+
+## 9. Verification window (plan 46-04): rapid stop then up, 2026-11-19, the fixed build
+
+**Label:** rapid stop then up, verification window, 2026-11-19, about 10:32 to 11:05 UTC, production stack as the realm account (rootless Podman 5.7.1), shared live lock, residue clean before and after. Build: main with the plan 46-03 fix (the orchestrator gives the merge commit as ea04e1c; the harness summary line for the commit reads unknown because the built copy had no git metadata) and the daemon exit bound of the harness at 100 s. Evidence stays outside the repository; this section holds numbers, booleans and closed phrases only.
+
+**Loaded host (OBSERVED).** The host was heavily loaded by other work: the load average read 12.3 before the window, 67.8 after the reaper step and 70.8 at the end, on 8 CPUs; the load per CPU read before each stop of variant a ranged 1.14 to 8.84. Node v24.18.0, package version 0.7.4, 8 CPUs, iteration target 20, failure cap 3, both unit variables set, sample intervals as in section 2.
+
+### 9.1 Outcome by the frozen rule
+
+**VOID.** Variant a ran to its target; variant b ended at its chain start (a host stop in the harness, see 9.3); variant c and the control s did not run (the window was halted). No failure of the kinds that give REPRODUCED or OTHER-FAILURE was recorded, and fewer than all of a, b and c completed, so D-46-02 gives VOID: the counts reached and the reason, none of the three other words. The window was also run with a target of 20 per variant, below the 50 that NOT-REPRODUCED needs, so it could not have given that word.
+
+| Variant | Iterations | Clean | Failed | Ended |
+| --- | --- | --- | --- | --- |
+| a | 20 | 20 | 0 | target (20 consecutive) |
+| b | 0 | 0 | 0 | host stop at the settled first up of chain 1 |
+| c | not run | none | none | window halted |
+| s | not run | none | none | window halted |
+
+### 9.2 Variant a, 20 stop-then-up iterations on one sandbox name with no settle (OBSERVED)
+
+- 20 of 20 iterations clean; 20 `daemon.stopping` rows and 20 `daemon.stopped` rows (0 rows absent), `failedTeardowns` 0 and no code in all 20; 0 ups failed (0 with `OPENSHELL_START_FAILED`); every up reached active and ran one exec; the late-supervisor counts were 0 in all 20; the status notice was present on all 20 ups (as in 4.4, it separates nothing).
+- Stop times (signal to the daemon's exit): minimum 2092 ms, median 9856 ms, maximum 12176 ms; the up after each stop took 21.9 to 49.8 s (median 30.9 s), longer than in the first window (loaded host).
+- Residue: 0 containers, 0 sandboxes, an empty pinned workspace and no daemon before the window, after the reaper step and at the end.
+
+### 9.3 Variant b: a start failure at the chain start (OBSERVED), not a stop-then-up iteration
+
+Variant b never ran an iteration. Its chain 1 starts with a settled `realm up`, and that up failed: exit 1, session state error with reason OPENSHELL_START_FAILED, at 10:53:07Z. The harness took any failure of that up as a host stop (chain abort), so the window ended VOID there.
+
+What the files show, in time order (UTC, 2026-11-19):
+
+- Variant a ended with its 20th up active at 10:51:36. The chain cleanup (`realm down`) then stopped the container (the sandbox phase went to Error with reason stopping at 10:52:00.9; Podman logged that SIGTERM failed to stop the container in 2 seconds and it was killed, 10:52:01.9) and the sandbox delete finished at 10:52:11.9 (5.4 s). The residue wait, the new scenario, the settle checks (no driver host supervisor, no realm sandbox at the gateway, no container for the name) and the daemon start followed. **So the failing up came about 35 s after the cleanup, on a settled stack: it is not the immediate stop-then-up shape of F-41-1, and it is not a reproduction under D-46-02** (which counts an up that fails right after a stop with no settle).
+- The gateway's `CreateSandbox` for that up began at about 10:52:47.3 and returned at 10:53:04.67 after 17.4 s with gRPC status 13 (INTERNAL). All 20 creates of variant a returned ok, in 1.9 to 10.6 s.
+- Inside that interval Podman did not answer a bounded request: the compute driver's Podman poll failed with PODMAN_MACHINE_DOWN at 10:53:01.8, and the gateway's store reconciliation sweep got "the podman machine is not running" at 10:53:02.2. Neither line appears in any window of variant a (driver journal poll failures 0 of 20).
+- At 10:53:07.26 the gateway served a `DeleteSandbox` for the session's name that completed in 0 ms (nothing left to delete): the daemon's cleanup after the failed create. The up reported OPENSHELL_START_FAILED 0.3 s later.
+
+### 9.4 Cause record for the b start failure (INFERENCE; the failing step is not established)
+
+- **READ:** the driver's create runs `startContainer` and an inspect inside `startAndVerify`; any libpod failure there makes the driver discard the container and refuse with OPENSHELL_START_FAILED carrying the libpod code as its cause (`src/runtime/driver/lifecycle.ts`), which maps to gRPC INTERNAL (`src/runtime/driver/grpc-status.ts`); the OpenShell create CLI then exits non-zero and the AgentOS driver throws OPENSHELL_START_FAILED with no cause (`src/runtime/agentos-driver.ts`), which the daemon reports. Every libpod request is bounded at 5 s and a missed bound is PODMAN_MACHINE_DOWN (`src/runtime/libpod-client.ts`). The driver logs only SCHEMA_INVALID refusals, so a refusal with a libpod cause leaves no line in its journal.
+- **INFERENCE (fits all the observations, not shown by them):** a libpod request of the driver's create missed its 5 s bound while Podman was stalled on the loaded host, the driver refused the create, and the up failed. This fits the INTERNAL status after 17.4 s, the PODMAN_MACHINE_DOWN lines of two components at the same moment, the silent driver journal and the 0.3 s from the failed create to the failed up.
+- **Not established:** which libpod request, how long Podman stalled, and whether another step (the runtime listener wait, the host supervisor exiting before Ready) produced the same refusal. The cause code of the refusal is in no file: the daemon log, which holds the line with the exit code and stderr of the OpenShell create, was removed with the scenario by the chain cleanup before anyone read it, and the harness had captured nothing at the chain start.
+- **Classification:** not a leftover of variant a's last stop (the settled stack, the 35 s gap and the 20 clean ups before it); consistent with a start-path failure under host load unrelated to a previous sandbox, i.e. the shape of candidate M5, shown possible once on a settled stack. It does not show that M5 explains F-41-1: that failure followed a stop with no settle on a different host load. M1 to M4 stay NOT TESTED.
+- **Fix:** none. No bounded, testable change is clear without knowing which request failed: raising a libpod bound, retrying a create after a libpod stall, or retrying the refused up each change behavior and need that step first.
+
+### 9.5 The four STOP-04 conditions (plan 46-04 Task 6), applied
+
+| Condition | Variant a | Whole window |
+| --- | --- | --- |
+| At least 20 consecutive stop-then-up iterations on one sandbox name with no settle | MET (20) | the window is VOID |
+| Zero OPENSHELL_START_FAILED | MET for the 20 ups of variant a (0); one OPENSHELL_START_FAILED occurred in the same window at the settled chain start of variant b (9.3) | not met as a window |
+| `failedTeardowns` 0 in every `daemon.stopped` row, none absent | MET (20 of 20 rows, 0 absent) | b, c, s have no stops |
+| Zero residue at the end and between chains | MET at the three snapshots; one chain only | variants b, c, s not run |
+
+Per the plan, STOP-04 is met only if all four are met and the window is not VOID; the window is VOID, so **STOP-04 is recorded as not met**, with variant a's result recorded as met for its own 20 iterations. The variant c missing row (D-46-07) was not explained: variant c did not run in this window, and in the first window the one variant c stop wrote both rows (section 5), so the reading stays not established. Variants b and c were not rerun at their original counts.
+
+### 9.6 What the 20 of 20 does and does not show about the plan 46-03 fix
+
+- It shows 20 consecutive stop-then-up iterations on one host and one commit under a loaded host, none failing at the stop or at the up.
+- **It does not show that the fix was exercised.** The fix acts only when the libpod stop request misses its 7 s bound. In this window no stop got near that: the time before the sandbox delete was at most 6.3 s (the failing stops of the first window had 7.6 to 8.5 s), the container reached exited within 5.3 s in every stop where it was sampled, and the driver's Podman poll failed in none of the 20 windows. The host was loaded, but Podman's container stop was not slow. At the first window's rate (6 failed stops of 51) the chance of 20 clean stops is about 8 percent, a weak sign and nothing more. The fix therefore stays labelled fixed hermetically, with live support that is weak and unproven; the slow stops it targets did not occur.
+- It does not show the start path safe under load: the same window recorded one start failure at a settled chain start.
+
+### 9.7 What the next window (b, c, control) must run
+
+- The harness as now changed: a failed settled first up of a chain is a counted failure of its own kind (`chain-start-failed`, never a reproduction) that keeps the whole request log and daemon log slice of the failed up, both unit journals and the Podman events before the cleanup removes the scenario; the chain is then cleaned and a new chain starts, up to the failure cap.
+- Variants b, c at 20 each and the control s with a fresh settle (the settle already runs before every chain), from a fresh built copy as the realm account under the shared lock. Run them while the host is not loaded by other work if the owner can arrange it, or record the load as in 9; a quieter host is the only way to separate a load effect from a defect.
+- If a settled chain start fails again, the daemon log slice names the exit code and the stderr of the OpenShell create; read it first, then the driver and gateway journals. The proposed product capture, not made here: a driver journal line for a create refusal that carries a libpod cause (the stage and the cause code, closed phrases), so that a refusal like the one in 9.3 is not silent.
+- To show the plan 46-03 fix live a window must contain a slow container stop (a stop whose time before the sandbox delete exceeds 7 s); if none occurs again the fix stays hermetic.
