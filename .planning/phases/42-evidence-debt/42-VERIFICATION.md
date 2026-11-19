@@ -28,6 +28,7 @@ covered_files:
   - "docs/integration/capability-token-evidence.md"
   - "test/docs/capability-token-evidence.test.ts"
   - "test/runtime/exec-watchdog.test.ts"
+covered_digest: "v3:sha256:7de492854ba8630253786bd9d0345c8e23ee006c14358e7460b8f0bc624ccf10"
 ---
 
 # Phase 42 Verification: evidence debt
