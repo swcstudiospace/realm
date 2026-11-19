@@ -3,7 +3,7 @@
 // a cold attach" had no method. The method: send `get_state` to a running Omp every 250 ms and measure the time from each send to the
 // response frame carrying its id. A probe that is never answered (10 s per probe) is an unanswered probe.
 //
-// Four tests, all gated:
+// Five tests, all gated:
 //   baseline     Omp with no extension in an isolated profile (a scripted provider serves models.yml and is never asked a turn). It needs no
 //                production stack. It shows what a quiet host answers on its own, so a slow attach is not confused with a loaded machine.
 //   control      Omp with no extension, probed from process start exactly as the cold attach is, until a probe was answered and 12 s have
@@ -13,12 +13,20 @@
 //                pinned workspace root. Probes are sent from process start until the status line shows `realm active` and the minimum window
 //                has passed since Omp's ready frame; the verdict reads the window from the ready frame (Phase 44 correction, below). The
 //                plugin starts the daemon itself on a cold attach. It needs the production stack and is run by a person in a live window.
-//   paired arm   one arm (before or after) of one pair of the paired loaded A/B of Phase 44 (44-CONTEXT D-44-06 and D-44-07): the control
-//                and the cold attach back to back in one test, a record and two samples files. It asserts mechanics only (no daemon at the
-//                start, the control answered, realm active reached, the session answers a command) and no latency; whether the build is
-//                faster is the paired analysis's question (test/support/paired-ab.ts). It is for a loaded host and its record carries the
-//                fixed label "loaded, paired": it never claims a quiet host, does not require one and does not read the loaded-host
-//                escape variable. It needs the production stack and REALM_OMP_PAIRED_ARM (before or after) and REALM_OMP_PAIRED_PAIR (1 to 10).
+//   paired arm   one arm (before or after) of one pair of the paired loaded A/B (44-CONTEXT D-44-06 and D-44-07; the validity of 45-CONTEXT
+//                D-45-06): the control and the cold attach back to back in one test, in the order controlFirst(runIndexOf(pair, arm)) gives
+//                (the control first for an odd run index, the cold attach first for an even one, so the order alternates), each Omp in its
+//                own transient scope with the same wrapper. It writes a record, two samples files and two readings files. It asserts
+//                mechanics only (no daemon at the start, the control answered, realm active reached, the session answers a command) and no
+//                latency: the verdict and the pair decision are computed from the records by test/support/omp-window-analysis.ts and not
+//                by this file. A refusal (the scope or a reading unavailable) is written to the record and then fails the test with a
+//                message that begins REFUSED, so it is never read as a pass. The record carries the tier label and the fixed label
+//                "loaded, paired": it never claims a quiet host, does not require one, reads no load average as a validity input and does
+//                not read the loaded-host escape variable. It needs the production stack, REALM_OMP_PAIRED_ARM (before or after) and
+//                REALM_OMP_PAIRED_PAIR (1 to 12).
+//   calibration  one scoped control with no extension (45-CONTEXT D-45-08), probed exactly as the control part of the arm test, for the
+//                calibration of the validity bounds: a record, its samples CSV and its readings CSV. It needs no production stack. It
+//                asserts that the control answered and nothing else. It needs REALM_OMP_CALIBRATION_RUN (1 to 16).
 //
 // Phase 44 correction (44-CONTEXT D-44-03; E-44-08 and E-44-09): the controls with no extension answer nothing for 9 to 15 s from process
 // start, so a window that starts there holds Omp's own boot, and the in-test baseline missed its bounds at low load averages in five of
@@ -28,6 +36,12 @@
 // The numbers over every sample are still computed and written beside the corrected ones, a labelled control-relative secondary reading
 // (window minus the in-run baseline) is added and is never a verdict, and the CPU pressure is recorded at each load reading. No
 // threshold is edited and the baseline assertion is not loosened.
+//
+// Phase 45 (45-CONTEXT D-45-03 to D-45-09): the paired arm and the calibration run every Omp process through one transient systemd scope
+// (test/support/omp-arm-run.ts, scopedWrap), read the scope's CPU pressure and the Omp main thread's run-queue time at every probe send and
+// answer, and write them as readings CSVs; validity is decided from that contention, never from the host load average (the load and
+// pressure readings the record keeps are descriptive). The baseline, control and cold-attach tests stay unscoped: they are the Phase 38
+// and Phase 44 instruments, unchanged. Tier labels: "loaded, scoped" (the default of this file) and "loaded, unscoped" (the fallback).
 //
 // Per-run record (Phase 38, 38-CONTEXT D-38-03): the control and the cold attach each write omp-responsiveness.<phase>.record.json to the
 // evidence directory (numbers, booleans, closed phrases and problem lines only), and the cold attach also writes
@@ -44,10 +58,14 @@
 //
 // Gate. The tests skip, naming the first missing prerequisite, unless REALM_LIVE_OMP_RESPONSIVENESS=1 and the Omp prerequisites hold
 // (REALM_LIVE_OMP=1, ompSkipReason); the cold-attach test and the paired arm also need the production prerequisites
-// (productionSkipReason). The file never sets a gate variable, never stops a daemon it did not start, never prints a secret.
+// (productionSkipReason), the calibration needs REALM_OMP_CALIBRATION_RUN. The file never sets a gate variable, never stops a daemon it
+// did not start, never prints a secret.
 //
 // Evidence, when REALM_OMP_EVIDENCE_DIR names a directory: the samples CSV and the summary text of each phase, the record of the
-// control and of the cold attach, the timeline of the cold attach, the paired record and its two samples files, and the transcript.
+// control and of the cold attach, the timeline of the cold attach, the paired record, its two samples files and its two readings files
+// (omp-responsiveness.paired.control.readings.csv, omp-responsiveness.paired.cold.readings.csv), the calibration record
+// (omp-responsiveness.calibration.record.json, omp-responsiveness.calibration.samples.csv, omp-responsiveness.calibration.readings.csv),
+// and the transcript.
 //
 // Removal scope of the cold-attach test and of the paired arm: one directory under the pinned workspace root, omp-resp-<random>, and the
 // scenario root, both removed exactly; the entries the run created in the shared state directory (including the presence markers under
@@ -87,13 +105,33 @@ import {
   waitForNoResidue,
 } from "../support/production-live.js";
 import { classifyRun, CONTROL_MAX_WINDOW_MS, CONTROL_MIN_WINDOW_MS, firstAnswerMs, servingProblems, splitAtReady, startupOrder, type StartupOrder, windowStopReached } from "../support/responsiveness-decision.js";
-import { PAIRED_LABEL, runMetrics, SERVING_CONTROL_WINDOW_MS } from "../support/paired-ab.js";
+import { MAX_PAIR_ATTEMPTS, PAIRED_LABEL } from "../support/paired-ab.js";
+import {
+  buildCalibrationRecord,
+  buildRunRecord as buildArmRecord,
+  type ContentionSampler,
+  createContentionSampler,
+  createFsReader,
+  DESIGN_BRANCH,
+  type HostReading,
+  type PartParts,
+  type Refusal,
+  readingsCsv,
+  readThreadSplit,
+  scopedWrap,
+  type ThreadSplit,
+  verifyScopedChild,
+} from "../support/omp-arm-run.js";
+import { CALIBRATED_BOUNDS } from "../support/omp-calibration.js";
+import type { ContentionReading } from "../support/omp-contention.js";
+import { CALIBRATION_MAX_ATTEMPTS, controlFirst, runIndexOf } from "../support/omp-verdict.js";
 import {
   BASELINE_MIN_PROBES,
   BASELINE_WINDOW_MS,
   type CpuPressure,
   type HostLoad,
   type LatencySummary,
+  MIN_PROBES,
   MIN_WINDOW_MS,
   parsePressure,
   PROBE_INTERVAL_MS,
@@ -119,6 +157,7 @@ const ALLOW_LOADED_VARIABLE = "REALM_OMP_RESPONSIVENESS_ALLOW_LOADED";
 const EVIDENCE_DIR_VARIABLE = "REALM_OMP_EVIDENCE_DIR";
 const PAIRED_ARM_VARIABLE = "REALM_OMP_PAIRED_ARM";
 const PAIRED_PAIR_VARIABLE = "REALM_OMP_PAIRED_PAIR";
+const CALIBRATION_RUN_VARIABLE = "REALM_OMP_CALIBRATION_RUN";
 const EVIDENCE_PREFIX = "omp-responsiveness";
 // The file the CPU pressure reading comes from (Linux only; absent elsewhere by design, recorded as null).
 const PRESSURE_FILE = "/proc/pressure/cpu";
@@ -160,27 +199,49 @@ const live: LiveInputs | undefined = coldSkip === false ? readLiveInputs(process
 const pairedArmValue = process.env[PAIRED_ARM_VARIABLE];
 const pairedArm: "before" | "after" | undefined = pairedArmValue === "before" || pairedArmValue === "after" ? pairedArmValue : undefined;
 const pairedPairValue = process.env[PAIRED_PAIR_VARIABLE];
-const pairedPair = pairedPairValue !== undefined && /^(10|[1-9])$/.test(pairedPairValue) ? Number(pairedPairValue) : undefined;
+const pairedPair = pairedPairValue !== undefined && /^[1-9]\d*$/.test(pairedPairValue) && Number(pairedPairValue) <= MAX_PAIR_ATTEMPTS ? Number(pairedPairValue) : undefined;
 const pairedSkip: string | false =
   optInGate ??
   (pairedArm === undefined
     ? `${PAIRED_ARM_VARIABLE} must be before or after; the paired arm test measures one arm of one pair`
     : pairedPair === undefined
-      ? `${PAIRED_PAIR_VARIABLE} must be an integer from 1 to 10; the paired arm test measures one arm of one pair`
+      ? `${PAIRED_PAIR_VARIABLE} must be an integer from 1 to ${String(MAX_PAIR_ATTEMPTS)}; the paired arm test measures one arm of one pair`
       : coldSkip);
+// The calibration control needs the number of the control (1 to CALIBRATION_MAX_ATTEMPTS) on top of the Omp prerequisites and no production stack.
+const calibrationRunValue = process.env[CALIBRATION_RUN_VARIABLE];
+const calibrationRun = calibrationRunValue !== undefined && /^[1-9]\d*$/.test(calibrationRunValue) && Number(calibrationRunValue) <= CALIBRATION_MAX_ATTEMPTS ? Number(calibrationRunValue) : undefined;
+const calibrationSkip: string | false =
+  optInGate ?? (calibrationRun === undefined ? `${CALIBRATION_RUN_VARIABLE} must be an integer from 1 to ${String(CALIBRATION_MAX_ATTEMPTS)}; the calibration test records one scoped control` : baselineSkip);
 
 // ---- The probe loop --------------------------------------------------------------------------------------------------------------
 
+// A hook the scoped runs hand to the probe loop: `reading` is called with the loop time in milliseconds at every probe send, at every answer
+// arrival (the send time plus the latency, the sample's own numbers) and every TAIL_READING_MS while the loop waits for the pending
+// answers, so every probe interval is bracketed by readings; `aborted` ends the loop early (a refusal was met).
+interface ProbeHooks {
+  readonly reading: (atMs: number) => void;
+  readonly aborted: () => boolean;
+}
+
+// How often the contention is read while the loop waits for the pending answers (a probe that is never answered ends 10 s after its send).
+const TAIL_READING_MS = 100;
+
 // Sends one `get_state` and resolves with its sample: the latency from the send to the response frame with the same id, or undefined
 // when none arrived within PROBE_ANSWER_TIMEOUT_MS (or Omp had exited).
-function probeOnce(omp: OmpSession, id: string, origin: number): Promise<ProbeSample> {
+function probeOnce(omp: OmpSession, id: string, origin: number, hooks?: ProbeHooks): Promise<ProbeSample> {
   const sentAt = performance.now();
+  const sentAtMs = Math.round(sentAt - origin);
+  hooks?.reading(sentAtMs);
   omp.send({ id, type: "get_state" });
   return omp
     .waitFor((session) => session.frames.some((frame) => frame["type"] === "response" && frame["id"] === id), scaledMs(PROBE_ANSWER_TIMEOUT_MS), `get_state ${id}`)
     .then(
-      () => ({ sentAtMs: Math.round(sentAt - origin), latencyMs: Math.round(performance.now() - sentAt) }),
-      () => ({ sentAtMs: Math.round(sentAt - origin), latencyMs: undefined }),
+      () => {
+        const latencyMs = Math.round(performance.now() - sentAt);
+        hooks?.reading(sentAtMs + latencyMs);
+        return { sentAtMs, latencyMs };
+      },
+      () => ({ sentAtMs, latencyMs: undefined }),
     );
 }
 
@@ -188,10 +249,11 @@ interface ProbeLoopOptions {
   readonly prefix: string;
   // Called before each send with the tick number and the milliseconds since the loop began; true ends the loop.
   readonly stop: (tick: number, elapsedMs: number) => boolean;
+  readonly hooks?: ProbeHooks;
 }
 
 // Probes every PROBE_INTERVAL_MS, on a fixed schedule (a slow tick does not push the later ones), until `stop` says so, then waits for
-// the pending answers. An Omp that exited ends the loop too: the probes after it would only be unanswered writes to a closed pipe.
+// the pending answers. An Omp that exited ended the loop too: the probes after it would only be unanswered writes to a closed pipe.
 async function probeLoop(omp: OmpSession, options: ProbeLoopOptions): Promise<ProbeSample[]> {
   const origin = performance.now();
   const pending: Promise<ProbeSample>[] = [];
@@ -201,14 +263,22 @@ async function probeLoop(omp: OmpSession, options: ProbeLoopOptions): Promise<Pr
     state.gone = true;
   });
   for (let tick = 0; ; tick += 1) {
-    if (state.gone || options.stop(tick, performance.now() - origin)) {
+    if (state.gone || options.stop(tick, performance.now() - origin) || options.hooks?.aborted() === true) {
       break;
     }
-    pending.push(probeOnce(omp, `${options.prefix}-${String(tick)}`, origin));
+    pending.push(probeOnce(omp, `${options.prefix}-${String(tick)}`, origin, options.hooks));
     // A real wait: the probe interval is the measurement itself, so fake timers cannot stand in for it.
     await sleep(Math.max(0, origin + (tick + 1) * PROBE_INTERVAL_MS - performance.now()));
   }
-  return Promise.all(pending);
+  const { hooks } = options;
+  const tail = hooks === undefined ? undefined : setInterval(() => {
+    hooks.reading(Math.round(performance.now() - origin));
+  }, TAIL_READING_MS);
+  try {
+    return await Promise.all(pending);
+  } finally {
+    clearInterval(tail);
+  }
 }
 
 function loadNow(label: string): HostLoad {
@@ -296,9 +366,13 @@ function registerClose(recorder: Recorder, label: string, omp: OmpSession): void
   );
 }
 
-// Omp without an extension: the same spawn as startOmp (its own process group, piped stdio) with the extension-free arguments.
-function startBaselineOmp(env: Readonly<Record<string, string>>, cwd: string): OmpSession {
-  const child = spawn(OMP_BIN, [...BASELINE_OMP_ARGS], { cwd, env: { ...env }, stdio: ["pipe", "pipe", "pipe"], detached: true });
+// Omp without an extension: the same spawn as startOmp (its own process group, piped stdio) with the extension-free arguments, and the
+// wrapper argv in front when there is one (the scope of the scoped runs).
+function startBaselineOmp(env: Readonly<Record<string, string>>, cwd: string, wrap: readonly string[] = []): OmpSession {
+  const [wrapper, ...wrapArgs] = wrap;
+  const command = wrapper ?? OMP_BIN;
+  const args = wrapper === undefined ? [...BASELINE_OMP_ARGS] : [...wrapArgs, OMP_BIN, ...BASELINE_OMP_ARGS];
+  const child = spawn(command, args, { cwd, env: { ...env }, stdio: ["pipe", "pipe", "pipe"], detached: true });
   const exited = new Promise<OmpExit>((resolve) => {
     child.once("error", (error) => {
       resolve({ code: null, signal: null, error: error.message });
@@ -307,7 +381,7 @@ function startBaselineOmp(env: Readonly<Record<string, string>>, cwd: string): O
       resolve({ code, signal });
     });
   });
-  return new OmpSession({ stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, kill: (signal) => killGroup(child, signal) }, exited);
+  return new OmpSession({ stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, pid: child.pid, kill: (signal) => killGroup(child, signal) }, exited);
 }
 
 // The quiet-host check before the baseline (and before the control): the load is recorded and noted, and a host that is not quiet fails
@@ -412,7 +486,7 @@ function timelineText(startup: StartupOrder, firstAnswer: number | undefined, ac
   ].join("\n");
 }
 
-function saveRecord(recorder: Recorder, name: string, record: Record<string, unknown>, extra: Readonly<Record<string, string>> = {}): void {
+function saveRecord(recorder: Recorder, name: string, record: unknown, extra: Readonly<Record<string, string>> = {}): void {
   const files: Record<string, () => string> = { [name]: () => `${JSON.stringify(record, null, 2)}\n` };
   for (const [file, text] of Object.entries(extra)) {
     files[file] = () => text;
@@ -579,9 +653,10 @@ async function assertNoDaemonAtStart(setup: ColdSetup): Promise<void> {
 
 // The cold attach probe loop: from process start, until realm active is shown and MIN_WINDOW_MS have passed since the ready frame
 // arrived (Phase 44 correction, 44-CONTEXT D-44-03), or at the maximum.
-function coldProbeLoop(omp: OmpSession, prefix: string): Promise<ProbeSample[]> {
+function coldProbeLoop(omp: OmpSession, prefix: string, hooks?: ProbeHooks): Promise<ProbeSample[]> {
   return probeLoop(omp, {
     prefix,
+    ...(hooks === undefined ? {} : { hooks }),
     stop: (_tick, elapsedMs) => {
       const readyMs = startupOrder(omp.frames, omp.frameArrivalsMs).readyMs;
       const sinceReadyMs = readyMs === undefined ? undefined : elapsedMs - readyMs;
@@ -680,100 +755,280 @@ void test(
   },
 );
 
+// ---- The scoped runs (Phase 45) --------------------------------------------------------------------------------------------------
+
+// How long a scoped Omp has to replace the wrapper (systemd-run execs the command in place once its scope exists), and how often it is looked at.
+const SCOPE_VERIFY_TIMEOUT_MS = 10_000;
+const SCOPE_POLL_MS = 10;
+// The serving window of a scoped control (and of the calibration control) is the probes sent from the ready frame; the loop stops two probe
+// intervals past the minimum window, so the window holds at least MIN_PROBES probes and spans at least MIN_WINDOW_MS, as the cold window does.
+const CONTROL_SERVING_STOP_MS = MIN_WINDOW_MS + 2 * PROBE_INTERVAL_MS;
+const procReader = createFsReader();
+
+// One scoped Omp run, measured: its session, the probes, the contention readings, the ready time, the thread split read at the end of the
+// window and the refusal that ended it, if any.
+interface ScopedPart {
+  readonly omp: OmpSession;
+  readonly samples: ProbeSample[];
+  readonly readings: readonly ContentionReading[];
+  readonly readyMs: number | undefined;
+  readonly threads: ThreadSplit | null;
+  readonly refusal: Refusal | null;
+}
+
+interface ScopedCold extends ScopedPart {
+  readonly reachedActive: boolean;
+  readonly commandsAnswered: boolean;
+}
+
+// The environment of a scoped Omp: the environment of the unscoped run plus XDG_RUNTIME_DIR, which systemd-run --user needs to reach the
+// user manager. Nothing else is added.
+function scopedEnv(env: Readonly<Record<string, string>>): Record<string, string> {
+  const runtimeDir = process.env["XDG_RUNTIME_DIR"];
+  return runtimeDir === undefined ? { ...env } : { ...env, XDG_RUNTIME_DIR: runtimeDir };
+}
+
+// The system CPU pressure and the one-minute load per CPU at a moment of a run: descriptive numbers of the record, never a validity input.
+function hostReading(label: HostReading["label"]): HostReading {
+  const [load1 = 0] = loadavg();
+  return { label, pressure: readPressure(), loadPerCpu: load1 / Math.max(cpus().length, 1) };
+}
+
+type ScopeOutcome = { readonly scopeDir: string | null } | { readonly refusal: Refusal };
+
+// The scope of the child, once systemd-run has replaced itself with Omp: Branch N has none; Branch S waits for the wrapper to be gone
+// (bounded) and verifies the cgroup. A wrapper that exited first is a scope command that failed.
+async function establishScope(omp: OmpSession, pid: number): Promise<ScopeOutcome> {
+  if (DESIGN_BRANCH === "N") {
+    return { scopeDir: null };
+  }
+  const state = { gone: false };
+  void omp.exited.then(() => {
+    state.gone = true;
+  });
+  const deadline = performance.now() + SCOPE_VERIFY_TIMEOUT_MS;
+  for (;;) {
+    const check = verifyScopedChild(pid, null, procReader);
+    if (check.ok) {
+      return { scopeDir: check.scopeDir };
+    }
+    if (state.gone) {
+      return { refusal: "scope command failed" };
+    }
+    // Until the deadline every refusal is retried: right after the spawn the child is still the harness's own fork, then the wrapper, then
+    // Omp in its scope.
+    if (performance.now() > deadline) {
+      return { refusal: check.refusal };
+    }
+    await sleep(SCOPE_POLL_MS);
+  }
+}
+
+// Runs one probe loop over a started scoped Omp with the contention sampler reading at every probe send and answer, then reads the thread
+// split while Omp is still alive. The loop starts at once (the probes are from process start); the scope is verified beside it, and a
+// refusal ends the loop.
+async function measureScopedPart(omp: OmpSession, probe: (hooks: ProbeHooks) => Promise<ProbeSample[]>): Promise<ScopedPart> {
+  const pid = omp.pid;
+  if (pid === undefined) {
+    return { omp, samples: [], readings: [], readyMs: undefined, threads: null, refusal: "child has no process id" };
+  }
+  const state: { sampler: ContentionSampler | undefined; refusal: Refusal | null; stamp: number } = { sampler: undefined, refusal: null, stamp: 0 };
+  const established = establishScope(omp, pid).then((outcome) => {
+    if ("refusal" in outcome) {
+      state.refusal = outcome.refusal;
+    } else {
+      state.sampler = createContentionSampler({ pid, scopeDir: outcome.scopeDir, reader: procReader, nowMs: () => state.stamp });
+    }
+  });
+  const hooks: ProbeHooks = {
+    reading: (atMs) => {
+      const { sampler } = state;
+      if (sampler === undefined) {
+        return;
+      }
+      state.stamp = atMs;
+      const result = sampler.read("probe");
+      if (!result.ok) {
+        state.refusal ??= result.refusal;
+      }
+    },
+    aborted: () => state.refusal !== null,
+  };
+  const samples = await probe(hooks);
+  await established;
+  const split = state.refusal === null ? readThreadSplit(pid, procReader) : undefined;
+  const threads = split?.ok === true ? split.split : null;
+  const splitRefusal = split !== undefined && !split.ok ? split.refusal : null;
+  return {
+    omp,
+    samples,
+    readings: state.sampler?.readings() ?? [],
+    readyMs: startupOrder(omp.frames, omp.frameArrivalsMs).readyMs,
+    threads,
+    refusal: state.refusal ?? splitRefusal,
+  };
+}
+
+// Omp with no extension in its own scope, probed from process start until its serving window is complete (or at the maximum): the control
+// part of the arm test and the calibration control are this one function.
+async function runScopedControl(recorder: Recorder, profile: OmpProfile, label: string, prefix: string): Promise<ScopedPart> {
+  const omp = startBaselineOmp(scopedEnv(profile.env), profile.workspace, scopedWrap(DESIGN_BRANCH));
+  registerClose(recorder, label, omp);
+  return measureScopedPart(omp, (hooks) =>
+    probeLoop(omp, {
+      prefix,
+      hooks,
+      stop: (_tick, elapsedMs) => {
+        const readyMs = startupOrder(omp.frames, omp.frameArrivalsMs).readyMs;
+        return (readyMs !== undefined && elapsedMs - readyMs >= CONTROL_SERVING_STOP_MS) || elapsedMs >= scaledMs(CONTROL_MAX_WINDOW_MS);
+      },
+    }),
+  );
+}
+
+// The cold attach in its own scope (the same wrapper as the control), then get_available_commands after it: the session is still a working one.
+async function runScopedCold(recorder: Recorder, setup: ColdSetup, label: string, prefix: string): Promise<ScopedCold> {
+  const omp = startOmp({ bin: OMP_BIN, env: scopedEnv(setup.ompEnv), cwd: setup.projectDir, extensionPath: EXTENSION_PATH, wrap: scopedWrap(DESIGN_BRANCH) });
+  registerClose(recorder, label, omp);
+  const part = await measureScopedPart(omp, (hooks) => coldProbeLoop(omp, prefix, hooks));
+  const reachedActive = omp.status()?.includes("realm active") === true;
+  const commandId = `commands-${setup.suffix}`;
+  let commandsAnswered = false;
+  if (reachedActive) {
+    omp.send({ id: commandId, type: "get_available_commands" });
+    commandsAnswered = await omp.waitFor((session) => session.frames.some((frame) => frame["type"] === "response" && frame["id"] === commandId), COMMANDS_TIMEOUT_MS, "get_available_commands after the attach").then(
+      () => true,
+      () => false,
+    );
+  }
+  return { ...part, reachedActive, commandsAnswered };
+}
+
+// A control answered when a probe was answered and its serving window (the probes sent from the ready frame) holds at least MIN_PROBES.
+function controlHeld(part: ScopedPart): boolean {
+  const readyMs = part.readyMs;
+  return readyMs !== undefined && part.samples.some((sample) => sample.latencyMs !== undefined) && part.samples.filter((sample) => sample.sentAtMs >= readyMs).length >= MIN_PROBES;
+}
+
+const EMPTY_PART: PartParts = { samples: [], readings: [], readyMs: undefined, threads: null };
+
+function partOf(part: ScopedPart | undefined): PartParts {
+  return part === undefined ? EMPTY_PART : { samples: part.samples, readings: part.readings, readyMs: part.readyMs, threads: part.threads };
+}
+
 // ---- The paired arm --------------------------------------------------------------------------------------------------------------
 
 const PAIRED_RECORD_FILE = `${EVIDENCE_PREFIX}.paired.record.json`;
 
-// One arm of one pair of the paired loaded A/B (Phase 44, 44-CONTEXT D-44-06). In order: the no-daemon check; the control (Omp with no
-// extension, probed from process start until a probe was answered and SERVING_CONTROL_WINDOW_MS have passed since its first answer, at
-// most CONTROL_MAX_WINDOW_MS); the cold attach (as above); get_available_commands after the attach; the record. It asserts mechanics only
-// and no latency: whether the build is faster is the paired analysis's question (test/support/paired-ab.ts), never this test's. The run
-// is labelled loaded, paired and never claims a quiet host; it does not require one and does not read the loaded-host escape variable.
+// One arm of one pair of the paired loaded A/B (Phase 44, 44-CONTEXT D-44-06; Phase 45, D-45-03, D-45-06 and D-45-07). In order: the
+// no-daemon check; then the two parts in the order the run index sets (controlFirst(runIndexOf(pair, arm)): the control first when odd, the
+// cold attach first when even, a cold-first run stopping its own daemon with realm down before the control): the control (Omp with no
+// extension, in its own scope, probed from process start until its serving window is complete) and the cold attach (in the same kind of
+// scope; get_available_commands after the attach); the record. It asserts mechanics only and no latency: the verdict and the pair
+// decision are computed from the records by test/support/omp-window-analysis.ts, never by this test. A refusal writes the record with its
+// phrase and then fails the test, REFUSED first; so does a mechanics failure. The run is labelled loaded, paired with its tier and never
+// claims a quiet host; it does not require one, reads no load average as a validity input and does not read the loaded-host escape variable.
 void test(
-  "V1LIVE-01 omp responsiveness paired arm (loaded, paired A/B of Phase 44)",
+  "V1LIVE-01 omp responsiveness paired arm (scoped, loaded, paired A/B of Phase 44 and 45)",
   { skip: pairedSkip, timeout: COLD_TIMEOUT_MS },
   async (t) => {
     assert.ok(live !== undefined && pairedArm !== undefined && pairedPair !== undefined, "the paired arm test ran although its gate is closed");
     const startedAtEpochMs = Date.now();
+    const runIndex = runIndexOf(pairedPair, pairedArm);
+    const controlOrder = controlFirst(runIndex);
     const recorder = createRecorder(t);
     const setup = await setupColdAttach(recorder, live);
-    await assertNoDaemonAtStart(setup);
+    const host: HostReading[] = [hostReading("start")];
 
-    takeReading(recorder, "before the control");
-    const control = await runControl(recorder, setup.profile, {
-      label: "paired.control",
-      prefix: "pcontrol",
-      done: (session, elapsedMs) => {
-        const first = firstAnswerArrivalMs(session, "pcontrol-");
-        return (first !== undefined && elapsedMs >= first + SERVING_CONTROL_WINDOW_MS) || elapsedMs >= scaledMs(CONTROL_MAX_WINDOW_MS);
-      },
+    // The no-daemon check is a mechanic: a failure is recorded and fails the test after the record, like every other mechanic.
+    const state: { problem: string | undefined } = { problem: undefined };
+    await assertNoDaemonAtStart(setup).catch((error: unknown) => {
+      state.problem = error instanceof Error ? error.message : String(error);
     });
-    await control.omp.close(CLOSE_OPTIONS);
-    takeReading(recorder, "before the cold attach");
-    const omp = startOmp({ bin: OMP_BIN, env: setup.ompEnv, cwd: setup.projectDir, extensionPath: EXTENSION_PATH });
-    registerClose(recorder, "paired.cold", omp);
-    const coldSamples = await coldProbeLoop(omp, "pcold");
-    const reachedActive = omp.status()?.includes("realm active") === true;
-    takeReading(recorder, "after the cold attach");
-    // The session is still a working one: it answers a command after the attach.
-    const commandId = `commands-${setup.suffix}`;
-    let commandsAnswered = false;
-    if (reachedActive) {
-      omp.send({ id: commandId, type: "get_available_commands" });
-      commandsAnswered = await omp.waitFor((session) => session.frames.some((frame) => frame["type"] === "response" && frame["id"] === commandId), COMMANDS_TIMEOUT_MS, "get_available_commands after the attach").then(
-        () => true,
-        () => false,
-      );
+    let control: ScopedPart | undefined;
+    let cold: ScopedCold | undefined;
+    if (state.problem === undefined) {
+      if (controlOrder) {
+        control = await runScopedControl(recorder, setup.profile, "paired.control", "pcontrol");
+        await control.omp.close(CLOSE_OPTIONS);
+        host.push(hostReading("between"));
+        if (control.refusal === null) {
+          cold = await runScopedCold(recorder, setup, "paired.cold", "pcold");
+        }
+      } else {
+        cold = await runScopedCold(recorder, setup, "paired.cold", "pcold");
+        await cold.omp.close(CLOSE_OPTIONS);
+        host.push(hostReading("between"));
+        // The cold attach started a daemon: stop it before the control, which needs none.
+        const stopped = await realmCliWithWorkspace(live, setup.scenario, ["down"], setup.projectDir, DOWN_TIMEOUT_MS);
+        if (stopped.exitCode !== 0) {
+          state.problem = `realm down after the cold attach: ${describeResult(stopped)}`;
+        } else if (cold.refusal === null) {
+          control = await runScopedControl(recorder, setup.profile, "paired.control", "pcontrol");
+        }
+      }
     }
+    host.push(hostReading("end"));
 
-    const controlStartup = startupOrder(control.omp.frames, control.omp.frameArrivalsMs);
-    const coldStartup = startupOrder(omp.frames, omp.frameArrivalsMs);
-    const controlSummary = summariseLatencies(control.samples);
-    const allSummary = summariseLatencies(coldSamples);
-    const windowSummary = coldStartup.readyMs === undefined ? undefined : summariseLatencies(splitAtReady(coldSamples, coldStartup.readyMs).window);
-    const controlAnsweredProbe = controlSummary.answered > 0;
-    const metrics = runMetrics({ samples: control.samples, readyMs: controlStartup.readyMs }, { samples: coldSamples, readyMs: coldStartup.readyMs });
-    const invalidReason = !controlAnsweredProbe
-      ? "the control answered no probe"
-      : !reachedActive
-        ? "realm active not reached"
-        : !commandsAnswered
-          ? "the session did not answer get_available_commands after the attach"
-          : metrics.valid
-            ? null
-            : metrics.reason;
-    saveEvidence(recorder, "paired.control", csvFor(control.samples, controlStartup.readyMs), summaryText("paired control (no extension, probed from process start)", controlSummary, recorder.loads));
-    saveEvidence(recorder, "paired.cold", csvFor(coldSamples, coldStartup.readyMs), summaryText(`paired cold attach (${PAIRED_LABEL}, realm active reached: ${String(reachedActive)})`, allSummary, recorder.loads));
-    saveRecord(recorder, PAIRED_RECORD_FILE, {
-      label: PAIRED_LABEL,
-      quietClaim: false,
+    const refusal = control?.refusal ?? cold?.refusal ?? null;
+    const mechanicsHeld = state.problem === undefined && control !== undefined && controlHeld(control) && cold !== undefined && cold.reachedActive && cold.commandsAnswered;
+    const record = buildArmRecord({
       arm: pairedArm,
       pair: pairedPair,
+      branch: DESIGN_BRANCH,
       startedAtEpochMs,
-      loads: recorder.loads,
-      pressure: recorder.pressures,
-      noDaemonAtStart: true,
-      controlAnswered: controlAnsweredProbe,
-      reachedActive,
-      commandsAnswered,
-      control: { readyMs: controlStartup.readyMs ?? null, firstAnswerMs: firstAnswerMs(control.samples) ?? null, summary: controlSummary },
-      cold: {
-        readyMs: coldStartup.readyMs ?? null,
-        firstAnswerMs: firstAnswerMs(coldSamples) ?? null,
-        firstRealmStatusMs: coldStartup.firstRealmStatusMs ?? null,
-        lastRealmStatusMs: coldStartup.lastRealmStatusMs ?? null,
-        realmActiveMs: realmActiveArrivalMs(omp) ?? null,
-        windowSummary: windowSummary ?? null,
-        allSamplesSummary: allSummary,
-      },
-      relative: windowSummary === undefined ? null : relativeSummary(windowSummary, controlSummary),
-      metrics: metrics.valid ? metrics.metrics : null,
-      valid: invalidReason === null,
-      invalidReason,
+      refusal,
+      mechanicsHeld,
+      control: partOf(control),
+      cold: partOf(cold),
+      host,
+      bounds: CALIBRATED_BOUNDS,
     });
-    note(recorder, `paired arm ${pairedArm} pair ${String(pairedPair)} (${PAIRED_LABEL}): ${invalidReason === null ? "valid" : `not valid: ${invalidReason}`}`);
-    assert.ok(controlAnsweredProbe, `the control is invalid: Omp with no extension answered no probe in ${String(controlSummary.windowMs)} ms`);
-    assert.ok(reachedActive, `the status line never showed realm active within ${String(ATTACH_ACTIVE_TIMEOUT_MS)} ms; status: ${String(omp.status())}`);
-    assert.ok(commandsAnswered, "the session did not answer get_available_commands after the attach");
+    const readings: Record<string, string> = {};
+    if (control !== undefined) {
+      saveEvidence(recorder, "paired.control", csvFor(control.samples, control.readyMs), summaryText(`paired control (${record.tier}, no extension, probed from process start)`, summariseLatencies(control.samples), []));
+      readings[`${EVIDENCE_PREFIX}.paired.control.readings.csv`] = readingsCsv(control.readings);
+    }
+    if (cold !== undefined) {
+      saveEvidence(recorder, "paired.cold", csvFor(cold.samples, cold.readyMs), summaryText(`paired cold attach (${PAIRED_LABEL}, ${record.tier}, realm active reached: ${String(cold.reachedActive)})`, summariseLatencies(cold.samples), []));
+      readings[`${EVIDENCE_PREFIX}.paired.cold.readings.csv`] = readingsCsv(cold.readings);
+    }
+    saveRecord(recorder, PAIRED_RECORD_FILE, record, readings);
+    note(recorder, `paired arm ${pairedArm} pair ${String(pairedPair)} run ${String(runIndex)} (${PAIRED_LABEL}, ${record.tier}, ${controlOrder ? "control first" : "cold attach first"}): ${record.validity.valid ? "valid" : `not valid by ${String(record.validity.rule)}`}, bounds applied: ${String(record.validity.boundsApplied)}`);
+    if (refusal !== null) {
+      assert.fail(`REFUSED: ${refusal}; the run is recorded and counts for nothing`);
+    }
+    assert.equal(state.problem, undefined, `the mechanics did not hold: ${String(state.problem)}`);
+    assert.ok(control !== undefined && controlHeld(control), "the control is invalid: Omp with no extension answered no probe or did not complete its serving window");
+    assert.ok(cold?.reachedActive === true, `the status line never showed realm active within ${String(ATTACH_ACTIVE_TIMEOUT_MS)} ms; status: ${String(cold?.omp.status())}`);
+    assert.ok(cold.commandsAnswered, "the session did not answer get_available_commands after the attach");
+  },
+);
+
+// ---- The calibration control -----------------------------------------------------------------------------------------------------
+
+// One scoped control with no extension (45-CONTEXT D-45-08): the same wrapper, probe loop, ready window and serving window as the control
+// part of the arm test, with no production stack. It records the control and asserts only that it answered; a refusal fails the test after
+// the record is written. The validity inside the record is the mechanical rules only: the bounds are what the calibration derives.
+void test(
+  "V1LIVE-01 omp responsiveness calibration control (scoped, no extension, Phase 45)",
+  { skip: calibrationSkip, timeout: BASELINE_TIMEOUT_MS },
+  async (t) => {
+    assert.ok(calibrationRun !== undefined, "the calibration test ran although its gate is closed");
+    const startedAtEpochMs = Date.now();
+    const recorder = createRecorder(t);
+    const profile = await startScriptedProfile(recorder);
+    const host: HostReading[] = [hostReading("start")];
+    const part = await runScopedControl(recorder, profile, "calibration", "ccontrol");
+    host.push(hostReading("end"));
+    const held = controlHeld(part);
+    const record = buildCalibrationRecord({ attempt: calibrationRun, branch: DESIGN_BRANCH, startedAtEpochMs, refusal: part.refusal, mechanicsHeld: held, control: partOf(part), host });
+    saveEvidence(recorder, "calibration", csvFor(part.samples, part.readyMs), summaryText(`calibration control ${String(calibrationRun)} (${record.tier}, no extension)`, summariseLatencies(part.samples), []));
+    saveRecord(recorder, `${EVIDENCE_PREFIX}.calibration.record.json`, record, { [`${EVIDENCE_PREFIX}.calibration.readings.csv`]: readingsCsv(part.readings) });
+    note(recorder, `calibration control ${String(calibrationRun)} (${record.tier}): ${record.validity.valid ? "mechanically valid" : `not valid by ${String(record.validity.rule)}`}`);
+    if (part.refusal !== null) {
+      assert.fail(`REFUSED: ${part.refusal}; the control is recorded and counts for nothing`);
+    }
+    assert.ok(held, "the calibration control is invalid: Omp with no extension answered no probe or did not complete its serving window");
   },
 );

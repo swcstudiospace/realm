@@ -12,8 +12,9 @@
 // the largest cold latency among probes sent at or after the cold first answer (an unanswered probe counts as the answer timeout) minus
 // the largest control latency among probes sent from the control first answer to SERVING_CONTROL_WINDOW_MS after it, never below 0.
 //
-// A pair is valid when both runs are valid, both start loads are at or below PAIR_LOAD_CEILING_PER_CPU and the two start loads are within
-// PAIR_LOAD_GAP_PER_CPU of each other.
+// A pair is valid when both runs are valid by the run validity of D-45-06 of 45-CONTEXT (test/support/omp-verdict.ts: scoped contention and
+// run-queue delay of the Omp tree, never the host load average, which is not read here) and both have metrics. The first failed condition
+// is the reason: the before run, then the after run, each naming its failed rule.
 //
 // The outcome of the window, over its N valid pairs, with mB the median of X over the BEFORE runs and the gain of a pair X(before) minus
 // X(after); the first row that holds, in this order:
@@ -27,20 +28,21 @@
 //   NO-EFFECT       none of the above.
 // No outcome claims a quiet host or closes OI-11: every result carries the fixed label PAIRED_LABEL and a quietClaim that is always false.
 //
-// Exports: constants (MIN_VALID_PAIRS, MAX_PAIR_ATTEMPTS, PAIR_LOAD_CEILING_PER_CPU, PAIR_LOAD_GAP_PER_CPU, SERVING_CONTROL_WINDOW_MS,
-// REPRODUCTION_MIN_MS, GAIN_MIN_MS, GAIN_PAIR_FRACTION, GAIN_MEDIAN_SHARE, STALL_TOLERANCE_MS, REGRESS_PAIR_FRACTION, PAIR_ANSWER_TIMEOUT_MS,
-// PAIRED_LABEL), types (RunInput, RunMetrics, RunMetricsResult, ArmRun, PairInput, PairValidity, PairOutcome, PairRow, ArmMedians,
-// PairedDecision), parseSamplesCsv, runMetrics, pairValid, decidePairs.
+// Exports: constants (MIN_VALID_PAIRS, MAX_PAIR_ATTEMPTS, SERVING_CONTROL_WINDOW_MS, REPRODUCTION_MIN_MS, GAIN_MIN_MS, GAIN_PAIR_FRACTION,
+// GAIN_MEDIAN_SHARE, STALL_TOLERANCE_MS, REGRESS_PAIR_FRACTION, PAIR_ANSWER_TIMEOUT_MS, PAIRED_LABEL), types (RunInput, RunMetrics,
+// RunMetricsResult, ArmRun, PairInput, PairValidity, PairOutcome, PairRow, ArmMedians, PairedDecision), parseSamplesCsv, runMetrics,
+// pairValid, decidePairs.
+//
+// Phase 45 (45-CONTEXT D-45-10): the pair validity predicate stopped reading the load average (finding F-44-01) and reads the run validity
+// of both arms; PAIR_LOAD_CEILING_PER_CPU, PAIR_LOAD_GAP_PER_CPU and the load fields of ArmRun are removed, and MAX_PAIR_ATTEMPTS is 12.
+// The metrics X, X1, X2 and S and the outcome table are unchanged.
 
 import { firstAnswerMs } from "./responsiveness-decision.js";
+import type { RunValidity } from "./omp-verdict.js";
 import type { ProbeSample } from "./responsiveness.js";
 
 export const MIN_VALID_PAIRS = 5;
-export const MAX_PAIR_ATTEMPTS = 10;
-// A run starts only at or below this one-minute load per CPU: loaded, but not saturated.
-export const PAIR_LOAD_CEILING_PER_CPU = 2.0;
-// The two runs of a pair start within this difference of one-minute load per CPU.
-export const PAIR_LOAD_GAP_PER_CPU = 0.5;
+export const MAX_PAIR_ATTEMPTS = 12;
 // The control's serving window after its first answer.
 export const SERVING_CONTROL_WINDOW_MS = 5000;
 // One probe interval: the BEFORE arm must show at least this median excess for an effect to be measurable.
@@ -138,13 +140,12 @@ export function runMetrics(control: RunInput, cold: RunInput): RunMetricsResult 
   return { valid: true, metrics: { x, x1, x2, s: Math.max(0, coldServing - controlServing) } };
 }
 
-// One arm of one pair: its control and cold runs, the one-minute load per CPU at its start, and whether the mechanics held (no daemon at
-// the start, the control answered, realm active reached, the session answered a command).
+// One arm of one pair: its control and cold runs and the run validity of D-45-06 (a refusal, the mechanics, the probe driver, the scoped
+// contention, the baseline and the attribution coverage), computed from the arm's readings by test/support/omp-verdict.ts.
 export interface ArmRun {
   readonly control: RunInput;
   readonly cold: RunInput;
-  readonly startLoadPerCpu: number;
-  readonly mechanicsHeld: boolean;
+  readonly validity: RunValidity;
 }
 
 export interface PairInput {
@@ -157,34 +158,23 @@ export type PairValidity =
   | { readonly valid: true; readonly before: RunMetrics; readonly after: RunMetrics }
   | { readonly valid: false; readonly reason: string };
 
-function armProblem(arm: ArmRun): string | undefined {
-  if (!arm.mechanicsHeld) {
-    return "the mechanics did not hold";
+function armProblem(arm: ArmRun, name: string): string | undefined {
+  if (!arm.validity.valid) {
+    return `the ${name} run is not valid by ${arm.validity.rule}: ${arm.validity.reason}`;
   }
   const metrics = runMetrics(arm.control, arm.cold);
-  return metrics.valid ? undefined : metrics.reason;
+  return metrics.valid ? undefined : `the ${name} run is not valid: ${metrics.reason}`;
 }
 
-// Whether the pair counts, and its metrics when it does. The first failed condition is the reason: the BEFORE run, the AFTER run, the
-// load ceiling (BEFORE then AFTER), then the load gap.
+// Whether the pair counts, and its metrics when it does. The first failed condition is the reason: the BEFORE run, then the AFTER run.
 export function pairValid(input: PairInput): PairValidity {
-  const beforeProblem = armProblem(input.before);
+  const beforeProblem = armProblem(input.before, "before");
   if (beforeProblem !== undefined) {
-    return { valid: false, reason: `the before run is not valid: ${beforeProblem}` };
+    return { valid: false, reason: beforeProblem };
   }
-  const afterProblem = armProblem(input.after);
+  const afterProblem = armProblem(input.after, "after");
   if (afterProblem !== undefined) {
-    return { valid: false, reason: `the after run is not valid: ${afterProblem}` };
-  }
-  if (input.before.startLoadPerCpu > PAIR_LOAD_CEILING_PER_CPU) {
-    return { valid: false, reason: `the before run started at ${String(input.before.startLoadPerCpu)} load per cpu, above ${String(PAIR_LOAD_CEILING_PER_CPU)}` };
-  }
-  if (input.after.startLoadPerCpu > PAIR_LOAD_CEILING_PER_CPU) {
-    return { valid: false, reason: `the after run started at ${String(input.after.startLoadPerCpu)} load per cpu, above ${String(PAIR_LOAD_CEILING_PER_CPU)}` };
-  }
-  const gap = Math.abs(input.before.startLoadPerCpu - input.after.startLoadPerCpu);
-  if (gap > PAIR_LOAD_GAP_PER_CPU) {
-    return { valid: false, reason: `the start loads differ by ${gap.toFixed(2)} load per cpu, more than ${String(PAIR_LOAD_GAP_PER_CPU)}` };
+    return { valid: false, reason: afterProblem };
   }
   // Both arms passed armProblem, so both have metrics.
   const before = runMetrics(input.before.control, input.before.cold);
