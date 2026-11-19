@@ -15,7 +15,9 @@ import {
   MIN_VALID_RUNS,
   type RunCase,
   servingProblems,
+  splitAtReady,
   startupOrder,
+  windowStopReached,
 } from "./responsiveness-decision.js";
 import { MAX_LATENCY_MS, MIN_PROBES, MIN_WINDOW_MS, P95_LATENCY_MS, PROBE_INTERVAL_MS, type ProbeSample, responsivenessProblems, summariseLatencies } from "./responsiveness.js";
 
@@ -226,4 +228,102 @@ void test("Phase 38 decideWindow: more than three valid runs are all counted", (
   assert.equal(decideWindow([...four, "boot-delay"]).outcome, "CODE", "a late failing valid run is not discarded");
   assert.equal(decideWindow(["pass", "pass", "pass", "own-boot"]).outcome, "HARNESS");
   assert.match(decideWindow(four).reason, /^4 valid runs/);
+});
+
+// ---- Phase 44 (44-CONTEXT D-44-03): the verdict window starts at the Omp ready frame ---------------------------------------------
+
+void test("Phase 44 splitAtReady puts every sample in exactly one part, in order, with a probe at the ready time in the window", () => {
+  const samples = ladder(8, (index) => index * 10);
+  const { boot, window } = splitAtReady(samples, 1000);
+  assert.deepEqual(boot.map((s) => s.sentAtMs), [0, 250, 500, 750]);
+  assert.deepEqual(window.map((s) => s.sentAtMs), [1000, 1250, 1500, 1750]);
+  assert.deepEqual([...boot, ...window], samples);
+  assert.deepEqual(splitAtReady(samples, 0), { boot: [], window: samples });
+  assert.deepEqual(splitAtReady(samples, 100_000), { boot: samples, window: [] });
+  assert.deepEqual(splitAtReady([], 5), { boot: [], window: [] });
+});
+
+void test("Phase 44 splitAtReady refuses a ready time that is not a finite, non-negative number", () => {
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1]) {
+    assert.throws(() => splitAtReady(PASSING, bad), /finite, non-negative/);
+  }
+});
+
+void test("Phase 44 windowStopReached needs realm active and the minimum since ready", () => {
+  assert.equal(windowStopReached(10_000, true, 10_000), true);
+  assert.equal(windowStopReached(9999, true, 10_000), false);
+  assert.equal(windowStopReached(60_000, false, 10_000), false, "realm active not shown");
+  assert.equal(windowStopReached(undefined, true, 10_000), false, "ready was not seen");
+  assert.equal(windowStopReached(undefined, false, 10_000), false);
+  assert.equal(windowStopReached(0, true, 0), true);
+});
+
+// The recorded shape of attempt 1 (E-44-02, E-44-03, E-44-06) on a 250 ms grid: ready at 11 320 ms, the probes sent from 2500 ms answered
+// together at 12 498 ms, then a stall that ends at about 13 900 ms (1403 ms for the probe sent at 12 500 ms); control first answer 9394 ms.
+const ATTEMPT_ONE: ProbeSample[] = [
+  ...Array.from({ length: 10 }, (_, index) => ({ sentAtMs: index * 250, latencyMs: undefined })),
+  ...Array.from({ length: 40 }, (_, index) => ({ sentAtMs: 2500 + index * 250, latencyMs: 12_498 - (2500 + index * 250) })),
+  ...Array.from({ length: 100 }, (_, index) => {
+    const sentAtMs = 12_500 + index * 250;
+    return { sentAtMs, latencyMs: sentAtMs <= 13_750 ? 13_903 - sentAtMs : 14 };
+  }),
+];
+const ATTEMPT_ONE_READY_MS = 11_320;
+
+void test("Phase 44 classifyRun with a ready time reads attempt 1 as serving-stall: the window holds a latency over 1000 ms", () => {
+  const without = classifyRun(ATTEMPT_ONE, [9394]);
+  const corrected = classifyRun(ATTEMPT_ONE, [9394], ATTEMPT_ONE_READY_MS);
+  assert.equal(without.case, "serving-stall");
+  assert.equal(corrected.case, "serving-stall");
+  assert.equal(corrected.firstAnswerMs, 12_498);
+  assert.equal(corrected.bootExcessMs, 3104, "the boot excess is read from the first answer over all samples");
+  // The window starts at 11 500 ms (the first tick at or after ready): its first probe was answered after 998 ms, the one at 12 500 ms after 1403 ms.
+  const window = summariseLatencies(splitAtReady(ATTEMPT_ONE, ATTEMPT_ONE_READY_MS).window);
+  assert.equal(window.maxMs, 1403);
+  assert.ok(corrected.verdict.some((line) => line.includes("1403 ms")));
+  assert.ok(!corrected.verdict.some((line) => line.includes("never answered")), "the unanswered probes were sent before ready");
+});
+
+void test("Phase 44 classifyRun with a ready time: pass when the window verdict is empty and the boot excess is at most 250, boot-delay at 251", () => {
+  // Probes before 5000 ms unanswered (Omp is booting); from 5000 ms every probe answered in 20 ms: a clean window of 60 probes over 14 750 ms.
+  const samples = Array.from({ length: 80 }, (_, index) => ({ sentAtMs: index * 250, latencyMs: index * 250 < 5000 ? undefined : 20 }));
+  const atBound = classifyRun(samples, [4770], 5000);
+  assert.equal(atBound.bootExcessMs, 250, "first answer 5020 minus control 4770");
+  assert.equal(atBound.case, "pass");
+  assert.deepEqual(atBound.verdict, []);
+  const over = classifyRun(samples, [4769], 5000);
+  assert.equal(over.bootExcessMs, 251);
+  assert.equal(over.case, "boot-delay");
+  assert.deepEqual(over.verdict, [], "the window is clean; only the boot excess fires");
+  assert.equal(classifyRun(samples, [4000], 5000).case, "boot-delay");
+  // The same samples read from process start (no ready time) are the Phase 38 reading: the unanswered boot probes are a latency problem.
+  assert.notEqual(classifyRun(samples, [4770]).case, "pass");
+});
+
+void test("Phase 44 classifyRun with a ready time: short-window when only shortness problems remain, and never own-boot", () => {
+  const few = ladder(30, () => 20);
+  const short = classifyRun(few, [500], 1000);
+  assert.equal(short.case, "short-window");
+  assert.ok(short.verdict.length > 0);
+  // Phase 38 reads a late-answered boot as own-boot; the corrected window has no such case.
+  const lateBoot = Array.from({ length: 80 }, (_, index) => ({ sentAtMs: index * 250, latencyMs: index * 250 < 5000 ? undefined : 20 }));
+  for (const ready of [0, 5000, 10_000]) {
+    assert.notEqual(classifyRun(lateBoot, [5020], ready).case, "own-boot");
+  }
+  assert.equal(classifyRun([], [500], 0).case, "short-window", "a run with no probe sent has no latency problem");
+});
+
+void test("Phase 44 classifyRun without a ready time reads every sample, as in Phase 38", () => {
+  const all = classifyRun(ATTEMPT_ONE, CONTROL);
+  assert.deepEqual(all.verdict, responsivenessProblems(summariseLatencies(ATTEMPT_ONE)));
+  assert.ok(all.verdict.some((line) => line.includes("never answered")), "the unanswered boot probes are in the Phase 38 reading");
+  assert.equal(all.case, "serving-stall");
+  assert.equal(classifyRun(PASSING, CONTROL).case, "pass");
+  assert.equal(classifyRun(PASSING, CONTROL, 0).case, "pass");
+  assert.deepEqual(classifyRun(PASSING, CONTROL), classifyRun(PASSING, CONTROL, undefined));
+});
+
+void test("Phase 44 classifyRun refuses a ready time that is not a finite, non-negative number", () => {
+  assert.throws(() => classifyRun(PASSING, CONTROL, Number.NaN), /finite, non-negative/);
+  assert.throws(() => classifyRun(PASSING, CONTROL, -5), /finite, non-negative/);
 });
