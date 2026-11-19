@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
-milestone: v6.0
-milestone_name: Responsiveness, exec kill proof, host ids and evidence debt (Shipped 2026-11-19)
-status: Awaiting next milestone
-stopped_at: Phase 44 complete — all phases complete
-last_updated: "2026-11-19T04:09:13.178Z"
+milestone: v7.0
+milestone_name: Carried findings closure (Starting)
+status: Starting
+stopped_at: Milestone v7.0 started, phases 45 to 48 planned
+last_updated: "2026-11-19T06:36:00.000Z"
 last_activity: 2026-11-19
-last_activity_desc: Milestone v6.0 completed and archived
-state_head: b7720c87e1912bb9bc5edb71ec89aca157389919
+last_activity_desc: Milestone v7.0 started
+state_head: 1b0e63b
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 17
-  completed_plans: 17
-  percent: 100
-current_phase: 44
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 45
 ---
 
 # Project State
@@ -24,14 +24,14 @@ current_phase: 44
 See: .planning/PROJECT.md (updated 2026-11-19)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt (phases 38 to 44, release line 0.6.x), is complete and archived (2026-11-19, passed with accepted limitations: OMPR-01 carried, OMPR-06 partial); the next milestone is not started. Audit: `.planning/milestones/v6.0-MILESTONE-AUDIT.md`. Scope and owner decisions of 2026-11-18/19: `.planning/MILESTONE-CONTEXT.md`.
+**Current focus:** Milestone v7.0, Carried findings closure (phases 45 to 48, release line 0.7.x). The four phases are independent in code and queue for the shared live window; the documentation edits of Phases 47 and 48 land in that order. Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v6.0 close-out is `.planning/milestones/v6.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: Milestone v6.0 complete
+Phase: 45 (Omp responsiveness, a measurement that can yield a valid verdict), not started
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-11-19 — Milestone v6.0 completed and archived
+Status: Starting milestone v7.0 (phases 45 to 48, release line 0.7.x)
+Last activity: 2026-11-19 — Milestone v7.0 started
 
 ## Current Recovery Boundaries
 

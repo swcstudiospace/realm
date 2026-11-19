@@ -241,6 +241,30 @@ All v3.0 requirements are hypotheses until shipped and verified.
 - [x] **KIMI-01**: Kimi CLI and Kimi Code CLI are installed in a scratch location outside the repository, and the validator and production tiers are run as for claude, opencode and codex, with each result recorded with version and date
 - [x] **KIMI-02**: Anything that cannot run has a named blocker, and `GAP-24-02` and the support matrix are updated to the evidence tier reached
 
+### v7.0 Carried findings closure
+
+Ids are new and do not repeat any archived id: `OMPV` (the Omp responsiveness repeat, next to the archived `OMPR`), `STOP` (the rapid stop then up finding F-41-1), `KIMV` (the legacy kimi repeat, next to the archived `KIMI`) and `HTIER` (Grok Build attribution and the production tiers of the three v6.0 host ids). The milestone context is `.planning/MILESTONE-CONTEXT.md`; the Linear tickets are SPE-34730 (Phase 45), SPE-34731 (Phase 46), SPE-34732 (Phase 47) and SPE-34733 (Phase 48).
+
+- [ ] **OMPV-01**: A dated feasibility record in the phase states which host-isolation and contention-measurement primitives the realm account can use on this shared host (a delegated cgroup v2 subtree or transient systemd scope, `cpuset` pinning, per-cgroup `cpu.pressure`, `taskset`, `/proc/PID/schedstat`, the system CPU pressure file), each with the command or read that showed it, and the measurement design is frozen from that record before any verdict run (Linear SPE-34730)
+- [ ] **OMPV-02**: A deterministic in-process stall probe exists as a hermetic test: it drives the real Omp extension attach path with a scripted control socket and scripted `up` latencies (no Omp, no Podman) and measures event-loop blocking in CPU time per synchronous slice; it fails on a seeded blocking attach (red first), passes on the current extension, and gives the same verdict when a CPU burner runs beside it
+- [ ] **OMPV-03**: The live harness decides a run's validity from the contention the Omp process tree itself experienced (scoped CPU pressure and the run-queue delay of the Omp process over the window), not from the host one-minute load average, and attributes each unanswered-probe interval to on-CPU time, run-queue delay or sleep; the verdict thresholds (maximum 1000 ms, 95th percentile 500 ms) and the Phase 38 constants are unchanged, and the validity constants and the decision table are code pinned by a hermetic test
+- [ ] **OMPV-04**: The control and the cold attach alternate order inside each pair, the validity bound of the no-extension baseline is recalibrated from a recorded calibration on this host and frozen in code before the first verdict run (never changed after a verdict is seen), and a refusal or an invalid run is recorded with its reason and counted as nothing, never reported as a result
+- [ ] **OMPV-05**: A live window on the production stack under the frozen design ends in exactly one of PASS, FINDING (thresholds exceeded on valid runs, with a named cause), NOT-REPRODUCED or VOID by a rule that is code with a hermetic test before the first live run; every number is labelled with its tier (measured, isolated or loaded, scoped), and the host facts, the commit, the Omp version and the isolation used are recorded in the phase and in `docs/integration/omp.md`
+- [ ] **OMPV-06**: OMPR-01, OMPR-06 and OI-11 are resolved from the window: on PASS or FINDING they close with that evidence, and when the window yields the valid pairs the rule needs OMPR-06 closes with an effect or no-effect record; on VOID they stay carried and the phase writes the owner's options (retire with a recorded reason, or repeat), and no row closes on VOID or on the hermetic probe alone; if the finding names the extension, the fix keeps fail closed (no mutation before the session is ready), is shown red first by the OMPV-02 probe, and growth beyond the `src/omp/plugin.ts` module ceiling goes to a new module; the status of UI-01 stays the owner's call
+- [ ] **STOP-01**: Finding F-41-1 is reproduced live on the production stack: `realm up` immediately after the stop of a daemon that held a sandbox of the same name fails with `OPENSHELL_START_FAILED`, in a loop with no settle between iterations (also under CPU load), with the iteration count and the timeline of every component (the daemon request log, the gateway, the compute driver, the supervisor, Podman) kept outside the repository; if 50 consecutive iterations per variant do not reproduce it, the phase records the non-reproduction, pins the suspected mechanism hermetically, and carries F-41-1 with that evidence instead of claiming a fix (Linear SPE-34731)
+- [ ] **STOP-02**: The cause is established from that evidence and recorded in `docs/integration/runtime-decision.md` in place of the INFERENCE paragraph: which component's late teardown, or which missing wait, reaches the new sandbox of the same name, with timestamps and the cause code the refusal carries
+- [ ] **STOP-03**: The cause is fixed or bounded: after a stop returns, or on the next `up`, a start with the same sandbox name does not fail because of the previous sandbox's teardown; every wait has an explicit timeout, fail closed and the no-orphan guarantee are kept, the `daemon.stopped` contract (the `failedTeardowns` count and the first failure code) and the 29-code error catalogue are unchanged, and a hermetic test fails without the change and passes with it
+- [ ] **STOP-04**: A live run on the production stack does at least 20 consecutive stop-then-`up` iterations on one sandbox name with no settle between them and records zero `OPENSHELL_START_FAILED`, `failedTeardowns` 0 in every `daemon.stopped` row, and zero residue (containers, sandboxes, workspace entries, daemons); the variant c stop of Phase 41 that wrote no `daemon.stopped` row is explained or recorded as a finding
+- [ ] **KIMV-01**: The legacy kimi-cli 1.51.0 production tier is rerun from a scratch install outside the repository with the wire recorder log and the full output of `kimi mcp test realm` kept outside the repository, and the dated result (version, date, stack) tells apart a `tools/list` response that was never written, one written after the client closed, and an error response (Linear SPE-34732)
+- [ ] **KIMV-02**: The cause of GAP-43-03 is established and recorded as the legacy client, `realm mcp` (its handling of an early-closing or slow-reading client) or the stack (cold session timing); if the cause is in `realm mcp` it is fixed with a hermetic test that fails without the fix and the production tier passes, and if it is in the client the tier is shown to pass in a documented variant or the owner's decision to retire the archived row (OQ-24-01) is recorded
+- [ ] **KIMV-03**: GAP-43-01 is closed by evidence: which of `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` and `REALM_DRIVER_SOCKET` a real legacy kimi user needs to reach a non-default production stack is shown live with `kimi mcp test realm` and no names restored by the recorder; if any is needed the `kimi` recipe writes an `env` block of those names only (no secret), its golden equals what the host itself writes, and the migration note tells an existing install what to refresh; if none is needed the row closes as not needed with that evidence; or the owner retires the row (OQ-43-03, OQ-24-01)
+- [ ] **KIMV-04**: `GAP-24-02`, `GAP-43-01`, `GAP-43-03`, the support matrix, `docs/integration/wave1-boot-matrix.md`, the host registry note and the contract checker agree with the result, the scratch installs are removed, and the production stack is left as found (no leftover container or session)
+- [ ] **HTIER-01**: A Grok Build session is attributed `grok-build` in the audit line even when the shared Claude plugin bundle or Claude configuration file also carries a `realm` server, through an entry or bundle of its own or a launcher label that wins, shown live with the installed Grok Build version recorded and with a `realm` server present in both `config.toml` and the Claude files; if Grok Build offers no seam that makes the attribution deterministic, `GAP-40-01` stays accepted-residual with the missing host feature named and the verified workaround documented (Linear SPE-34733)
+- [ ] **HTIER-02**: Muse Code has a production tier as claude, opencode and codex have: a cold attach on the production stack with no warm-up and a new project directory, the host launches `realm mcp --host muse-code` and the handshake, `tools/list` and the six tools show on the wire, with the installed version and the date recorded and the registry tier updated; or a named blocker (for example a missing provider seam)
+- [ ] **HTIER-03**: Prime Agent has a production tier by the same standard as HTIER-02, or a named blocker
+- [ ] **HTIER-04**: Grok Build has a production tier by the same standard as HTIER-02, or a named blocker
+- [ ] **HTIER-05**: The registry rows, the support matrix, `docs/integration/host-plugin-contract.md` (its statement that no wave 2 host has a production tier and the Phase 40 evidence table), `docs/integration/host-plugin-gaps.md`, the host pages under `docs/hosts/`, and the pinning tests agree with the result and with each other; `test/integration/enforce-default.test.ts` still attaches and completes a call for every host id under the default; and any attribution mechanism that adds a launcher is covered by the labelled-launcher guard test
+
 ## Carried from v2.0 (not in this milestone)
 
 - [ ] **FS-02**: Path resolution is race-resistant: components are opened relative to a pinned root descriptor with no-follow semantics, so a symlink swapped between check and open is rejected (Accepted limitation, Phase 27 disposition, 2026-11-17: the requirement text is unmet; owner-confirmed approximation of 2026-10-23)
@@ -252,9 +276,9 @@ All v3.0 requirements are hypotheses until shipped and verified.
 
 ## Carried from v6.0 (open at close, 2026-11-19)
 
-- [ ] **OMPR-01**: Carried, not met: a quiet-host measurement of the Omp cold attach (Phase 38 ended VOID, one valid run in six attempts; OI-11 `Carried (no quiet slot)`). Accepted by the owner on completing v6.0; a v7.0 candidate (a repeat with a harness fix)
-- [ ] **OMPR-06**: Partial: the paired loaded A/B window ended VOID with three valid pairs of five (Phase 44); no effect claim for or against the change. Accepted by the owner on completing v6.0; a v7.0 candidate together with OMPR-01
-  Also carried as findings and accepted limitations, not requirements: F-41-1, GAP-40-01, GAP-43-01 to GAP-43-03, and the ship-flow `--enforce` confirmation of DEBT-03 (see `.planning/milestones/v6.0-MILESTONE-AUDIT.md`).
+- [ ] **OMPR-01**: Carried, not met: a quiet-host measurement of the Omp cold attach (Phase 38 ended VOID, one valid run in six attempts; OI-11 `Carried (no quiet slot)`). Accepted by the owner on completing v6.0; taken into v7.0 (Phase 45: OMPV-01 to OMPV-06, a repeat under a design that can yield a valid verdict on a shared host)
+- [ ] **OMPR-06**: Partial: the paired loaded A/B window ended VOID with three valid pairs of five (Phase 44); no effect claim for or against the change. Accepted by the owner on completing v6.0; taken into v7.0 together with OMPR-01 (OMPV-05, OMPV-06)
+  Also carried as findings and accepted limitations, not requirements: F-41-1 (taken into v7.0 as STOP-01 to STOP-04), GAP-40-01 (HTIER-01), GAP-43-01 to GAP-43-03 (KIMV-01 to KIMV-04; GAP-43-02 stays accepted-residual) and the ship-flow `--enforce` confirmation of DEBT-03 (owner-side configuration, not in v7.0) (see `.planning/milestones/v6.0-MILESTONE-AUDIT.md`).
 
 ## Standing requirements (completed earlier, still binding)
 
@@ -305,6 +329,8 @@ v3.0 requirements: 52 total, 52 mapped
 v5.0 requirements: 14 total (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), 14 mapped to phases 33 to 37, all Complete (ENF-04 with a recorded partial). Audit: `.planning/milestones/v5.0-MILESTONE-AUDIT.md`
 
 v6.0 requirements: 19 total (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02), 19 mapped to phases 38 to 44. 17 ticked Complete (OMPR-02 not triggered; OMPR-03 as VOID; OMPR-05 on its hermetic basis; HOSTID-02 met at the daemon and the validator tier only; DEBT-03 with a recorded partial), OMPR-01 left open as Carried and OMPR-06 left open as Partial, both accepted by the owner on completing v6.0. Audit: `.planning/milestones/v6.0-MILESTONE-AUDIT.md`
+
+v7.0 requirements: 19 total (OMPV-01..06, STOP-01..04, KIMV-01..04, HTIER-01..05), 19 mapped to phases 45 to 48, all Planned. OMPR-01 and OMPR-06 (carried from v6.0) are taken into Phase 45 and close only through OMPV-05 and OMPV-06. Context: `.planning/MILESTONE-CONTEXT.md`
 
 Each v3.0 requirement maps to exactly one phase. The carried requirements keep their v2.0 phase and status.
 
@@ -445,12 +471,12 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | V1LIVE-01 | Phase 36 | Complete |
 | V1LIVE-02 | Phase 36 | Complete |
 | SPEC-01 | Phase 37 | Complete |
-| OMPR-01 | Phase 38 | Carried (not met): one valid quiet-host run in six attempts, outcome VOID; OI-11 stays Carried (no quiet slot); accepted by the owner on completing v6.0 |
+| OMPR-01 | Phase 38 | Carried (not met): one valid quiet-host run in six attempts, outcome VOID; OI-11 stays Carried (no quiet slot); accepted by the owner on completing v6.0; taken into v7.0, Phase 45 (OMPV-05, OMPV-06) |
 | OMPR-02 | Phase 38 | Complete (not triggered: the frozen rule gave VOID; plans 38-02 and 38-03 superseded by Phase 44) |
 | OMPR-03 | Phase 38 | Complete (as VOID: numbers and host facts recorded, OI-11 reads Carried) |
 | OMPR-04 | Phase 44 | Complete |
 | OMPR-05 | Phase 44 | Complete (hermetic basis; no responsiveness effect shown) |
-| OMPR-06 | Phase 44 | Partial: paired loaded window VOID, three valid pairs of five, no effect claim; accepted by the owner on completing v6.0 |
+| OMPR-06 | Phase 44 | Partial: paired loaded window VOID, three valid pairs of five, no effect claim; accepted by the owner on completing v6.0; taken into v7.0, Phase 45 (OMPV-05, OMPV-06) |
 | EXEC-01 | Phase 39 | Complete |
 | EXEC-02 | Phase 39 | Complete |
 | EXEC-03 | Phase 39 | Complete |
@@ -464,6 +490,25 @@ Each v3.0 requirement maps to exactly one phase. The carried requirements keep t
 | DEBT-03 | Phase 42 | Complete (partial: the ship-flow --enforce run is owner-side configuration, unconfirmed) |
 | KIMI-01 | Phase 43 | Complete |
 | KIMI-02 | Phase 43 | Complete |
+| OMPV-01 | Phase 45 | Planned |
+| OMPV-02 | Phase 45 | Planned |
+| OMPV-03 | Phase 45 | Planned |
+| OMPV-04 | Phase 45 | Planned |
+| OMPV-05 | Phase 45 | Planned |
+| OMPV-06 | Phase 45 | Planned |
+| STOP-01 | Phase 46 | Planned |
+| STOP-02 | Phase 46 | Planned |
+| STOP-03 | Phase 46 | Planned |
+| STOP-04 | Phase 46 | Planned |
+| KIMV-01 | Phase 47 | Planned |
+| KIMV-02 | Phase 47 | Planned |
+| KIMV-03 | Phase 47 | Planned |
+| KIMV-04 | Phase 47 | Planned |
+| HTIER-01 | Phase 48 | Planned |
+| HTIER-02 | Phase 48 | Planned |
+| HTIER-03 | Phase 48 | Planned |
+| HTIER-04 | Phase 48 | Planned |
+| HTIER-05 | Phase 48 | Planned |
 | FS-02 | Phase 2 | Accepted limitation (Phase 27 disposition, 2026-11-17): accepted approximation, confirmed by the owner 2026-10-23; rebind verified through the pinned root; check-to-use windows remain on the read and write paths; audit G-10 |
 | ANDA-01 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
 | ANDA-02 | Phase 3 | Dropped (owner decision D-27-01, 2026-11-17): the Anda bridge is removed in Phase 28 |
