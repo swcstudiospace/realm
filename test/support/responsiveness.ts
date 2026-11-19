@@ -4,8 +4,9 @@
 // test/support/responsiveness.test.ts.
 //
 // Exports: PROBE_INTERVAL_MS, MAX_LATENCY_MS, P95_LATENCY_MS, MIN_PROBES, MIN_WINDOW_MS, BASELINE_WINDOW_MS, BASELINE_MIN_PROBES,
-// QUIET_LOAD_PER_CPU, ProbeSample, LatencySummary, ResponsivenessBounds, HostLoad, summariseLatencies, quietHost,
-// latencyProblems, responsivenessProblems, samplesCsv, summaryText.
+// QUIET_LOAD_PER_CPU, SECONDARY_HEADING, ProbeSample, LatencySummary, ResponsivenessBounds, HostLoad, RelativeSummary, CpuPressure,
+// SecondaryParts, summariseLatencies, quietHost, latencyProblems, responsivenessProblems, samplesCsv, checkedReadyAtMs,
+// samplesCsvWithPhase, relativeSummary, parsePressure, summaryText, summaryTextWithSecondary.
 
 export const PROBE_INTERVAL_MS = 250;
 export const MAX_LATENCY_MS = 1000;
@@ -142,6 +143,59 @@ export function samplesCsv(samples: readonly ProbeSample[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+// The ready time of a run, in milliseconds from process start: a finite, non-negative number, otherwise an error. The one definition the
+// split at ready (responsiveness-decision.ts) and the phase column below share, so no caller can put every sample in the window by
+// passing a ready time that is not one.
+export function checkedReadyAtMs(readyAtMs: number): number {
+  if (!Number.isFinite(readyAtMs) || readyAtMs < 0) {
+    throw new Error(`the ready time must be a finite, non-negative number of milliseconds, got ${String(readyAtMs)}`);
+  }
+  return readyAtMs;
+}
+
+// samplesCsv with a third column: boot for a probe sent before the ready time, window for one sent at or after it (Phase 44, 44-CONTEXT
+// D-44-03). The header is sentAtMs,latencyMs,phase.
+export function samplesCsvWithPhase(samples: readonly ProbeSample[], readyAtMs: number): string {
+  const ready = checkedReadyAtMs(readyAtMs);
+  const lines = ["sentAtMs,latencyMs,phase"];
+  for (const sample of samples) {
+    lines.push(`${String(sample.sentAtMs)},${sample.latencyMs === undefined ? "" : String(sample.latencyMs)},${sample.sentAtMs < ready ? "boot" : "window"}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+// The heading of the control-relative section of the cold-attach text and of the record. It is a secondary reading, never a verdict.
+export const SECONDARY_HEADING = "secondary, control-relative, not a verdict";
+
+// The window's maximum and 95th percentile latency minus the reference's (the in-run baseline, or the paired control). There is no pass
+// or fail member: this is a reading beside the verdict, and the verdict stays the absolute one (44-CONTEXT D-44-03).
+export interface RelativeSummary {
+  readonly label: string;
+  readonly maxMs: number;
+  readonly p95Ms: number;
+}
+
+export function relativeSummary(window: LatencySummary, reference: LatencySummary): RelativeSummary {
+  return { label: SECONDARY_HEADING, maxMs: window.maxMs - reference.maxMs, p95Ms: window.p95Ms - reference.p95Ms };
+}
+
+// The "some" line of the CPU pressure file: how much of the last 10, 60 and 300 seconds some task waited for a CPU, in percent.
+export interface CpuPressure {
+  readonly avg10: number;
+  readonly avg60: number;
+  readonly avg300: number;
+}
+
+// Parses the text of the CPU pressure file (it reads no file). Null when there is no some line or one of its three averages is not a
+// plain decimal number.
+export function parsePressure(text: string): CpuPressure | null {
+  const match = /^some\s+avg10=(\d+(?:\.\d+)?)\s+avg60=(\d+(?:\.\d+)?)\s+avg300=(\d+(?:\.\d+)?)(?:\s|$)/m.exec(text);
+  if (match === null) {
+    return null;
+  }
+  return { avg10: Number(match[1]), avg60: Number(match[2]), avg300: Number(match[3]) };
+}
+
 // A load average reading with the CPU count it was taken on.
 export interface HostLoad {
   readonly label: string;
@@ -151,10 +205,8 @@ export interface HostLoad {
   readonly cpus: number;
 }
 
-// A plain multi-line text with the counts, the latencies, the longest gap and the loads. No path and no environment value.
-export function summaryText(label: string, summary: LatencySummary, loads: readonly HostLoad[]): string {
-  const lines = [
-    `measurement: ${label}`,
+function summaryLines(summary: LatencySummary): string[] {
+  return [
     `probes sent: ${String(summary.sent)}`,
     `probes answered: ${String(summary.answered)}`,
     `probes unanswered: ${String(summary.unanswered)}`,
@@ -164,8 +216,48 @@ export function summaryText(label: string, summary: LatencySummary, loads: reado
     `95th percentile latency: ${String(summary.p95Ms)} ms`,
     `longest gap between answers: ${String(summary.longestGapMs)} ms`,
   ];
-  for (const load of loads) {
-    lines.push(`load ${load.label}: ${load.load1.toFixed(2)} ${load.load5.toFixed(2)} ${load.load15.toFixed(2)} on ${String(load.cpus)} cpus`);
-  }
+}
+
+function loadLines(loads: readonly HostLoad[]): string[] {
+  return loads.map((load) => `load ${load.label}: ${load.load1.toFixed(2)} ${load.load5.toFixed(2)} ${load.load15.toFixed(2)} on ${String(load.cpus)} cpus`);
+}
+
+// A plain multi-line text with the counts, the latencies, the longest gap and the loads. No path and no environment value.
+export function summaryText(label: string, summary: LatencySummary, loads: readonly HostLoad[]): string {
+  return `${[`measurement: ${label}`, ...summaryLines(summary), ...loadLines(loads)].join("\n")}\n`;
+}
+
+// What the cold-attach text reports beside the verdict: the window from Omp ready (the verdict's samples), the uncorrected numbers over
+// every sample from process start, the boot samples on their own, and the control-relative secondary reading.
+export interface SecondaryParts {
+  readonly readyAtMs: number;
+  readonly window: LatencySummary;
+  readonly all: LatencySummary;
+  readonly boot: LatencySummary;
+  // The time of the first answered probe over all samples, from process start; undefined when none was answered.
+  readonly firstAnswerMs: number | undefined;
+  readonly relative: RelativeSummary;
+  // What the relative numbers are taken against, for the text only.
+  readonly referenceLabel: string;
+}
+
+export function summaryTextWithSecondary(label: string, parts: SecondaryParts, loads: readonly HostLoad[]): string {
+  const first = parts.firstAnswerMs === undefined ? "not seen" : `${String(parts.firstAnswerMs)} ms`;
+  const lines = [
+    `measurement: ${label}`,
+    `corrected window, probes sent at or after Omp ready (${String(parts.readyAtMs)} ms from process start); the verdict reads these:`,
+    ...summaryLines(parts.window),
+    "uncorrected, every probe from process start:",
+    ...summaryLines(parts.all),
+    "boot samples, probes sent before Omp ready:",
+    `probes sent: ${String(parts.boot.sent)}`,
+    `probes answered: ${String(parts.boot.answered)}`,
+    `probes unanswered: ${String(parts.boot.unanswered)}`,
+    `first answer over all samples: ${first}`,
+    `${parts.relative.label}:`,
+    `maximum latency minus ${parts.referenceLabel}: ${String(parts.relative.maxMs)} ms`,
+    `95th percentile latency minus ${parts.referenceLabel}: ${String(parts.relative.p95Ms)} ms`,
+    ...loadLines(loads),
+  ];
   return `${lines.join("\n")}\n`;
 }
