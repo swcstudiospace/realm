@@ -223,9 +223,11 @@ export function readThreadSplit(pid: number, reader: ProcReader): ThreadSplitRes
 export type ScopeCheck = { readonly ok: true; readonly scopeDir: string } | { readonly ok: false; readonly refusal: Refusal };
 
 // The check before the first probe that the process the sampler will read is Omp in its own scope: its command name is not the wrapper
-// (systemd-run replaces itself with the command, so a wrapper still running means the sampler would read the wrapper) and its cgroup is a
-// transient scope named for this process id (systemd-run names it run-p<pid>-i<id>.scope), the exact directory expectedScopeDir when one
-// is given. The scope directory is returned for the sampler.
+// (systemd-run replaces itself with the command, so a wrapper still running means the sampler would read the wrapper) and its cgroup leaf is a
+// transient scope unit: a run-*.scope leaf. Two shapes are observed in the wild: run-p<pid>-i<id>.scope (the pid-encoded name the harness
+// was written against) and run-<32hex>.scope, seen live as run-r<32hex>.scope (systemd 255's random transient name; see 45-MEASUREMENT.md).
+// Any run-*.scope leaf is therefore accepted: the pid itself is still the thing verified (its comm and its cgroup are read for pid), and
+// when expectedScopeDir is given the directory must match it exactly. The scope directory is returned for the sampler.
 export function verifyScopedChild(pid: number, expectedScopeDir: string | null, reader: ProcReader): ScopeCheck {
   let comm: string;
   let cgroup: string;
@@ -245,8 +247,8 @@ export function verifyScopedChild(pid: number, expectedScopeDir: string | null, 
     return { ok: false, refusal: "child scope could not be verified" };
   }
   const leaf = scopeDir.slice(scopeDir.lastIndexOf("/") + 1);
-  const named = new RegExp(`^run-p${String(pid)}-i\\d+\\.scope$`).test(leaf);
-  if (!named || (expectedScopeDir !== null && scopeDir !== expectedScopeDir)) {
+  const isRunScopeLeaf = /^run-.+\.scope$/.test(leaf);
+  if (!isRunScopeLeaf || (expectedScopeDir !== null && scopeDir !== expectedScopeDir)) {
     return { ok: false, refusal: "child scope could not be verified" };
   }
   return { ok: true, scopeDir };

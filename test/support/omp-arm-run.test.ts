@@ -201,18 +201,39 @@ void test("OMPV-03 verifyScopedChild accepts Omp in a scope named for its pid an
   assert.deepEqual(verifyScopedChild(4242, SCOPE_DIR, reader), { ok: true, scopeDir: SCOPE_DIR });
 });
 
+void test("OMPV-03 verifyScopedChild accepts the run-<32hex>.scope leaf this host's transient scope actually has (observed live as run-r<32hex>.scope), and any run-*.scope leaf", () => {
+  const comm = { "/proc/4242/comm": "omp\n" };
+  const hex = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-r8a83b262795a418cac3c9d99a9904410.scope\n";
+  const hexDir = "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/run-r8a83b262795a418cac3c9d99a9904410.scope";
+  assert.deepEqual(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": hex })), { ok: true, scopeDir: hexDir });
+  assert.deepEqual(verifyScopedChild(4242, hexDir, fakeReader({ ...comm, "/proc/4242/cgroup": hex })), { ok: true, scopeDir: hexDir });
+  const plainHex = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-0123456789abcdef0123456789abcdef.scope\n";
+  assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": plainHex })).ok, true);
+  const generic = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-foo.scope\n";
+  assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": generic })).ok, true);
+});
+
+void test("OMPV-03 verifyScopedChild no longer binds the pid into the leaf: a run-p<other>-i<id>.scope leaf of the pid's own cgroup is accepted as a run-*.scope leaf", () => {
+  const comm = { "/proc/4242/comm": "omp\n" };
+  const otherPid = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i77.scope\n";
+  const otherDir = "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i77.scope";
+  assert.deepEqual(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": otherPid })), { ok: true, scopeDir: otherDir });
+});
+
 void test("OMPV-03 verifyScopedChild refuses when the process is still the wrapper, so the sampler would read the wrapper", () => {
   const reader = fakeReader({ "/proc/4242/comm": "systemd-run\n", "/proc/4242/cgroup": CHILD_CGROUP });
   assert.deepEqual(verifyScopedChild(4242, null, reader), { ok: false, refusal: "sampled process is the wrapper" });
 });
 
-void test("OMPV-03 verifyScopedChild refuses a cgroup that is not the expected scope, not a scope of this pid, the root, or unreadable", () => {
+void test("OMPV-03 verifyScopedChild refuses a cgroup that is not the expected scope, not a run-*.scope leaf, the root, or unreadable", () => {
   const comm = { "/proc/4242/comm": "omp\n" };
   assert.deepEqual(verifyScopedChild(4242, "/sys/fs/cgroup/other.scope", fakeReader({ ...comm, "/proc/4242/cgroup": CHILD_CGROUP })), { ok: false, refusal: "child scope could not be verified" });
-  const wrongPid = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-p1-i77.scope\n";
-  assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": wrongPid })).ok, false);
   const login = "0::/user.slice/user-1000.slice/session-3.scope\n";
   assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": login })).ok, false);
+  const emptyRun = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-.scope\n";
+  assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": emptyRun })).ok, false);
+  const notScope = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-foo\n";
+  assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": notScope })).ok, false);
   assert.equal(verifyScopedChild(4242, null, fakeReader({ ...comm, "/proc/4242/cgroup": "0::/\n" })).ok, false);
   assert.deepEqual(verifyScopedChild(4242, null, fakeReader({})), { ok: false, refusal: "child scope could not be verified" });
 });
