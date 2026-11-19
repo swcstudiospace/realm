@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
-import { launchFilteredDaemon, startDetachedDaemon, type SpawnDaemon } from "../../src/cli/main.js";
+import { launchFilteredDaemon, startDetachedDaemon, type SpawnDaemon } from "../../src/daemon/launch.js";
 import { RealmError } from "../../src/core/errors.js";
 import { pollUntil } from "../support/timing.js";
 

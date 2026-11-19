@@ -17,8 +17,14 @@ export const GATE_ENTRIES = [
   "src/contract/validate.ts",
 ];
 
-// Modules the exec gate closure must never reach (TOOL-02, P6-D1).
-export const FORBIDDEN_MODULES = ["src/doctor/checks.ts", "src/runtime/session-execution.ts", "src/cli/main.ts"];
+// Modules the exec gate closure must never reach (TOOL-02, P6-D1). src/cli/main.ts and src/daemon/launch.ts are the two
+// places the CLI and a host spawn the detached daemon (launch.ts holds the spawn; main.ts calls it).
+export const FORBIDDEN_MODULES = [
+  "src/doctor/checks.ts",
+  "src/runtime/session-execution.ts",
+  "src/cli/main.ts",
+  "src/daemon/launch.ts",
+];
 
 const CHILD_PROCESS = new Set(["child_process", "node:child_process"]);
 
@@ -27,12 +33,20 @@ function isFile(path) {
 }
 
 // Every module specifier the file names as code: static import and re-export declarations, import-equals with an
-// external module reference, dynamic import() with a string literal, and require() with a string literal.
-export function specifiersOf(source, fileName = "module.ts") {
+// external module reference, dynamic import() with a string literal, and require() with a string literal. With
+// valueOnly, declarations erased at compile time (import type and export type ... from) are left out, so the result
+// is what the compiled module loads. The gate never sets it: it counts type-only imports too and fails closed.
+export function specifiersOf(source, fileName = "module.ts", { valueOnly = false } = {}) {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const found = [];
   const visit = (node) => {
     if (
+      valueOnly &&
+      ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly === true) ||
+        (ts.isExportDeclaration(node) && node.isTypeOnly))
+    ) {
+      // Erased at compile time: not part of the loaded graph.
+    } else if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier !== undefined &&
       ts.isStringLiteral(node.moduleSpecifier)
@@ -85,7 +99,8 @@ function isCodeSpecifier(specifier) {
 // Walks relative imports from the entries. Returns the closure as a Map from root-relative module path to
 // { parent, specifiers }, where parent is the module that first reached it (null for an entry), so each
 // module has a shortest import chain. Relative specifiers that resolve to no .ts module are listed in unresolved.
-export function gateClosure({ root = DEFAULT_ROOT, entries = GATE_ENTRIES } = {}) {
+// valueOnly is passed through to specifiersOf; it is for measuring what a module loads, never for the gate.
+export function gateClosure({ root = DEFAULT_ROOT, entries = GATE_ENTRIES, valueOnly = false } = {}) {
   const modules = new Map();
   const unresolved = [];
   const pending = [];
@@ -100,7 +115,7 @@ export function gateClosure({ root = DEFAULT_ROOT, entries = GATE_ENTRIES } = {}
     if (modules.has(module)) {
       continue;
     }
-    const specifiers = specifiersOf(readFileSync(join(root, module), "utf8"), module);
+    const specifiers = specifiersOf(readFileSync(join(root, module), "utf8"), module, { valueOnly });
     modules.set(module, { parent, specifiers });
     for (const specifier of specifiers) {
       if (!isRelative(specifier) || !isCodeSpecifier(specifier)) {

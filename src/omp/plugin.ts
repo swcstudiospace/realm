@@ -107,6 +107,9 @@ export interface RealmPluginOptions {
   // return a value in [0, 1]; the extension edge passes Math.random. This is the one on/off switch the plugin reads; a caller that
   // holds a ResolvedBoot sets enabled from bounds.reattach.enabled.
   readonly reattach?: { readonly enabled: boolean; readonly random: () => number };
+  // Lets the edge run an attach's first step one event-loop turn after the handler returns: the plugin hands it the start callback.
+  // Absent, the attach starts in a microtask as before. The start refuses without attaching when the session ended or was superseded.
+  readonly deferStart?: (start: () => void) => void;
   // The boot bounds (src/host/boot.ts): the startup budget, the guarded status read bound, the repaint interval and the re-attach
   // schedule. Absent, the plugin takes BOOT_BOUNDS.
   readonly bounds?: ResolvedBoot;
@@ -446,8 +449,14 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
     // The attach and its first status read share one budget. A client is adopted once the daemon answers its status, even when
     // the host tool set refuses the mode that status reports: the refusal is painted and the last published mode stays (P16 b).
     // The host tool set follows the mode inside the same budget, and only while this attempt may still change it.
-    const pending = Promise.resolve()
-      .then(() => options.attachDaemon(ctx.cwd))
+    const started = new Promise<void>((resolve) => {
+      (options.deferStart ?? ((start) => { start(); }))(resolve);
+    });
+    const pending = started
+      .then(() => {
+        if (!isCurrent()) { throw makeRealmError("REALM_NOT_ACTIVE"); }
+        return options.attachDaemon(ctx.cwd);
+      })
       .then(async ({ client, refusal }) => {
         try {
           const status = await client.status();
