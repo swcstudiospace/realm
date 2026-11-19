@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-11-19
+
+### Documentation
+- docs(phase-45): feasibility record and frozen design: Branch S usable, Branch X in scope (45-01) (d29644e)
+
 ## [0.7.8] - 2026-11-19
 
 ### Documentation
