@@ -10,15 +10,28 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ## Current State
 
-Shipped: **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** (2026-11-19, release line 0.6.x), and no milestone is active. Earlier: v5.0 (2026-11-18, 0.5.x), v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md` (the latest release line). The record is in `.planning/milestones/`: for example `v6.0-ROADMAP.md`, `v6.0-REQUIREMENTS.md`, `v6.0-MILESTONE-AUDIT.md` and `v6.0-phases/`, and the same set for v2.0 to v5.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0). Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
+Shipped: **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** (2026-11-19, release line 0.6.x), and milestone v7.0 is in progress. Earlier: v5.0 (2026-11-18, 0.5.x), v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md` (the latest release line). The record is in `.planning/milestones/`: for example `v6.0-ROADMAP.md`, `v6.0-REQUIREMENTS.md`, `v6.0-MILESTONE-AUDIT.md` and `v6.0-phases/`, and the same set for v2.0 to v5.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0). Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
 
 What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
 
 Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
 
+## Current Milestone: v7.0 Carried findings closure
+
+**Goal:** Every finding v6.0 carried is closed with evidence or stays carried with a stated, tested reason. The Omp cold-attach responsiveness gets a measurement that can yield a valid verdict on a shared host, so OMPR-01, OMPR-06 and OI-11 are resolved honestly; `realm up` right after a rapid stop no longer fails once with `OPENSHELL_START_FAILED`; the legacy kimi-cli production-tier failure and its environment forwarding are root-caused; Grok Build is attributed to itself, and Muse Code, Prime Agent and Grok Build reach a production tier or have a named blocker. Release line 0.7.x. The latest release line is supported (`SECURITY.md`).
+
+**Target features:**
+
+- Omp responsiveness, a measurement that can yield a valid verdict (Phase 45): a feasibility record of the host-isolation primitives, a deterministic in-process stall probe, a live harness that gates on scoped contention and attributes each stall, alternating order with a frozen baseline bound, and a live window ending in PASS, FINDING, NOT-REPRODUCED or VOID (OMPR-01, OMPR-06, OI-11; Linear SPE-34730)
+- Rapid stop then up, F-41-1 (Phase 46): reproduced live, the cause recorded, fixed or bounded, proved by a hermetic test and at least 20 live stop-then-up iterations (Linear SPE-34731)
+- Legacy kimi production tier and environment forwarding (Phase 47): the failure of kimi-cli 1.51.0 reproduced with logs kept and its cause established, and GAP-43-01 closed by live evidence (Linear SPE-34732)
+- Grok Build attribution and production tiers (Phase 48): a Grok Build session attributed `grok-build` beside the shared Claude files (GAP-40-01), and a production tier or a named blocker for Muse Code, Prime Agent and Grok Build (Linear SPE-34733)
+
+The owner decisions of 2026-11-19 are recorded in `.planning/MILESTONE-CONTEXT.md`; the v6.0 context is archived at `.planning/milestones/v6.0-MILESTONE-CONTEXT.md`, the v5.0 context at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md` and the decisions D1 to D6 of v3.0 (2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPV, STOP, KIMV, HTIER) are in `.planning/REQUIREMENTS.md` and the phases (45 to 48) in `.planning/ROADMAP.md`. The ship-flow `--enforce` confirmation of DEBT-03 is not in this milestone (owner-side configuration; carried).
+
 ## Last Milestone: v6.0 Responsiveness, exec kill proof, host ids and evidence debt (shipped 2026-11-19)
 
-**Result:** v6.0 shipped on 2026-11-19 (release line 0.6.x, phases 38 to 44, 17 of 19 requirements ticked Complete; audit `milestones/v6.0-MILESTONE-AUDIT.md`, passed with accepted limitations). OMPR-01 is carried (not met) and OMPR-06 is partial. No milestone is active; the next one starts in a pull request that sets the next minor in `release/milestone.json`.
+**Result:** v6.0 shipped on 2026-11-19 (release line 0.6.x, phases 38 to 44, 17 of 19 requirements ticked Complete; audit `milestones/v6.0-MILESTONE-AUDIT.md`, passed with accepted limitations). OMPR-01 is carried (not met) and OMPR-06 is partial. The next milestone, v7.0, started the same day by a pull request that set the next minor in `release/milestone.json`.
 
 **What shipped:**
 
@@ -29,11 +42,13 @@ Verified only as far as a connection and a scripted run: no LLM-driven tool call
 - Evidence debt (Phase 42): the whole suite as uid 5002 (5542 tests, 0 failures), the breaking-change marker guard (46 tests) and its CI workflow (merged on the owner's review of the exact head); the ship-flow enforce run is unconfirmed (DEBT-03 partial)
 - Kimi (Phase 43): Kimi Code 2.6.3 passed all tiers cold; the legacy kimi-cli 1.51.0 production tier failed (cause not established, GAP-43-01 to GAP-43-03)
 
-**v7.0 candidates (planned, not built):** the Omp responsiveness repeat with a harness fix (OMPR-01, OMPR-06, OI-11); F-41-1; the legacy kimi CLI and GAP-43-01; GAP-40-01 and production tiers for Muse Code, Prime Agent and Grok Build; the ship-flow `--enforce` confirmation (DEBT-03).
+**v7.0 candidates (taken into v7.0, Phases 45 to 48):** the Omp responsiveness repeat with a harness fix (OMPR-01, OMPR-06, OI-11); F-41-1; the legacy kimi CLI and GAP-43-01; GAP-40-01 and production tiers for Muse Code, Prime Agent and Grok Build. The ship-flow `--enforce` confirmation (DEBT-03) was not ticked and stays carried.
 
-The owner decisions of 2026-11-18 and 2026-11-19 are recorded in `.planning/MILESTONE-CONTEXT.md` and `.planning/milestones/v6.0-MILESTONE-AUDIT.md`; the v5.0 context is archived at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md` and the decisions D1 to D6 of v3.0 (2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPR, EXEC, HOSTID, TEAR, DEBT, KIMI) are in `.planning/REQUIREMENTS.md` and the phases (38 to 44) in `.planning/ROADMAP.md`.
+The owner decisions of 2026-11-18 and 2026-11-19 are recorded in `.planning/milestones/v6.0-MILESTONE-CONTEXT.md` and `.planning/milestones/v6.0-MILESTONE-AUDIT.md`; the v5.0 context is archived at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md` and the decisions D1 to D6 of v3.0 (2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPR, EXEC, HOSTID, TEAR, DEBT, KIMI) are archived in `.planning/milestones/v6.0-REQUIREMENTS.md` and the phases (38 to 44) in `.planning/milestones/v6.0-ROADMAP.md`.
 
 **Carried, not closed by v6.0** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`, `milestones/v6.0-MILESTONE-AUDIT.md`): OMPR-01 (the quiet-host Omp cold-attach measurement, Phase 38 VOID) and OMPR-06 (the paired loaded window, Phase 44 VOID), both accepted by the owner on completing v6.0; FS-02 (race-resistant path resolution is an accepted limitation, Phase 27 disposition of 2026-11-17; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dropped by owner decision D-27-01, 2026-11-17), PRD-DRV-01 (complete: the owner confirmed its amendment on 2026-11-17) and UI-01 (an accepted limitation; Phase 36 recorded a loaded-host Omp cold-attach run that failed its thresholds, Phase 44 a paired loaded window that ended VOID, and the status stays the owner's call). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
+
+**Taken into v7.0:** OMPR-01 and OMPR-06 (with OI-11) are taken into Phase 45 (OMPV-01 to OMPV-06); they close only on a valid verdict, never on a VOID outcome or on the hermetic probe alone. F-41-1 is Phase 46 (STOP), GAP-43-01 and GAP-43-03 are Phase 47 (KIMV), and GAP-40-01 is Phase 48 (HTIER).
 
 ## Requirements
 
@@ -147,4 +162,4 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-11-19 after completing milestone v6.0*
+*Last updated: 2026-11-19 after starting milestone v7.0*
