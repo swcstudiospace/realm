@@ -302,8 +302,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
     deferral: null,
   }),
   // Source: 40-CONTEXT D-40-02 (E-40-07 to E-40-09). Its live tier is the wave-2 table (D-40-07). Ran 2026-11-18 in an isolated home with a stub realm: PASS.
-  // T3: Phase 48 window 2026-11-19 (48-03): rehearsal failed at realm host install grok-build --dry-run (config-home-missing, POLICY_DENIED);
-  // the harness fix (create the grok config home in productionOverrides) is carried as GAP-48-03; the tier stays config-only (plan 48-04).
+  // T3: Phase 50 window 2026-11-19 (50-WINDOW.md): production passed cold after the GAP-48-03 harness fix (create <grok-home>/.grok in
+  // productionOverrides); the both-files attribution and the Claude-alone control failed on the mandatory audit assertion (cold doctor leaves early).
   "grok-build": record({
     id: "grok-build",
     family: "toml-table",
@@ -317,8 +317,8 @@ export const HOST_REGISTRY: Readonly<Record<HostId, RegistryRecord>> = Object.fr
       command: "grok mcp list, grok mcp doctor (launches), grok mcp add, gated wave 2 validator tier, REALM_LIVE_GROK_BUILD=1",
     },
     t3: {
-      status: "gap",
-      note: "rehearsal failed: Grok Build 1.0.77, 2026-11-19, production stack (realmlive account, Podman 5.7.1): realm host install grok-build --dry-run exited 1 with config-home-missing (candidate POLICY_DENIED) because the scenario creates an isolated grok-home but Realm never creates a host home (src/host/install.ts); the host command grok mcp doctor never ran, no wire and no audit line were produced; the harness fix (create the grok config home in productionOverrides of test/support/host-live.ts) is carried as GAP-48-03",
+      status: "rehearsed",
+      note: "Grok Build 1.0.77, 2026-11-19, production stack (realmlive account, Podman 5.7.1), cold attach with no warm-up and a new project directory: grok mcp doctor exited 0 after 525 ms against the 300000 ms failure bound, printed the checks [command found, server started, handshake OK, N tools discovered], the wire shows initialize, notifications/initialized and tools/list and the six Realm tools, the recorder restored HOME, attribution diagnostic left before the realm was ready by design (audit no attach line, no presence directories, 0 attached boot reports), clean before and after (0 containers, empty workspace, no daemon, real Grok config.toml and Claude file absent before and after); the both-files attribution failed the mandatory audit (host command 303 ms, the same complete wire, audit no attach line, no presence directories, 0 attached boot reports) and the Claude-alone control failed the same audit (402 ms, the same complete wire, presence claude-active, audit no attach line, 0 attached boot reports), both the cold case the harness predicts; evidence kept outside the repository",
     },
     deferral: null,
   }),

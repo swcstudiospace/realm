@@ -1002,6 +1002,29 @@ void test("productionOverrides of Muse Code and Grok Build: the muse directory b
   assert.notEqual(grok["HOME"], homedir(), "never the operator's real home");
   assert.equal(GROK_HOME_DIR, "grok-home");
 });
+void test("productionOverrides of Grok Build creates the .grok config home below the isolated HOME, and no other host creates it or points at the operator's real home", (t) => {
+  const root = tempDir(t);
+  const configHome = join(root, "config");
+  const grok = productionOverrides("grok-build", root, configHome);
+  assert.equal(statSync(join(root, GROK_HOME_DIR, ".grok")).isDirectory(), true, "the grok config home exists below the isolated HOME so realm host install runs");
+  assert.equal(isUnderTemp(join(root, GROK_HOME_DIR, ".grok")), true, "the grok config home lies inside the temporary directory");
+  assert.deepEqual(grok, { HOME: join(root, GROK_HOME_DIR) }, "the override still names only the isolated HOME");
+  assert.notEqual(join(root, GROK_HOME_DIR, ".grok"), join(homedir(), ".grok"), "never the operator's real grok home");
+  const others: readonly HostProductionId[] = ["claude", "codex", "opencode", "kimi", "kimi-code", "muse-code"];
+  for (const host of others) {
+    const otherRoot = tempDir(t);
+    const otherConfig = join(otherRoot, "config");
+    const overrides = productionOverrides(host, otherRoot, otherConfig);
+    for (const value of Object.values(overrides)) {
+      assert.equal(value === homedir(), false, `${host}: no override names the operator's real home`);
+      assert.ok(value.startsWith(otherRoot), `${host}: every override stays inside the scenario`);
+    }
+    assert.equal(existsSync(join(otherRoot, ".grok")), false, `${host}: no .grok below the scenario root`);
+    if (host === "opencode" || host === "muse-code") {
+      assert.equal(existsSync(join(otherConfig, ".grok")), false, `${host}: no .grok below the scenario config home`);
+    }
+  }
+});
 
 void test("the Muse Code drive is the echo command drive with the trust-workspace flag, and adds no credential, key flag or provider other than echo", () => {
   const drive = museProductionDrive();
