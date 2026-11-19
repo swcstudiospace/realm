@@ -4,7 +4,7 @@ plan: "04"
 status: complete
 requirements: [OMPV-04, OMPV-05, OMPV-06]
 verdict: VOID
-reason: calibration (underivable: 0 of 0 valid controls; three attempts refused V0)
+reason: "calibration (underivable: 0 of 0 valid controls; three attempts refused V0)"
 ---
 
 # Plan 45-04 summary: VOID (calibration), verdict window not run
