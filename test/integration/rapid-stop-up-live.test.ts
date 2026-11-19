@@ -167,8 +167,9 @@ function inputs(): LiveInputs {
 const UP_TIMEOUT_MS = 240_000;
 const ACTIVE_TIMEOUT_MS = 120_000;
 const DOWN_TIMEOUT_MS = 120_000;
-// The bound on the daemon's exit after SIGTERM: the 5 s drain, the 60 s teardown bound and a 25 s margin (as daemon-stop-live).
-const DAEMON_EXIT_BOUND_MS = 90_000;
+// The bound on the daemon's exit after SIGTERM: the 5 s drain, the 70 s teardown bound (TEARDOWN_TIMEOUT_MS, which includes the
+// 10 s container confirmation wait of Phase 46) and a 25 s margin.
+const DAEMON_EXIT_BOUND_MS = 100_000;
 const DAEMON_EXIT_POLL_MS = 50;
 const DAEMON_APPEAR_BOUND_MS = 30_000;
 const DAEMON_APPEAR_POLL_MS = 50;
@@ -801,6 +802,7 @@ async function iterateAfterStop(chain: Chain, iteration: number): Promise<Observ
   return {
     up: phase?.outcome ?? { kind: "not-run", notice: false },
     interruptedUp: undefined,
+    down: undefined,
     active: phase?.active ?? false,
     execOk: phase?.execOk ?? false,
     stop,
@@ -890,6 +892,7 @@ async function iterateMidUp(chain: Chain, iteration: number): Promise<Observed> 
   const observed: Observed = {
     up: phase?.outcome ?? { kind: "not-run", notice: false },
     interruptedUp: classifyUp(upRunOf(firstResult), ""),
+    down: undefined,
     active: phase?.active ?? false,
     execOk: phase?.execOk ?? false,
     stop,
@@ -903,16 +906,16 @@ async function iterateMidUp(chain: Chain, iteration: number): Promise<Observed> 
     loadBefore,
     loadAfter,
   };
-  // Whatever the outcome, the scenario is brought down and must leave nothing, so the next iteration starts settled.
+  // Whatever the outcome, the scenario is brought down and must leave nothing, so the next iteration starts settled. A down that
+  // fails with a product code or at its bound is a failure of its own kind (kept, counted, its output written), never a host stop;
+  // only residue left after the down is a host reason.
   const down = await realmCliWithWorkspace(live, chain.environment, ["down"], live.workspaceRoot, DOWN_TIMEOUT_MS);
-  if (down.exitCode !== 0) {
-    throw new ChainAbort(`realm down after a variant c iteration: ${describeResult(down)}`);
-  }
+  evidenceFile(chain.directory, files("down-output.txt"), upText(down));
   const residue = await waitForNoResidue(live, [chain.sandbox]);
   if (!residue.ok) {
     throw new ChainAbort(`residue after realm down: ${residue.detail}`);
   }
-  return observed;
+  return { ...observed, down: classifyUp(upRunOf(down), "") };
 }
 
 // ---- Window state and evidence --------------------------------------------------------------------------------------------
