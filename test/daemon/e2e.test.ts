@@ -1,7 +1,7 @@
 // End-to-end proof (RT-06, CLI-01, CLI-02, CLI-03; P6-D15). Every test drives the
 // real 06-04 CLI entry against the real 06-03 daemon over a real Unix socket in a
 // temporary state directory; the adapter seam carries the existing fakes (fake
-// execution and bridge helpers), so no live Podman, OpenShell, container, daemon
+// execution helpers), so no live Podman, OpenShell, container, daemon
 // process, or network is ever started. The lifecycle, PODMAN_MISSING fast path,
 // and doctor cases run through runCli; the permission case stats the real
 // temporary run directory; and the no-mounts proof inspects the real
@@ -24,7 +24,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ERROR_CATALOGUE } from "../../src/core/errors.js";
 import { STATUS_LABELS } from "../../src/core/status.js";
-import { runCli, type SpawnDaemon } from "../../src/cli/main.js";
+import { runCli } from "../../src/cli/main.js";
+import type { SpawnDaemon } from "../../src/daemon/launch.js";
 import { sendRequest } from "../../src/daemon/channel.js";
 import { selectionOf } from "../../src/daemon/client.js";
 import { startDaemon, type StartedDaemon, type StartDaemonOptions } from "../../src/daemon/daemon.js";
@@ -34,7 +35,6 @@ import { buildCreateArgv, buildPolicyDocument } from "../../src/runtime/openshel
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
 import { controlSocketPath, type EnvironmentLike } from "../../src/session/paths.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { boundedWait } from "../support/timing.js";
 
 // This file runs from dist/test/daemon, so three levels up is the package root.
@@ -115,7 +115,6 @@ function daemonOptions(fixture: Fixture, overrides?: Partial<StartDaemonOptions>
     },
     policyPath: writePolicy(fixture, "e2e-policy.json"),
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.
@@ -281,7 +280,7 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
 
   const report = JSON.parse(result.stdout) as CheckResult[];
   assert.ok(Array.isArray(report));
-  // Seven pre-existing items, Phase 6's two, Phase 9.7's two, and the three runtime checks when the daemon has a config.
+  // Six pre-existing items, Phase 6's two, Phase 9.7's two, and the three runtime checks when the daemon has a config.
   const ids = report.map((item) => item.id);
   const expectedIds: readonly CheckId[] = [
     "policy-file",
@@ -290,7 +289,6 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     "podman",
     "podman-service",
     "openshell",
-    "anda-bridge",
     "control-channel",
     "agentos",
     "host-binaries",
@@ -298,22 +296,26 @@ void test("doctor through the CLI against the fake-backed daemon lists every ite
     "runtime-roots",
     "driver-socket",
     "gateway",
+    "host-plugins",
+    "capability-tokens",
   ];
   for (const expected of expectedIds) {
     assert.ok(ids.includes(expected), `doctor report must list ${expected}`);
   }
   assert.ok(
-    ids.indexOf("control-channel") > ids.indexOf("anda-bridge"),
-    "control-channel must be appended after anda-bridge",
+    ids.indexOf("control-channel") > ids.indexOf("openshell"),
+    "control-channel must be appended after openshell",
   );
   assert.ok(
-    ids.indexOf("agentos") > ids.indexOf("anda-bridge"),
-    "agentos must be appended after anda-bridge",
+    ids.indexOf("agentos") > ids.indexOf("control-channel"),
+    "agentos must be appended after control-channel",
   );
   assert.ok(
     ids.indexOf("host-binaries") > ids.indexOf("agentos") && ids.indexOf("kernel-hardening") > ids.indexOf("host-binaries"),
     "host-binaries and kernel-hardening must be appended after agentos, in that order",
   );
+  assert.equal(ids.at(-1), "capability-tokens", "capability-tokens is the last item of the daemon report");
+  assert.equal(ids.at(-2), "host-plugins", "host-plugins stays directly before it");
 
   for (const item of report) {
     assert.ok(typeof item.id === "string");

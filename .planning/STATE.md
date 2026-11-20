@@ -1,38 +1,37 @@
 ---
 gsd_state_version: "1.0"
-milestone: v3.0
-milestone_name: Containment by Default
-current_phase: 12
-current_phase_name: Scripted-provider harness and Omp enforcement spike
-status: in_progress
-stopped_at: Swarm run 2026-11-20 - A01 DONE 8, A10 remediated, Linear SPE-35321..35355, gates green pending full test
-last_updated: "2026-11-20T22:30:00.000Z"
+milestone: v9.0
+milestone_name: Doctor health and concurrent binding (Starting)
+status: Starting
+stopped_at: Milestone v9.0 started, phases 55 to 59 planned
+last_updated: "2026-11-20T09:00:00.000Z"
 last_activity: 2026-11-20
-last_activity_desc: Swarm orchestration + security remediation + Linear programming; HARN-03 owner-blocked, CRASH-04 live gap open
-state_head: 724f4876945de994d26089bab7c78e4383f06bc9
+last_activity_desc: Milestone v9.0 started
+state_head: 63bbc7e
 progress:
-  total_phases: 9
-  completed_phases: 19
-  total_plans: 49
-  completed_plans: 20
-  percent: 70
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 55
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-29)
+See: .planning/PROJECT.md (updated 2026-11-20)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** v3.0 recovery across phases 12–20. This isolated integration lane contains prior Phase 18/19 work; current Omp and quality-ratchet changes remain in a separate worktree and are not integrated here. The current milestone is not complete.
+**Current focus:** Milestone v9.0, Doctor health and concurrent binding (phases 55 to 59, release line 0.9.x). New work: Omp plugin health check in `realm doctor` plus runbook (HEALTH), F-51-1 cause and fix (STOP-05, STOP-06), and concurrent binding implementation on the frozen Phase 53 design (CBIND-03, gated on owner ratification). Retests for the requirements v8.0 carried: HTIER-01 attribution (Phase 57) and KIMV-02 recorder fix plus rerun (Phase 58). Scope and owner decisions of 2026-11-20: `.planning/MILESTONE-CONTEXT.md`; the v8.0 close-out is `.planning/v8.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: 12 — Scripted-provider harness and Omp enforcement spike
-Plan: 3
-Status: Phase complete — ready for verification
-Last activity: 2026-11-14 — Phase 15 complete, transitioned to Phase 12
+Phase: 55 (Omp plugin health check), not started
+Plan: —
+Status: Starting milestone v9.0 (phases 55 to 59, release line 0.9.x)
+Last activity: 2026-11-20 — Milestone v9.0 started
 
 ## Current Recovery Boundaries
 
@@ -58,7 +57,7 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 
 **Velocity:**
 
-- Total plans completed: 17
+- Total plans completed: 121
 - Average duration: N/A
 - Total execution time: 0 hours
 
@@ -67,6 +66,38 @@ not a fresh instruction to restart discovery, install a runtime or close a phase
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 15 | 17 | - | - |
+| 14 | 2 | - | - |
+| 12 | 3 | - | - |
+| 16 | 5 | - | - |
+| 13 | 2 | - | - |
+| 17 | 6 | - | - |
+| 18 | 16 | - | - |
+| 19 | 1 | - | - |
+| 20 | 4 | - | - |
+| 21 | 4 | - | - |
+| 22 | 3 | - | - |
+| 23 | 3 | - | - |
+| 24 | 4 | - | - |
+| 25 | 4 | - | - |
+| 26 | 3 | - | - |
+| 27 | 2 | - | - |
+| 29 | 2 | - | - |
+| 28 | 3 | - | - |
+| 30 | 2 | - | - |
+| 31 | 2 | - | - |
+| 32 | 3 | - | - |
+| 33 | 3 | - | - |
+| 36 | 3 | - | - |
+| 37 | 1 | - | - |
+| 34 | 3 | - | - |
+| 35 | 3 | - | - |
+| 39 | 3 | - | - |
+| 40 | 3 | - | - |
+| 41 | 2 | - | - |
+| 43 | 2 | - | - |
+| 42 | 3 | - | - |
+| 38 | 1 | - | - |
+| 44 | 3 | - | - |
 
 **Recent Trend:**
 
@@ -213,8 +244,9 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 ## Session Continuity
 
 Last session: 2026-11-08T16:41:15.821Z
-Stopped at: Phase 15 complete, ready to verify Phase 12
+Stopped at: Phase 44 complete — all phases complete
 Resume file: None
+Branch note (2026-11-20, gsd/phase-15-complete merged with origin/main v0.9.0): this branch ran a swarm pass recorded here for continuity — A01 DONE 8, A10 remediated, Linear SPE-35321..35355, PR #249. The merge keeps main's current milestone/phase position as truth. v3.0 phases are NOT marked complete by this note: HARN-03 remains owner-blocked and the CRASH-04 live gap remains open.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 
@@ -233,8 +265,7 @@ Recorded commits (earlier): e949ad3, 53fc919, 26ab145 (phases 1 to 3); 6b28fa4 a
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone. The carried requirements, the open owner decisions and the tech-debt register are in `.planning/milestones/v2.0-MILESTONE-AUDIT.md`, and a summary is in PROJECT.md under "Next Milestone Goals".
-- The eight improvement proposals in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/IMPROVEMENT-PROPOSALS.md` await selection. The decisions that gate each one are in its "Selection needed" section and in the summary of quick task 261029-g7m (D1 to D6, V1 to V3).
+- Start the next milestone with /gsd-new-milestone
 
 ## Run ut-mvlvx860-9e2d5e0a (gsd-autonomous, 2026-10-24)
 

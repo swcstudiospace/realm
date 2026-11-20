@@ -2,23 +2,20 @@
 // a status of pass, warn, or fail (F-10: a status shape distinct from the validate ok
 // shape), a detail, and a fix. The fix is null only when the status is pass.
 //
-// Phase 2 registered three checks (D-44). Phase 3 adds four runtime items (RT-02, RT-03,
-// ANDA-02; D-69): podman, podman-service, openshell, and anda-bridge. AgentOS and the
+// Phase 2 registered three checks (D-44). Phase 3 adds three runtime items (RT-02, RT-03;
+// D-69): podman, podman-service, and openshell. AgentOS and the
 // control channel have no item in Phase 3, because nothing there can inspect them (D-69).
 // Phase 6 appends control-channel and agentos to REGISTERED deliberately (CLI-03; P6-D6,
 // P6-D14); the list is a costly change under D-44. Phase 9.7 appends host-binaries and
-// kernel-hardening after agentos for the same reason.
+// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins, and Phase 32 appends
+// capability-tokens after it.
 //
 // Details and fixes name paths, rules, and schema pointers. They never carry a value read
 // from the policy file (the privacy rule in src/contract/validate.ts).
 
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, statSync, type Stats } from "node:fs";
-import { request as httpRequest, type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { dirname, join } from "node:path";
-import { ANDA_INFORMATION_PATH } from "../anda/client.js";
-import { checkAppInformationShape } from "../anda/shape.js";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { ERROR_CATALOGUE, RealmError } from "../core/errors.js";
 import { loadPolicyFileDetailed, type LoadedPolicy } from "../core/policy.js";
@@ -36,6 +33,8 @@ import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
 import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
 import type { RuntimeConfig } from "../runtime/config.js";
+import { capabilityTokensCheck } from "./capability-checks.js";
+import { hostPluginsCheck } from "./host-checks.js";
 import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 import {
   defaultReadPtraceScope,
@@ -54,14 +53,15 @@ export type CheckId =
   | "podman"
   | "podman-service"
   | "openshell"
-  | "anda-bridge"
   | "control-channel"
   | "agentos"
   | "host-binaries"
   | "kernel-hardening"
   | "runtime-roots"
   | "driver-socket"
-  | "gateway";
+  | "gateway"
+  | "host-plugins"
+  | "capability-tokens";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -79,15 +79,12 @@ export interface DoctorOptions {
   // Writability probe for the session store. The default is access(W_OK), which writes no
   // file (D-44). Tests inject a probe to exercise the unwritable outcome.
   readonly canWrite?: (path: string) => WriteReading;
-  // Phase 3 seams (RT-02, ANDA-02). Each has a real default; tests inject fakes so that no
+  // Phase 3 seams (RT-02). Each has a real default; tests inject fakes so that no
   // process runs and no socket opens. env is the host environment, handed in by the caller at the entry
   // edge (the doctor reads no process environment). Each probe passes only the names its allowlist permits.
   readonly env: EnvironmentLike;
   readonly runCommand?: RunCommand;
   readonly connectSocket?: ConnectSocket;
-  readonly fetchInformation?: FetchInformation;
-  // The Anda Engine base URL (RuntimeConfig.andaUrl). Absent means no engine is configured.
-  readonly andaUrl?: string;
   // AgentOS seam (CLI-03; P6-D14). Absent means no daemon answered, so the realm is not active and the
   // agentos item reports that. Present, it says whether the daemon has a driver bound and whether a live session answers.
   readonly agentos?: AgentOsProbe;
@@ -107,15 +104,6 @@ export interface DoctorOptions {
   readonly statPath?: RuntimeCheckOptions["stat"];
   readonly connectGateway?: RuntimeCheckOptions["connectGateway"];
 }
-
-// Answers GET /.well-known/information on the engine at url with the status and the body text.
-// Rejects when no complete reply arrives. The rejection is never copied into a result.
-export interface AndaReply {
-  readonly status: number;
-  readonly text: string;
-}
-
-export type FetchInformation = (url: string, timeoutMs: number) => Promise<AndaReply>;
 
 // What the daemon reports about AgentOS (CLI-03; P6-D14). bound false: no driver is bound, so realm up is
 // refused with AGENTOS_NOT_CONFIGURED. bound true: alive says whether the driver's live session answers.
@@ -139,7 +127,7 @@ const STATE_DIR_MODE = 0o700;
 const PERMISSION_BITS = 0o777;
 
 // The registered checks in report order. The Phase 3 items follow the Phase 2 three (D-69).
-// Phase 6 appends control-channel and agentos after anda-bridge (P6-D6, P6-D14), and phase 9.7 appends host-binaries and
+// Phase 6 appends control-channel and agentos after openshell (P6-D6, P6-D14), and phase 9.7 appends host-binaries and
 // kernel-hardening after agentos; nothing earlier moves, because the list is a costly change under D-44.
 const REGISTERED: readonly Check[] = [
   (context) => policyFileCheck(context.options),
@@ -148,7 +136,6 @@ const REGISTERED: readonly Check[] = [
   podmanCheck,
   podmanServiceCheck,
   openShellCheck,
-  andaBridgeCheck,
   controlChannelCheck,
   agentOsCheck,
   (context) => hostBinariesCheck(hostBinaryInput(context.options)),
@@ -157,8 +144,6 @@ const REGISTERED: readonly Check[] = [
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 const DEFAULT_HASH_TIMEOUT_MS = 30000;
-// The largest Anda reply the doctor reads. The bridge applies the same limit.
-const ANDA_MAX_BODY_BYTES = 64 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 
 // Runs every registered check and returns the results in report order. The Podman probe is
@@ -186,7 +171,13 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.connectGateway === undefined ? {} : { connectGateway: options.connectGateway }),
     ...(options.probeTimeoutMs === undefined ? {} : { probeTimeoutMs: options.probeTimeoutMs }),
   });
-  return [...registered, ...runtime];
+  const hostPlugins = await hostPluginsCheck({ stateDir: options.stateDir });
+  const capabilityTokens = capabilityTokensCheck({
+    stateDir: options.stateDir,
+    ...(options.policyPath === undefined ? {} : { policyPath: options.policyPath }),
+    ...(options.runtimeConfig === undefined ? {} : { runtimeConfig: options.runtimeConfig }),
+  });
+  return [...registered, ...runtime, hostPlugins, capabilityTokens];
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.
@@ -396,7 +387,7 @@ function errnoOf(error: unknown): string | undefined {
   return undefined;
 }
 
-// ---- Phase 3 items (RT-02, RT-03, ANDA-02; D-69). Each item returns a status, a detail, and a fix
+// ---- Phase 3 items (RT-02, RT-03; D-69). Each item returns a status, a detail, and a fix
 // that is null only on pass. A detail names a catalogue code, a flag, or a rule. It never carries
 // raw command output, socket error text, or a value read from the engine.
 
@@ -409,12 +400,6 @@ const FIX_AWAIT_PODMAN = "Resolve the podman item first. The socket is inspected
 const FIX_INSTALL_OPENSHELL = "Install OpenShell 0.1.5 yourself and put openshell on PATH. Realm does not install OpenShell.";
 const FIX_DRIFT_OPENSHELL =
   "The installed OpenShell does not list every flag of the pinned create argv. Install the pinned 0.1.5 CLI, or record the drift in the runtime decision note before relying on this build.";
-const FIX_NOT_CONFIGURED =
-  "Set andaUrl in the runtime configuration to the Anda Engine base URL. The other checks do not need an engine.";
-const FIX_ANDA_URL =
-  "Set andaUrl to the http or https base URL of a running Anda Engine, without user information. Realm reads only GET /.well-known/information there.";
-const FIX_ANDA_SHAPE =
-  "The engine's AppInformation body does not match the shape Realm checks: engines is an array, default_engine is a string or null, and start_time_ms is a non-negative integer. This is a shape check, not a version check.";
 
 // podman (RT-02). The binary runs and reports 5.x. A socket that is not up is reported by podman-service.
 async function podmanCheck(context: CheckContext): Promise<CheckResult> {
@@ -511,60 +496,6 @@ function pinnedCreateFlags(): readonly string[] {
     imageRef: `example.invalid/doctor-check@sha256:${"0".repeat(64)}`,
   });
   return argv.filter((element) => element.startsWith("--"));
-}
-
-// anda-bridge (ANDA-02). The engine answers GET /.well-known/information with the AppInformation
-// shape. This is a shape check only: Anda publishes no version surface (OQ-P3-09).
-async function andaBridgeCheck(context: CheckContext): Promise<CheckResult> {
-  const id: CheckId = "anda-bridge";
-  const { options } = context;
-  const url = options.andaUrl;
-  if (url === undefined) {
-    return {
-      id,
-      status: "warn",
-      detail: "no Anda Engine URL is configured, so no engine is contacted",
-      fix: FIX_NOT_CONFIGURED,
-    };
-  }
-  if (!isEngineUrl(url)) {
-    return { id, status: "fail", detail: "SCHEMA_INVALID: andaUrl is not an http or https URL without user information", fix: FIX_ANDA_URL };
-  }
-  let reply: AndaReply;
-  try {
-    reply = await (options.fetchInformation ?? defaultFetchInformation)(url, probeTimeoutOf(options));
-  } catch {
-    return {
-      id,
-      status: "fail",
-      detail: `ANDA_UNREACHABLE: no complete reply to GET ${ANDA_INFORMATION_PATH}`,
-      fix: FIX_ANDA_URL,
-    };
-  }
-  if (reply.status !== 200) {
-    return {
-      id,
-      status: "fail",
-      detail: `ANDA_UNREACHABLE: GET ${ANDA_INFORMATION_PATH} answered with status ${String(reply.status)}`,
-      fix: FIX_ANDA_URL,
-    };
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(reply.text);
-  } catch {
-    return { id, status: "fail", detail: "ANDA_VERSION_MISMATCH: the AppInformation body is not JSON", fix: FIX_ANDA_SHAPE };
-  }
-  const shape = checkAppInformationShape(body);
-  if (!shape.ok) {
-    return { id, status: "fail", detail: `ANDA_VERSION_MISMATCH: ${shape.detail}`, fix: FIX_ANDA_SHAPE };
-  }
-  return {
-    id,
-    status: "pass",
-    detail: `GET ${ANDA_INFORMATION_PATH} returned the AppInformation shape (a shape check, not a version check)`,
-    fix: null,
-  };
 }
 
 // ---- Phase 6 items (CLI-03; P6-D6, P6-D14). Each item returns a status, a detail, and a fix
@@ -714,20 +645,6 @@ function hostBinaryInput(options: DoctorOptions): HostBinaryInput {
   };
 }
 
-// The same rule as the bridge: http or https, and no user information in the authority, even an empty one.
-function isEngineUrl(text: string): boolean {
-  if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(text)) {
-    return false;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(text);
-  } catch {
-    return false;
-  }
-  return parsed.protocol === "http:" || parsed.protocol === "https:";
-}
-
 function probeTimeoutOf(options: DoctorOptions): number {
   return options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 }
@@ -766,55 +683,4 @@ export function defaultRunCommand(file: string, args: readonly string[], options
 export async function defaultConnectSocket(socketPath: string, timeoutMs: number): Promise<void> {
   const socket = await dialWithin(socketPath, timeoutMs, "PODMAN_MACHINE_DOWN");
   socket.destroy();
-}
-
-type HttpTransport = (options: RequestOptions, onResponse: (res: IncomingMessage) => void) => ClientRequest;
-
-// One anonymous GET of ANDA_INFORMATION_PATH on the engine host, as the bridge sends it: no
-// credential, and no path prefix from the base URL. Rejects when no complete reply arrives within
-// timeoutMs, counted from the call. The idle socket timeout alone does not bound a server that keeps
-// sending bytes, so an overall deadline destroys the request, as the Anda client's per-attempt timer does.
-function defaultFetchInformation(url: string, timeoutMs: number): Promise<AndaReply> {
-  const target = new URL(url);
-  const transport: HttpTransport = target.protocol === "https:" ? httpsRequest : httpRequest;
-  return new Promise<AndaReply>((resolve, reject) => {
-    const request = transport(
-      {
-        hostname: target.hostname.replace(/^\[|\]$/g, ""),
-        port: target.port,
-        path: ANDA_INFORMATION_PATH,
-        method: "GET",
-        headers: { accept: "application/json" },
-        agent: false,
-        timeout: timeoutMs,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        response.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > ANDA_MAX_BODY_BYTES) {
-            request.destroy(new Error("reply too large"));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        response.on("end", () => {
-          clearTimeout(deadline);
-          resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") });
-        });
-        response.on("error", (error) => {
-          clearTimeout(deadline);
-          reject(error);
-        });
-      },
-    );
-    const deadline = setTimeout(() => request.destroy(new Error("request deadline exceeded")), timeoutMs);
-    request.on("timeout", () => request.destroy(new Error("request timed out")));
-    request.on("error", (error) => {
-      clearTimeout(deadline);
-      reject(error);
-    });
-    request.end();
-  });
 }

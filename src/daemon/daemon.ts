@@ -1,9 +1,9 @@
 // Daemon: single-owner start, reap-before-serve, selected method dispatch, and graceful shutdown (P6-D1, P6-D4, P6-D12).
 // buildDaemonHandle wires createRealmHandle with the production adapters (SessionExecution over the
-// libpod client, AndaBridge over the configured URL, the production OpenShell runner, Date clock); tests inject
+// libpod client, the production OpenShell runner, Date clock); tests inject
 // the existing fakes at the same seam. startDaemon binds the control socket once per state directory,
 // runs the startup maintenance (runStartupMaintenance: the selective reap, the orphan temp-file sweep and the audit
-// reconciliation), opens the gate, then hydrates the adopted sessions while serving (CRASH-01, CRASH-02, CRASH-04), and dispatches the six
+// reconciliation), opens the gate, then hydrates the adopted sessions while serving (CRASH-01, CRASH-02, CRASH-04), and dispatches the
 // CONTROL_METHODS from the channel. Each admitted project (MULTI-02) has its own handle, held in a SessionEntry keyed by
 // session id (sessions.ts); every selected request acts on the entry its selection names and on no other. A session's
 // teardown bounds its wait by TEARDOWN_TIMEOUT_MS; socket I/O keeps SOCKET_TIMEOUT_MS. With no AgentOS driver or supervisor
@@ -13,13 +13,15 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { appendAudit } from "../audit/log.js";
+import { createCapabilityGate } from "../capability/gate.js";
 import { newCorrelationId } from "../observe/ids.js";
 import { nullLogger, type Logger } from "../observe/logger.js";
 import { createMetrics } from "../observe/metrics.js";
 import { makeRealmError, type ErrorCode } from "../core/errors.js";
+import { packageVersion } from "../core/package-version.js";
 import { loadPolicyFile } from "../core/policy.js";
 import type { StateSnapshot } from "../core/state-machine.js";
-import { sleep, withTimeout } from "../core/timeout.js";
+import { sleep } from "../core/timeout.js";
 import { defaultRunCommand, runChecks, type AgentOsReading, type CheckResult, type DoctorOptions } from "../doctor/checks.js";
 import { bindRoot, type PinnedRoot } from "../fs/root.js";
 import { TEARDOWN_TIMEOUT_MS } from "../lifecycle/bounds.js";
@@ -31,6 +33,7 @@ import { readHostProcStatus } from "../runtime/kernel-caps.js";
 import { productionOpenShellRunner } from "../runtime/session-execution.js";
 import { deleteSandbox } from "../runtime/openshell.js";
 import { readHostOciConfig } from "../runtime/seccomp-evidence.js";
+import { SANDBOX_DELETE_DEADLINE_MS } from "../runtime/teardown-stages.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -49,6 +52,7 @@ import {
   encodeReply,
   ensureSocketDir,
   isControlMethod,
+  isRecord,
   oversizedLineReply,
   parseControlSelection,
   readControlLine,
@@ -62,8 +66,8 @@ import {
   type ControlSelection,
   type SocketDirDeps,
 } from "./channel.js";
+import { createHostBootRecorder } from "./host-boot.js";
 import {
-  defaultBridge,
   defaultConnectSocket,
   defaultExec,
   libpodOf,
@@ -79,6 +83,7 @@ import {
   type SocketProbe,
   type StatusResult,
 } from "./seams.js";
+import { stopSessions } from "./teardown.js";
 import {
   catalogueCode,
   codeOf,
@@ -123,6 +128,10 @@ export interface StartDaemonOptions extends Omit<BuildDaemonHandleOptions, "sess
   // Observer for a health probe that threw. The controller has already recorded any outcome that changes the session state; this
   // receives the catalogue code of the failure, including a refusal that left the state unchanged. It must not throw.
   readonly onHealthProbeFailure?: (code: ErrorCode) => void;
+  // The bounded re-attach each session's health loop runs after a probe moves it to error: attempts and the delay unit in milliseconds.
+  // Absent, a probe failure is terminal until an explicit retry. The daemon process enables it (daemon/main.ts), so a driver restart,
+  // which restarts the sandbox's container and ends its runner, does not leave the project disconnected.
+  readonly healthReattach?: { readonly attempts: number; readonly delayMs: number };
   // Observer for the startup maintenance report (CRASH-04). It runs once per start, after the reap, the sweep, the reconciliation and
   // the hydrations, which run while the daemon serves. It must not throw; a throw aborts the start.
   readonly onStartup?: (report: StartupReport) => void;
@@ -182,16 +191,15 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
   const runOpenShell =
     options.runOpenShell ?? productionOpenShellRunner(options.env ?? {});
   const exec = options.exec ?? defaultExec(config, policy, options, runOpenShell);
-  const bridge = options.bridge ?? defaultBridge(config, options.logger);
   return createRealmHandle({
     runtimeInput: options.runtimeInput,
     policyPath: options.policyPath,
     policy,
     sessionId: options.sessionId,
     exec,
-    bridge,
     clock,
     runOpenShell,
+    ...(options.teardownTimeoutMs !== undefined ? { teardownTimeoutMs: options.teardownTimeoutMs } : {}),
   });
 }
 
@@ -201,6 +209,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
 // anything is served.
 export async function startDaemon(options: StartDaemonOptions): Promise<StartedDaemon> {
   const timeoutMs = options.timeoutMs ?? SOCKET_TIMEOUT_MS;
+  const teardownBoundMs = options.teardownTimeoutMs ?? TEARDOWN_TIMEOUT_MS;
   const libpod = libpodOf(options);
   // One supervisor per session: the caller's, or one built over the driver. A session's handle and the doctor probe share
   // its supervisor, so each session's supervision state is one object.
@@ -239,7 +248,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     recordedIds: () => store.list(),
   });
   const registry = new SessionRegistry();
-  // The correlation id of the up that last admitted each session. The audit lines of its tool calls name it.
+  // The correlation id of the up that last reached the create of each session. Its tool calls and its lifecycle transitions
+  // name it; the transitions of a create fire before the create settles, so the id is set before create runs.
   const upIds = new Map<string, string>();
   const buildHandle = options.buildHandle ?? buildDaemonHandle;
   // The options every session's handle is built from. The runtime input and the session id are per session.
@@ -301,6 +311,18 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // status. Unset until the startup maintenance has run, and unset when nothing was destroyed or adopted.
   let startupNotice: string | undefined;
   const metrics = createMetrics({ now: () => new Date(), monotonicMs: () => performance.now() });
+  // The one writer of the host-boot audit chain and the host.boot log lines (BOOT-06, BOOT-07).
+  const hostBoot = createHostBootRecorder({
+    logger,
+    metrics,
+    policy,
+    stateDir,
+    monotonicMs: () => performance.now(),
+    version: packageVersion(),
+  });
+  // The capability gate (CAPT-06): built only when the policy mode is enforce. With the default policy there is none, no
+  // token is minted or checked, and an incoming token member is ignored.
+  const capabilityGate = createCapabilityGate({ stateDir, policy, now: () => clock().getTime(), logger });
   const completed = new Set<Socket>();
 
   // The reply of status, up and down for a selection: the snapshot, the bound root and the session id the selection names.
@@ -336,6 +358,24 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       logger,
       isStopping: () => downRequested,
       onProbeFailure: options.onHealthProbeFailure,
+      reattach:
+        options.healthReattach === undefined
+          ? undefined
+          : {
+              ...options.healthReattach,
+              sleep: (ms: number) =>
+                new Promise<void>((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              restart: () => {
+                const recorded = store.load(sessionId)?.containerId;
+                if (recorded === undefined || recorded === null) {
+                  return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+                }
+                return handle.controller.hydrate(recorded);
+              },
+            },
+      upIdOf: (sessionId) => upIds.get(sessionId),
     });
     return { sessionId, pinned, handle, health };
   };
@@ -418,6 +458,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
     const wasLive = isLiveState(current.handle.controller.snapshot().state);
     let snapshot: StateSnapshot;
+    upIds.set(sessionId, correlationId);
     try {
       snapshot = await current.handle.controller.create(pinned.realPath);
     } catch (error: unknown) {
@@ -428,7 +469,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (snapshot.state === "error" && snapshot.reason !== "REALM_STOPPING") {
       settleFailedCreate(ledger, registry, stateDir, sessionId, current.handle, fresh);
     }
-    upIds.set(sessionId, correlationId);
     if (!wasLive && snapshot.state !== "error") {
       options.onAuditHead?.(sessionId);
     }
@@ -445,7 +485,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     if (entry !== null) {
       if (waiter) {
         const remaining = clientBoundMs("down") - (performance.now() - dispatchedAt) - replyAllowanceMs;
-        if (remaining < TEARDOWN_TIMEOUT_MS + replyAllowanceMs) {
+        if (remaining < teardownBoundMs + replyAllowanceMs) {
           throw makeRealmError("TOOL_TIMEOUT");
         }
       }
@@ -516,21 +556,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     downRequested = true;
     draining = true;
     await drainOthers();
-    let failure: ErrorCode | undefined;
-    let failedTeardowns = 0;
-    for (const entry of registry.values()) {
-      entry.health.dispose();
-      try {
-        // The teardown wait is bounded by TEARDOWN_TIMEOUT_MS. Expiry is REALM_STOPPING, the code the controller
-        // reports for its own teardown bound; the catalogue has no teardown-timeout code.
-        await withTimeout(entry.handle.controller.stop(), TEARDOWN_TIMEOUT_MS, "REALM_STOPPING");
-      } catch (error: unknown) {
-        // Callers that stop the daemon without awaiting the stop discard its result; daemon.stopped carries the first failure code and the count.
-        const code = codeOf(error);
-        failedTeardowns += 1;
-        failure ??= code;
-      }
-    }
+    const { failure, failedTeardowns } = await stopSessions(registry.values(), teardownBoundMs);
     // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
     logger.info("daemon.stopped", { ...(failure === undefined ? {} : { code: failure }), failedTeardowns });
     server.close();
@@ -591,11 +617,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         return { id, result };
       }
       case "tool": {
-        const tool: unknown =
-          typeof params === "object" && params !== null && !Array.isArray(params) && "tool" in params
-            ? params.tool
-            : undefined;
-        if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
+        const frame = isRecord(params) ? params : {};
+        const tool: unknown = frame["tool"];
+        // Without a gate a malformed call is refused before the target is resolved, as it always was. With a gate the
+        // check runs first, so a caller that holds no valid token learns nothing about the schema (CAPT-06).
+        if (capabilityGate === undefined && !isRecord(tool)) {
           return { id, error: { code: "SCHEMA_INVALID" } };
         }
         const resolved = resolveTarget(requireSelection(selection));
@@ -603,6 +629,15 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           throw makeRealmError("REALM_NOT_ACTIVE");
         }
         const { sessionId } = resolved;
+        // Token AND policy: the token is verified before the correlation id is minted and before any dispatcher stage.
+        const verdict = capabilityGate?.check({ tool, token: frame["token"], sessionId });
+        if (verdict?.ok === false) {
+          metrics.recordTool(verdict.tool, "refused", 0, "POLICY_DENIED");
+          return { id, error: { code: "POLICY_DENIED" } };
+        }
+        if (!isRecord(tool)) {
+          return { id, error: { code: "SCHEMA_INVALID" } };
+        }
         const correlationId = newCorrelationId();
         const upId = upIds.get(sessionId);
         const startedAt = performance.now();
@@ -610,6 +645,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           const outcome = await resolved.entry.handle.dispatcher.call(tool, {
             correlationId,
             ...(upId === undefined ? {} : { upId }),
+            ...(verdict?.ok === true ? { principal: verdict.principal } : {}),
           });
           const elapsed = Math.round(performance.now() - startedAt);
           const toolName = outcome.tool ?? "unknown";
@@ -657,6 +693,22 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           return refusalReply(id, error);
         }
       }
+      case "capability-attach": {
+        const resolved = resolveTarget(requireSelection(selection));
+        if (resolved.entry === null) {
+          throw makeRealmError("REALM_NOT_ACTIVE");
+        }
+        if (capabilityGate === undefined) {
+          return { id, result: { mode: "off" } };
+        }
+        const host = isRecord(params) ? params["host"] : undefined;
+        try {
+          const attached = capabilityGate.attach({ sessionId: resolved.sessionId, host: typeof host === "string" ? host : "" });
+          return { id, result: { mode: "enforce", ...attached } };
+        } catch (error: unknown) {
+          return refusalReply(id, error);
+        }
+      }
       case "down": {
         const target = requireSelection(selection);
         // A request that finds the lock held is a waiter: only a waiter applies the post-grant checks.
@@ -675,6 +727,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
         metrics.setLogLinesFallback(options.logLinesFallback?.() ?? 0);
         return { id, result: metrics.snapshot() };
       }
+      case "host-boot":
+        return { id, result: hostBoot.record(params) };
       case "doctor": {
         try {
           const sessionId = selection === null ? null : (resolveTarget(selection).entry?.sessionId ?? null);
@@ -687,8 +741,10 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     }
   };
 
-  // A line that names no known method is refused without its text: the method is client text, so the log says "unrecognized".
+  // A line that names no known method, or does not decode as a request, is refused without its text: the method is client text,
+  // so the log says "unrecognized". Each such line is still one request, so it gets one control.request debug line (OBS-02).
   const refuseUnrecognized = (reply: ControlReply | null): ControlReply | null => {
+    logger.debug("control.request", { method: "unrecognized" });
     const refused = reply?.error;
     if (refused !== undefined) {
       logger.warn("control.refused", { method: "unrecognized", code: refused.code });
@@ -848,9 +904,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
   // The reap's container seams over the libpod client, and the adoption verdict each session record is judged by (startup.ts,
   // D-1409). The verdict resolves a record's workspace by the rules of a selection, so it is given resolveTarget.
   // The gateway sandbox of a container the startup reap removes is deleted with the production OpenShell runner, under the
-  // stop path's deadline (session-execution.ts SANDBOX_DELETE_DEADLINE_MS).
+  // stop path's deadline (SANDBOX_DELETE_DEADLINE_MS in runtime/teardown-stages.ts).
   const gatewayRunner = productionOpenShellRunner(options.env ?? {});
-  const gatewaySandboxDeadlineMs = 15_000;
   const reapSeams: StartupReapSeams = startupReapSeamsOver(
     libpod,
     adoptionVerdictOver({
@@ -864,7 +919,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       readProcStatus: options.readProcStatus ?? readHostProcStatus,
       resolve: resolveTarget,
     }),
-    (sandboxName: string) => deleteSandbox(gatewayRunner, sandboxName, gatewaySandboxDeadlineMs),
+    (sandboxName: string) => deleteSandbox(gatewayRunner, sandboxName, SANDBOX_DELETE_DEADLINE_MS),
   );
 
   // Hydrates one adopted session on the pin its workspace entry recorded at create, so a replaced directory is refused.

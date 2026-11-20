@@ -30,7 +30,7 @@ export function upLockWaitMs(upClientMs: number, probeTimeoutMs: number, replyAl
   return upClientMs - 2 * probeTimeoutMs - replyAllowanceMs;
 }
 
-// The lock wait a down may spend queued: its client bound less the reply allowance. With the defaults this is 40 s.
+// The lock wait a down may spend queued: its client bound less the reply allowance. With the defaults this is 70 s.
 export function downLockWaitMs(downClientMs: number, replyAllowanceMs: number): number {
   return downClientMs - replyAllowanceMs;
 }
@@ -221,11 +221,27 @@ export interface SessionHealthOptions {
   readonly isStopping: () => boolean;
   // Observer for a probe that threw. It must not throw.
   readonly onProbeFailure: ((code: ErrorCode) => void) | undefined;
+  // The correlation id of the up that last reached this session's create, or undefined before any up. Read at each transition.
+  readonly upIdOf: (sessionId: string) => string | undefined;
+  // When set, a probe that moves the session to error is followed by a bounded number of restart attempts, which start the AgentOS
+  // runner again against the session's recorded container (the hydration path, which never creates or replaces a container). A driver
+  // restart restarts each adopted sandbox's container and ends its runner, so a healthy daemon re-launches the runner instead of leaving
+  // the project disconnected until a retry. Absent, a probe failure is terminal until an explicit retry (owner ruling N1).
+  readonly reattach: SessionReattachPolicy | undefined;
 }
 
-// The health loop of one session. It runs while the session is in service, active or degraded (a degraded session still serves
-// tool calls, so a dead runner there must not keep a truthful-looking label). An event that puts the session in service arms the
-// timer unless one is already armed, and any event that leaves service clears it. A tick probes through the controller, which
+// The bounded re-attach a health loop runs after a probe failure: how many attempts, the delay unit between them, the wait, and the
+// restart itself, which resolves with the session's snapshot afterwards and rejects with the code that refused it.
+export interface SessionReattachPolicy {
+  readonly attempts: number;
+  readonly delayMs: number;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly restart: () => Promise<StateSnapshot>;
+}
+
+// The health loop of one session. It runs while the session is active, so a dead runner never keeps a truthful-looking label.
+// An event that puts the session in service arms the timer unless one is already armed, and any event that leaves service
+// clears it. A tick probes through the controller, which
 // owns the transition to error. Ticks never overlap. The timer is unref'd, so it never keeps the process alive. dispose() stops
 // the timer and removes the lifecycle subscription, and is called when the session is torn down.
 export class SessionHealth {
@@ -240,15 +256,16 @@ export class SessionHealth {
       this.#options.metrics.recordTransition(event.from, event.to);
       // The reason is free text, so only a catalogue code is taken from it.
       const code = catalogueCode(event.reason);
+      const upId = this.#options.upIdOf(this.#options.sessionId);
       this.#options.logger.info("lifecycle.transition", {
         from: event.from,
         to: event.to,
         ...(code === undefined ? {} : { code }),
         ...(event.recoveredCode === undefined ? {} : { recoveredCode: event.recoveredCode }),
-        ...(event.persistCode === undefined ? {} : { persistCode: event.persistCode }),
+        ...(upId === undefined ? {} : { upId }),
         sessionId: this.#options.sessionId,
       });
-      if (event.to === "active" || event.to === "degraded") {
+      if (event.to === "active") {
         if (this.#timer === undefined) {
           this.#start();
         }
@@ -281,7 +298,7 @@ export class SessionHealth {
   async #tick(): Promise<void> {
     const { handle, metrics, logger, sessionId } = this.#options;
     const { state } = handle.controller.snapshot();
-    if (this.#probing || this.#options.isStopping() || (state !== "active" && state !== "degraded")) {
+    if (this.#probing || this.#options.isStopping() || state !== "active") {
       return;
     }
     this.#probing = true;
@@ -298,6 +315,7 @@ export class SessionHealth {
           ...(code === undefined ? { reason: snapshot.reason } : { code }),
           sessionId,
         });
+        await this.#reattach();
       }
     } catch (error: unknown) {
       const code = codeOf(error);
@@ -306,6 +324,32 @@ export class SessionHealth {
       this.#options.onProbeFailure?.(code);
     } finally {
       this.#probing = false;
+    }
+  }
+
+  // After a probe moved the session to error, runs policy.restart() up to policy.attempts times, waiting policy.delayMs times the attempt
+  // number before each. restart() starts the runner against the recorded container and never replaces it. It stops at the first
+  // attempt that leaves the error state, and when the daemon is stopping or another call has already moved the session on.
+  async #reattach(): Promise<void> {
+    const policy = this.#options.reattach;
+    if (policy === undefined) {
+      return;
+    }
+    const { handle, logger, sessionId } = this.#options;
+    for (let attempt = 1; attempt <= policy.attempts; attempt += 1) {
+      await policy.sleep(policy.delayMs * attempt);
+      if (this.#options.isStopping() || handle.controller.snapshot().state !== "error") {
+        return;
+      }
+      try {
+        const snapshot = await policy.restart();
+        logger.info("health.reattach", { attempt, state: snapshot.state, sessionId });
+        if (snapshot.state !== "error") {
+          return;
+        }
+      } catch (error: unknown) {
+        logger.warn("health.reattach_failed", { attempt, code: codeOf(error), sessionId });
+      }
     }
   }
 }

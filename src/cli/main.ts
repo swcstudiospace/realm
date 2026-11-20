@@ -10,12 +10,11 @@
 // (main hands over the host environment once, at the entry edge), so every command path stays
 // hermetic under test.
 
-import { spawn } from "node:child_process";
-import { closeSync, fchmodSync, mkdirSync, openSync } from "node:fs";
-import { runAcpOverStdio } from "../acp/stdio.js";
+import type { runAcpOverStdio } from "../acp/stdio.js";
 import { createJsonRpc, type AnchorRpc } from "../audit/anchor.js";
 import { dialWithin } from "../core/timeout.js";
-import { ERROR_CATALOGUE, ERROR_CODES, RealmError, makeRealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CATALOGUE, ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
+import { packageVersion } from "../core/package-version.js";
 import {
   sendRequest,
   CONTROL_TIMEOUT_MS,
@@ -24,16 +23,21 @@ import {
   type ControlRequest,
   type ControlSelection,
 } from "../daemon/channel.js";
-import { connectDaemon, selectionOf, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
-import { daemonSpawnEnv } from "../daemon/spawn-env.js";
+import { connectDaemon, selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
+import { defaultSpawnDaemon, launchFilteredDaemon, type SpawnDaemon } from "../daemon/launch.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
-import { createMcpServer } from "../mcp/server.js";
-import { loadRuntimeConfig, type RuntimeConfig } from "../runtime/config.js";
+import type { createMcpServer } from "../mcp/server.js";
+import { loadRuntimeConfig, retiredKeyNotes, type RuntimeConfig } from "../runtime/config.js";
 import { readRuntimeConfigFile } from "../runtime/config-file.js";
 import { defaultPolicyPath, isDirectEntry, resolveConfigPath } from "../runtime/host-paths.js";
+import { HOST_RUNTIMES } from "../host/runtimes.js";
+import { systemTimers } from "../host/boot-driver.js";
+import { HOST_IDS, type HostId, type HostRuntimeEntry, type HostTimers } from "../host/types.js";
+import type { LibpodClient } from "../runtime/libpod-client.js";
+import type { Policy } from "../contract/validate.js";
 import {
   probePodman,
   type ConnectSocket,
@@ -44,15 +48,30 @@ import { controlSocketPath, type EnvironmentLike } from "../session/paths.js";
 import { parseAnchorArgs, runAnchor } from "./anchor.js";
 import { runAuditCommand } from "./audit.js";
 import { runCheckpointCommand } from "./checkpoint.js";
+import { runHostCommand } from "./host.js";
+import { runStdioHost, type StdioHostFormat, type StdioSignal, type StdioSignals } from "./stdio-host.js";
 import { INIT_USAGE, InitRefusal, parseInitArgs, runInit } from "./init.js";
 
-export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint"] as const;
+export const CLI_COMMANDS = ["init", "up", "down", "status", "doctor", "mcp", "acp", "anchor", "audit", "metrics", "checkpoint", "host"] as const;
 export type CliCommand = (typeof CLI_COMMANDS)[number];
 
 const USAGE =
-  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|mcp|acp|status|down|metrics [--workspace <absolute path>]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>)";
+  "Usage: realm <init|up|down|status|doctor|mcp|acp|anchor|audit|metrics|checkpoint|host> (realm init --image <name@sha256:digest> [--workspace <absolute path>] [--state-dir <absolute path>]; realm up|status|down|metrics [--workspace <absolute path>]; realm mcp|acp [--workspace <absolute path>] [--host <id>] [--reattach]; realm doctor [--workspace <absolute path> | --fix [--dry-run]]; realm anchor --session <id> [--publish] [--rpc <url>]; realm audit verify [--file <path> | --session <id>] [--head <seq>:<sha256>] [--anchor <record.json>]; realm checkpoint create|restore --workspace <absolute path> --id <checkpointId>; realm host <list|detect|status|install|uninstall> [<host>] [--dry-run] [--config-home <absolute path>]; realm host token <status|rotate> [--revoke-previous])";
 const RETRY_INTERVAL_MS = 25;
 const MCP_POLL_INTERVAL_MS = 100;
+
+// The signal seam of the stdio sessions: the process's own signals and exit. The default exit does not return.
+const PROCESS_SIGNALS: StdioSignals = {
+  once: (signal: StdioSignal, handler: () => void) => {
+    process.once(signal, handler);
+    return () => {
+      process.removeListener(signal, handler);
+    };
+  },
+  exit: (code) => {
+    process.exit(code);
+  },
+};
 
 function isCliCommand(value: string): value is CliCommand {
   return (CLI_COMMANDS as readonly string[]).includes(value);
@@ -61,52 +80,84 @@ function isCliCommand(value: string): value is CliCommand {
 interface ParsedArgv {
   readonly command: CliCommand;
   readonly workspace: string | undefined;
-  // The words after `init`, `doctor`, `anchor`, `audit` or `checkpoint`; empty for every other command.
+  // The words after `init`, `doctor`, `anchor`, `audit`, `checkpoint` or `host`; empty for every other command.
   readonly words: readonly string[];
+  // realm mcp and realm acp only: the canonical mcp-config host id of --host, and whether --reattach was given.
+  readonly host: HostId | undefined;
+  readonly reattach: boolean;
 }
 
-// `up`, `mcp`, `acp`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `init`, `anchor`, `audit` and `checkpoint`
-// take their own words. `doctor` takes --workspace <path>, --fix [--dry-run], or no flags.
+// The canonical ids a stdio session may name with --host: the mcp-config hosts. An alias, a differently cased name, an unknown id
+// and an extension host (omp, whose markers its plugin writes) all fail here.
+function stdioHostOf(value: string): HostId | undefined {
+  return HOST_IDS.find((id) => id === value && HOST_RUNTIMES[id].integration === "mcp-config");
+}
+
+// realm mcp and realm acp take --workspace <path>, --host <id> and --reattach in any order, each at most once.
+function parseStdioArgv(command: "mcp" | "acp", rest: readonly string[]): ParsedArgv | undefined {
+  let workspace: string | undefined;
+  let host: HostId | undefined;
+  let reattach = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const flag = rest[index];
+    if (flag === "--reattach") {
+      if (reattach) {
+        return undefined;
+      }
+      reattach = true;
+      continue;
+    }
+    const value = rest[index + 1];
+    if (value === undefined) {
+      return undefined;
+    }
+    if (flag === "--workspace" && workspace === undefined) {
+      workspace = value;
+    } else if (flag === "--host" && host === undefined) {
+      host = stdioHostOf(value);
+      if (host === undefined) {
+        return undefined;
+      }
+    } else {
+      return undefined;
+    }
+    index += 1;
+  }
+  return { command, workspace, words: [], host, reattach };
+}
+
+// `up`, `status`, `down` and `metrics` take no arguments or `--workspace <path>`. `mcp` and `acp` also take `--host <id>` and
+// `--reattach`. `init`, `anchor`, `audit`, `checkpoint` and `host` take their own words. `doctor` takes --workspace <path>,
+// --fix [--dry-run], or no flags.
 function parseArgv(argv: readonly string[]): ParsedArgv | undefined {
   const [command, ...rest] = argv;
   if (command === undefined || !isCliCommand(command)) {
     return undefined;
   }
-  if (command === "init" || command === "anchor" || command === "audit" || command === "checkpoint") {
-    return { command, workspace: undefined, words: rest };
+  if (command === "init" || command === "anchor" || command === "audit" || command === "checkpoint" || command === "host") {
+    return { command, workspace: undefined, words: rest, host: undefined, reattach: false };
+  }
+  if (command === "mcp" || command === "acp") {
+    return parseStdioArgv(command, rest);
   }
   if (command === "doctor") {
     if (rest.length === 0 || (rest[0] === "--fix" && (rest.length === 1 || (rest.length === 2 && rest[1] === "--dry-run")))) {
-      return { command, workspace: undefined, words: rest };
+      return { command, workspace: undefined, words: rest, host: undefined, reattach: false };
     }
     if (rest.length === 2 && rest[0] === "--workspace" && rest[1] !== undefined) {
-      return { command, workspace: rest[1], words: [] };
+      return { command, workspace: rest[1], words: [], host: undefined, reattach: false };
     }
     return undefined;
   }
   if (rest.length === 0) {
-    return { command, workspace: undefined, words: [] };
+    return { command, workspace: undefined, words: [], host: undefined, reattach: false };
   }
   const [flag, value] = rest;
   if (rest.length === 2 && flag === "--workspace" && value !== undefined) {
-    return { command, workspace: value, words: [] };
+    return { command, workspace: value, words: [], host: undefined, reattach: false };
   }
   return undefined;
 }
-
-export interface SpawnedProcess {
-  unref(): void;
-}
-
-export type SpawnDaemon = (
-  file: string,
-  args: readonly string[],
-  options: {
-    readonly detached: true;
-    readonly stdio: readonly ["ignore", number, number];
-    readonly env: EnvironmentLike;
-  },
-) => SpawnedProcess;
 
 export type SendControlRequest = (
   socketPath: string,
@@ -114,7 +165,11 @@ export type SendControlRequest = (
   timeoutMs: number,
 ) => Promise<ControlReply>;
 
-export type ConnectDaemon = (socketPath: string, selection: ControlSelection) => DaemonClient;
+export type ConnectDaemon = (
+  socketPath: string,
+  selection: ControlSelection,
+  options?: ConnectDaemonOptions,
+) => DaemonClient;
 
 type McpInput = Parameters<typeof createMcpServer>[1];
 type McpOutput = Parameters<typeof createMcpServer>[2];
@@ -142,16 +197,33 @@ export interface CliDeps {
   readonly diagnostics?: McpOutput;
   // Reads the runtime config file that names the state directory (default readRuntimeConfigFile).
   readonly readConfig?: (path: string) => unknown;
+  // Loads the policy file for realm checkpoint on a project that has no registry entry (default loadPolicyFile).
+  readonly readPolicy?: (path: string) => Policy;
+  // The libpod inspect of a named container for realm checkpoint; resolves null for an absent one (default: host Podman).
+  readonly inspectContainer?: (containerName: string) => Promise<unknown>;
+  // The filtered all-container listing used by the daemonless checkpoint proof.
+  readonly listContainersByLabel?: LibpodClient["listContainersByLabel"];
   // REALM_ANCHOR_KEY_FILE, read once by the entry edge (main) and used only by `realm anchor --publish`.
   readonly anchorKeyFile?: string | undefined;
   // RPC factory for realm anchor --publish (default createJsonRpc); tests inject a fake.
   readonly createAnchorRpc?: (url: string) => AnchorRpc;
-  // Clock for the anchor record's createdAt (default the wall clock).
+  // Clock for the anchor record's createdAt and the host operations' receipts and audit lines (default the wall clock).
   readonly now?: () => Date;
+  // Test seams of realm host, with no production caller: the runtime table (default HOST_RUNTIMES) and the shipped adapters/
+  // directory (default: the package's own). They let a test run the installer lifecycle on a fixture host.
+  readonly hostRuntimes?: Readonly<Record<HostId, HostRuntimeEntry>>;
+  readonly hostAdaptersDir?: string;
+  // Test seams of realm mcp and realm acp, with no other production caller. signals: the process signals and exit (default the
+  // process; the default exit does not return). bootTimers: the boot driver's timers (default real, unref'd timers). random:
+  // the re-attach jitter source (default Math.random). pid: the process id a presence marker names (default process.pid).
+  readonly signals?: StdioSignals;
+  readonly bootTimers?: HostTimers;
+  readonly random?: () => number;
+  readonly pid?: number;
 }
 
 export interface CliResult {
-  readonly exitCode: 0 | 1 | 2;
+  readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -171,6 +243,11 @@ interface ResolvedDeps {
   readonly acpInput: AcpInput;
   readonly acpOutput: AcpOutput;
   readonly diagnostics: McpOutput;
+  readonly signals: StdioSignals;
+  readonly bootTimers: HostTimers;
+  readonly random: () => number;
+  readonly now: () => Date;
+  readonly pid: number;
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default (checks.ts). Rejects on refusal or a missing
@@ -186,16 +263,6 @@ function defaultSend(
   timeoutMs: number,
 ): Promise<ControlReply> {
   return sendRequest(socketPath, request, { timeoutMs });
-}
-
-function defaultSpawnDaemon(
-  file: string,
-  args: readonly string[],
-  options: Parameters<SpawnDaemon>[2],
-): SpawnedProcess {
-  const child = spawn(file, [...args], { detached: options.detached, stdio: [...options.stdio], env: options.env });
-  child.unref();
-  return child;
 }
 
 // The compiled daemon entry beside this module (dist/src/daemon/main.js). Derived from
@@ -269,7 +336,7 @@ function lifecycleOf(result: unknown): UpLifecycle | undefined {
   return { state: snapshot["state"], reason: snapshot["reason"] };
 }
 
-// The refusal for an up reply that does not report active or degraded. A catalogue code reason keeps
+// The refusal for an up reply that does not report active. A catalogue code reason keeps
 // its own code; any other reason reads as REALM_NOT_ACTIVE; a reply with no lifecycle is SCHEMA_INVALID.
 function upRefusal(lifecycle: UpLifecycle | undefined): { readonly code: ErrorCode; readonly reason: string } {
   let code: ErrorCode = "SCHEMA_INVALID";
@@ -282,37 +349,18 @@ function upRefusal(lifecycle: UpLifecycle | undefined): { readonly code: ErrorCo
   return { code, reason: ERROR_CATALOGUE[code].reason };
 }
 
-// realm up succeeds only when the daemon reports the realm active or degraded. Any other state keeps
+// realm up succeeds only when the daemon reports the realm active. Any other state keeps
 // its JSON on stdout and writes one "CODE: reason" line to stderr.
 function upResult(reply: ControlReply): CliResult {
   if (reply.error !== undefined) {
     return replyToResult(reply);
   }
   const lifecycle = lifecycleOf(reply.result);
-  if (lifecycle?.state === "active" || lifecycle?.state === "degraded") {
+  if (lifecycle?.state === "active") {
     return replyToResult(reply);
   }
   const { code, reason } = upRefusal(lifecycle);
   return { exitCode: 1, stdout: `${renderResult(reply.result)}\n`, stderr: `${code}: ${reason}\n` };
-}
-
-// The daemon's startup log: <stateDir>/daemon.log, append-only and owner-only. The state directory is
-// made at 0700 when missing, because the log opens before the daemon creates it. The child keeps its own
-// copy of the descriptor, so the parent closes its copy once the spawn returns.
-function withDaemonLog(stateDir: string, launch: (log: number) => void): void {
-  // Missing ancestors take the default mode; only the state directory itself is made 0700.
-  const cut = stateDir.lastIndexOf("/");
-  if (cut > 0) {
-    mkdirSync(stateDir.slice(0, cut), { recursive: true });
-  }
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const log = openSync(daemonLogPath(stateDir), "a", 0o600);
-  try {
-    fchmodSync(log, 0o600);
-    launch(log);
-  } finally {
-    closeSync(log);
-  }
 }
 
 // The line a failed attach adds to stderr, naming the startup log so the user can read the daemon's own
@@ -333,34 +381,6 @@ function spawnDetachedDaemon(deps: ResolvedDeps): () => void {
     const entry = deps.daemonEntry ?? defaultDaemonEntry();
     launchFilteredDaemon(entry, deps.stateDir, deps.env, deps.spawn);
   };
-}
-
-// Starts the daemon entry detached with the allowlisted environment (D-1505). The CLI spawn and
-// startDetachedDaemon both go through here, so a sentinel variable reaches neither child.
-export function launchFilteredDaemon(
-  entry: string,
-  stateDir: string,
-  source: EnvironmentLike,
-  spawnImpl: SpawnDaemon = defaultSpawnDaemon,
-): void {
-  // A Bun host never spawns the daemon: process.execPath there is the Omp binary, which would read the entry as a prompt
-  // and run an unsupervised agent session. The attach refuses with REALM_NOT_ACTIVE until realm up has started the daemon.
-  if (Object.hasOwn(process.versions, "bun")) {
-    throw makeRealmError("REALM_NOT_ACTIVE");
-  }
-  withDaemonLog(stateDir, (log) => {
-    spawnImpl(process.execPath, [entry], {
-      detached: true,
-      stdio: ["ignore", log, log],
-      env: daemonSpawnEnv(source),
-    });
-  });
-}
-
-// The documented CLI daemon spawn (P6-D1). The Omp extension imports it. The child receives the allowlisted
-// environment only; a stale REALM_DRIVER_*_ROOT variable is not passed.
-export function startDetachedDaemon(entry: string, stateDir: string): void {
-  launchFilteredDaemon(entry, stateDir, process.env);
 }
 
 // One control request's bound: an injected timeoutMs overrides it; otherwise the method's own
@@ -540,15 +560,17 @@ async function runDoctorFix(
   }
 }
 
-// Ensures the shared daemon answers on the control socket, spawning it detached when none does.
-async function ensureSharedDaemon(deps: ResolvedDeps, socketPath: string, selection: ControlSelection): Promise<void> {
-  await ensureDaemon({
-    socketPath,
-    probe: reportingStartFailure(daemonAnswers(deps.connect, selection), deps.stateDir, deps.diagnostics),
-    spawnDaemon: spawnDetachedDaemon(deps),
-    timeoutMs: controlTimeoutOf(deps, "up"),
-    pollMs: MCP_POLL_INTERVAL_MS,
-  });
+// The exact stderr texts of the pinned CLI behavior, handed to the stdio runner (src/cli/stdio-host.ts) so it produces them with
+// the same functions.
+function stdioFormat(deps: ResolvedDeps): StdioHostFormat {
+  return {
+    attachFailure: (error) => attachFailure(error, deps.stateDir),
+    diagnosticFor,
+    upRefusal: (lifecycle) => upRefusal(lifecycle),
+    writeNotice: (status) => {
+      writeNotice(deps, status);
+    },
+  };
 }
 
 // The daemon's startup-reap notice (CRASH-04) goes to the diagnostics sink, never stdout: stdout carries only
@@ -559,75 +581,44 @@ function writeNotice(deps: ResolvedDeps, status: DaemonStatus): void {
   }
 }
 
-// realm mcp attaches to the shared daemon (P6-D9): ensure it runs, claim the workspace with up,
-// then serve the Phase 5 server over stdio with the daemon client as its dispatcher. Every tool
-// call crosses the daemon; no handle is built in-process. stdout carries only MCP messages, so a
-// refused up is written to stderr while the server keeps answering.
-async function runMcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
-  let selection: ControlSelection;
-  try {
-    selection = selectionOf(workspaceRoot);
-    await ensureSharedDaemon(deps, socketPath, selection);
-  } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
-  }
-  const client = deps.connect(socketPath, selection);
-  try {
-    const status = await client.up();
-    writeNotice(deps, status);
-  } catch (error) {
-    deps.diagnostics.write(attachFailure(error, deps.stateDir));
-  }
-  const server = createMcpServer(client, deps.mcpInput, deps.mcpOutput, deps.diagnostics);
-  try {
-    await server.closed;
-  } catch (error) {
-    if (error instanceof RealmError) {
-      return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
-    }
-    throw error;
-  } finally {
-    client.close();
-  }
-  return { exitCode: 0, stdout: "", stderr: "" };
-}
-
-// realm acp attaches the same way realm mcp does (P6-D9), then serves ACP over stdio with the daemon
-// client as its dispatcher. stdout carries only ACP frames, so startup and refusals go to stderr. The
-// session must reach active or degraded before the server starts; any other state exits 1 with its code.
-async function runAcp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
-  let selection: ControlSelection;
-  try {
-    selection = selectionOf(workspaceRoot);
-    await ensureSharedDaemon(deps, socketPath, selection);
-  } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
-  }
-  const client = deps.connect(socketPath, selection);
-  try {
-    let status: DaemonStatus;
-    try {
-      status = await client.up();
-    } catch (error) {
-      return { exitCode: 1, stdout: "", stderr: attachFailure(error, deps.stateDir) };
-    }
-    writeNotice(deps, status);
-    const lifecycle: UpLifecycle = { state: status.snapshot.state, reason: status.snapshot.reason };
-    if (lifecycle.state !== "active" && lifecycle.state !== "degraded") {
-      const { code, reason } = upRefusal(lifecycle);
-      return { exitCode: 1, stdout: "", stderr: `${code}: ${reason}\n` };
-    }
-    await runAcpOverStdio({
-      dispatcher: { call: (tool: unknown) => client.call(tool) },
-      stdin: deps.acpInput,
-      stdout: deps.acpOutput,
-    });
-    return { exitCode: 0, stdout: "", stderr: "" };
-  } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: diagnosticFor(error) };
-  } finally {
-    client.close();
-  }
+// realm mcp and realm acp attach to the shared daemon (P6-D9) through the boot sequence in src/cli/stdio-host.ts: ensure the
+// daemon, claim the workspace with up, read the status back. realm mcp reads and answers frames at once (tool calls are refused
+// REALM_NOT_ACTIVE until the attach settles); realm acp reads frames only after it. stdout carries only protocol messages, so
+// every refusal and diagnostic goes to stderr. Neither entry ever sends down.
+function runStdio(
+  transport: "mcp" | "acp",
+  deps: ResolvedDeps,
+  socketPath: string,
+  workspaceRoot: string,
+  host: HostId | undefined,
+  reattach: boolean,
+): Promise<CliResult> {
+  return runStdioHost({
+    transport,
+    workspaceRoot,
+    hostId: host ?? null,
+    reattach,
+    socketPath,
+    stateDir: deps.stateDir,
+    connect: deps.connect,
+    spawnDaemon: spawnDetachedDaemon(deps),
+    send: deps.send,
+    diagnostics: deps.diagnostics,
+    mcpInput: deps.mcpInput,
+    mcpOutput: deps.mcpOutput,
+    acpInput: deps.acpInput,
+    acpOutput: deps.acpOutput,
+    upBoundMs: controlTimeoutOf(deps, "up"),
+    pollMs: MCP_POLL_INTERVAL_MS,
+    logLevel: deps.env["REALM_LOG_LEVEL"],
+    format: stdioFormat(deps),
+    signals: deps.signals,
+    timers: deps.bootTimers,
+    random: deps.random,
+    now: deps.now,
+    pid: deps.pid,
+    version: packageVersion(),
+  });
 }
 
 // realm anchor: parseAnchorArgs refuses malformed flags with usage (exit 2); runAnchor refuses every other
@@ -703,30 +694,45 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
   if (parsed.command === "checkpoint") {
     return runCheckpointCommand(parsed.words, deps);
   }
+  if (parsed.command === "host") {
+    return runHostCommand(parsed.words, deps);
+  }
   const { command } = parsed;
   let stateDir: string;
   let runtimeConfig: RuntimeConfig;
+  let configInput: unknown;
+  let configRead = false;
   try {
-    runtimeConfig = loadRuntimeConfig((deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env)));
+    configInput = (deps.readConfig ?? readRuntimeConfigFile)(resolveConfigPath(deps.env));
+    configRead = true;
+    runtimeConfig = loadRuntimeConfig(configInput);
     stateDir = runtimeConfig.stateDir;
   } catch (error) {
     const { code } = refusalOf(error);
+    // A retired key is refused like any other bad key. When the file was read, one more line per retired key it carries
+    // says what to delete: the sentence is a literal, never the key or value read from the file (D-28-02).
+    const notes = configRead
+      ? retiredKeyNotes(configInput).map((sentence) => `realm ${command}: config.json: ${sentence}\n`).join("")
+      : "";
     if (command === "doctor") {
       if (parsed.words.length !== 0) {
         const failure = failureFor(new RealmError("SCHEMA_INVALID"));
-        return { ...failure, stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n` };
+        return {
+          ...failure,
+          stderr: `${failure.stderr}realm doctor --fix: config must be present and valid; run realm init\n${notes}`,
+        };
       }
       const checks = await runtimeChecks({ env: deps.env });
       return {
         exitCode: 0,
         stdout: `${JSON.stringify(checks)}\n`,
-        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check (${code})\n`,
+        stderr: `realm doctor: config is absent; ran ${String(checks.length)} local check (${code})\n${notes}`,
       };
     }
     return {
       exitCode: 2,
       stdout: "",
-      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${code})\n`,
+      stderr: `realm ${command}: cannot resolve a state directory (the realm config file under an absolute XDG_CONFIG_HOME or HOME must be present and valid) (${code})\n${notes}`,
     };
   }
   const resolved: ResolvedDeps = {
@@ -744,6 +750,11 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
     acpInput: deps.acpInput ?? process.stdin,
     acpOutput: deps.acpOutput ?? process.stdout,
     diagnostics: deps.diagnostics ?? process.stderr,
+    signals: deps.signals ?? PROCESS_SIGNALS,
+    bootTimers: deps.bootTimers ?? systemTimers,
+    random: deps.random ?? Math.random,
+    now: deps.now ?? (() => new Date()),
+    pid: deps.pid ?? process.pid,
   };
   const socketPath = controlSocketPath(stateDir);
   switch (command) {
@@ -763,9 +774,9 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
         return runUp(resolved, socketPath, workspaceRoot);
       }
       if (command === "mcp") {
-        return runMcp(resolved, socketPath, workspaceRoot);
+        return runStdio("mcp", resolved, socketPath, workspaceRoot, parsed.host, parsed.reattach);
       }
-      return runAcp(resolved, socketPath, workspaceRoot);
+      return runStdio("acp", resolved, socketPath, workspaceRoot, parsed.host, parsed.reattach);
     }
     case "down":
       return runDown(resolved, socketPath, parsed.workspace ?? deps.cwd ?? process.cwd());

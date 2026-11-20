@@ -8,13 +8,12 @@ import { loadPolicyFile } from "../../src/core/policy.js";
 import { displayStatus } from "../../src/core/status.js";
 import { LockTable } from "../../src/fs/locks.js";
 import { createRealmHandle, type CreateRealmHandleOptions } from "../../src/realm/compose.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 // OMP-01/OMP-05 composition-root proof (P5-D7, P5-D15). Every test builds the
 // real LifecycleController and the real ToolDispatcher through
 // createRealmHandle. The only doubles sit at the adapter seam: FakeExecutionService
-// for exec, FakeBridge for bridge, a fixed clock, and a stub runner. No test
+// for exec, a fixed clock, and a stub runner. No test
 // starts a Podman container or an OpenShell process.
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -54,7 +53,6 @@ function advisoryOptions(fixture: Fixture): CreateRealmHandleOptions {
     policyPath: writePolicy(fixture, "advisory-policy.json", { mode: "advisory", workspaceRoots: [fixture.ws] }),
     sessionId: "sess-compose",
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () =>
       Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
@@ -85,10 +83,8 @@ void test("OMP-01: createRealmHandle starts unbound with reason no workspace and
 
   // Downcasts: the options held the fakes from construction, so the reads are exact.
   const exec = options.exec as FakeExecutionService;
-  const bridge = options.bridge as FakeBridge;
   assert.deepEqual(exec.calls(), [], "no execution call was made");
   assert.deepEqual(exec.resources(), [], "no container was created");
-  assert.deepEqual(bridge.calls(), [], "no bridge call was made");
 });
 
 void test("OMP-01: the controller and the dispatcher hold the same LockTable instance (P5-D15)", (t) => {
@@ -142,10 +138,8 @@ void test("OMP-01: close() stops the session without starting a process and is s
 
   // Downcasts: the options held the fakes from construction, so the reads are exact.
   const exec = options.exec as FakeExecutionService;
-  const bridge = options.bridge as FakeBridge;
   assert.deepEqual(exec.calls(), [], "close started no execution call");
   assert.deepEqual(exec.resources(), [], "close created no container");
-  assert.deepEqual(bridge.calls(), [], "close made no bridge call");
 });
 
 void test("CR-01: createRealmHandle refuses a workspace outside every policy root with POLICY_DENIED before any dispatcher exists (D-22)", (t) => {

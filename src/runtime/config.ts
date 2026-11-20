@@ -10,8 +10,6 @@ import { makeRealmError } from "../core/errors.js";
 export interface RuntimeConfig {
   // Digest-pinned image reference (D-52). A tag-only reference is rejected at load.
   readonly image: string;
-  // Anda Engine base URL. Absent when no Anda engine is configured (the doctor reports that).
-  readonly andaUrl?: string;
   readonly stateDir: string;
   readonly workspaceRoot: string;
   // Optional. Absent means <stateDir>/secrets (runtimeRootsOf). A relative value is SCHEMA_INVALID.
@@ -29,11 +27,8 @@ export interface RuntimeRoots {
 
 const IMAGE_PATTERN = /^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/;
 
-// Scheme and an authority that contains "@": any userinfo, even an empty one, is refused.
-const USERINFO_PATTERN = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i;
 const ACCEPTED_KEYS: Readonly<Record<string, true>> = {
   image: true,
-  andaUrl: true,
   stateDir: true,
   workspaceRoot: true,
   secretRoot: true,
@@ -49,6 +44,13 @@ const DENIED_KEYS: Readonly<Record<string, true>> = {
   netns: true,
   driverConfig: true,
   driverConfigJson: true,
+};
+
+// Keys that an earlier release accepted. A retired key is refused like any other key outside the closed set above
+// (loadRuntimeConfig knows no difference). Its sentence is a literal chosen by this table, never built from input,
+// so the CLI can say what to delete without echoing a key name or a value from the file (D-28-02).
+const RETIRED_KEYS: Readonly<Record<string, string>> = {
+  andaUrl: "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json",
 };
 
 // Validates an untrusted input object and returns a frozen RuntimeConfig. Any violation throws
@@ -70,7 +72,6 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
   const workspaceRoot = requireAbsolutePath(record["workspaceRoot"]);
   const secretRoot = record["secretRoot"] === undefined ? undefined : requireAbsolutePath(record["secretRoot"]);
   const sandboxStateRoot = record["sandboxStateRoot"] === undefined ? undefined : requireAbsolutePath(record["sandboxStateRoot"]);
-  const andaUrl = record["andaUrl"] === undefined ? undefined : requireAndaUrl(record["andaUrl"]);
   if (overlapProblems(secretRoot, sandboxStateRoot, workspaceRoot).length > 0) {
     reject();
   }
@@ -78,10 +79,20 @@ export function loadRuntimeConfig(input: unknown): RuntimeConfig {
     image,
     stateDir,
     workspaceRoot,
-    ...(andaUrl === undefined ? {} : { andaUrl }),
     ...(secretRoot === undefined ? {} : { secretRoot }),
     ...(sandboxStateRoot === undefined ? {} : { sandboxStateRoot }),
   });
+}
+
+// The migration sentence of each retired key present in an input, in table order. It is empty for an input that is not a
+// JSON object, and for one with no retired key. The sentences are literals from RETIRED_KEYS: no input value is included.
+export function retiredKeyNotes(input: unknown): readonly string[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return [];
+  }
+  return Object.entries(RETIRED_KEYS)
+    .filter(([key]) => Object.hasOwn(input, key))
+    .map(([, sentence]) => sentence);
 }
 
 // A key-level description of why an input would not load, for the doctor's report. Every phrase is
@@ -95,6 +106,7 @@ export function describeRuntimeConfigProblems(input: unknown): readonly string[]
   if (Object.keys(record).some((key) => Object.hasOwn(DENIED_KEYS, key) || !Object.hasOwn(ACCEPTED_KEYS, key))) {
     problems.push("config.json has a key that is not accepted");
   }
+  problems.push(...retiredKeyNotes(record));
   if (!isImageReference(record["image"])) {
     problems.push("image is absent or not a digest-pinned reference");
   }
@@ -110,9 +122,6 @@ export function describeRuntimeConfigProblems(input: unknown): readonly string[]
   if (record["sandboxStateRoot"] !== undefined && !isAbsolutePathValue(record["sandboxStateRoot"])) {
     problems.push("sandboxStateRoot is not an absolute path");
   }
-  if (record["andaUrl"] !== undefined && !isAndaUrl(record["andaUrl"])) {
-    problems.push("andaUrl is not an http or https URL without userinfo");
-  }
   const secretRoot = record["secretRoot"];
   const sandboxStateRoot = record["sandboxStateRoot"];
   const workspaceRoot = record["workspaceRoot"];
@@ -124,15 +133,6 @@ export function describeRuntimeConfigProblems(input: unknown): readonly string[]
     ),
   );
   return problems;
-}
-
-// The Anda bridge is required exactly when an Anda Engine URL is configured (C4). Without one, a
-// session starts with no bridge and no handshake, and exec and write run on an active session. The
-// guard narrows andaUrl to a string for the caller that builds the bridge.
-export function andaBridgeRequired(
-  config: RuntimeConfig,
-): config is RuntimeConfig & { readonly andaUrl: string } {
-  return config.andaUrl !== undefined;
 }
 
 // The roots the daemon and the driver share, all derived from the same config.json. secretRoot and
@@ -177,29 +177,6 @@ function isAbsolutePathValue(value: unknown): value is string {
 // D-73: a relative state directory or workspace root is SCHEMA_INVALID.
 function requireAbsolutePath(value: unknown): string {
   if (!isAbsolutePathValue(value)) {
-    reject();
-  }
-  return value;
-}
-
-function isAndaUrl(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return false;
-  }
-  return url.username === "" && url.password === "" && !USERINFO_PATTERN.test(value);
-}
-
-function requireAndaUrl(value: unknown): string {
-  if (!isAndaUrl(value)) {
     reject();
   }
   return value;

@@ -7,6 +7,14 @@ import { ERROR_CODES } from "../core/errors.js";
 import type { State } from "../core/states.js";
 import { STATES } from "../core/states.js";
 import { CONTROL_METHODS, type ControlMethod } from "../daemon/channel.js";
+import {
+  isBootPhase,
+  isBootReportHost,
+  isBootTransport,
+  type BootReportHost,
+  type HostBootPhase,
+  type HostBootTransport,
+} from "../host/boot-report.js";
 
 const METRICS_SCHEMA = 1;
 export const BUCKET_UPPER_BOUNDS_MS = [5, 25, 100, 500, 2_000, 10_000, 60_000, 300_000] as const;
@@ -50,6 +58,24 @@ export interface HealthProbeFailureCount {
   readonly count: number;
 }
 
+// One row per distinct (host, transport, phase, code) a host reported through host-boot. Self-reported labels (BOOT-06).
+export interface HostBootCount {
+  readonly hostId: BootReportHost;
+  readonly transport: HostBootTransport;
+  readonly phase: HostBootPhase;
+  readonly code?: ErrorCode;
+  readonly count: number;
+}
+
+// What recordHostBoot reads of a report. Strings, so a caller holding unchecked values cannot grow the snapshot.
+export interface HostBootObservation {
+  readonly hostId: string;
+  readonly transport: string;
+  readonly phase: string;
+  readonly code: string | null;
+  readonly durationMs: number;
+}
+
 export interface MetricsSnapshot {
   readonly schema: 1;
   readonly startedAt: string;
@@ -58,7 +84,9 @@ export interface MetricsSnapshot {
   readonly controlRequests: readonly ControlRequestCount[];
   readonly toolCalls: readonly ToolCallCount[];
   readonly transitions: readonly TransitionCount[];
-  readonly timings: { readonly attachMs: Timing; readonly toolCallMs: Timing };
+  // hostBoot and timings.hostBootMs are both present or both absent: a daemon older than the host-boot method emits neither.
+  readonly hostBoot?: readonly HostBootCount[];
+  readonly timings: { readonly attachMs: Timing; readonly toolCallMs: Timing; readonly hostBootMs?: Timing };
   readonly healthProbeFailures: readonly HealthProbeFailureCount[];
   readonly logLinesDropped: number;
   // Lines a file sink refused or threw and that stderr received instead (owner ruling 2026-11-07, item 14).
@@ -70,6 +98,7 @@ export interface Metrics {
   recordTool(tool: string, outcome: string, durationMs: number, code?: string): void;
   recordTransition(from: string, to: string): void;
   recordAttach(durationMs: number): void;
+  recordHostBoot(report: HostBootObservation): void;
   recordHealthProbeFailure(code: string): void;
   setLogLinesDropped(count: number): void;
   setLogLinesFallback(count: number): void;
@@ -91,6 +120,10 @@ interface MutableTiming {
 const METHODS: readonly string[] = CONTROL_METHODS;
 const CODES: readonly string[] = ERROR_CODES;
 const STATE_NAMES: readonly string[] = STATES;
+// The most distinct hostBoot rows one daemon keeps. The key space is closed, so this bounds the snapshot, not honest traffic.
+const MAX_HOST_BOOT_ROWS = 256;
+// The phases whose duration is a boot cost (the others are events after a boot).
+const TIMED_BOOT_PHASES: readonly string[] = ["attached", "refused", "failed"];
 
 function isMethod(value: string): value is ControlMethod {
   return METHODS.includes(value);
@@ -164,7 +197,9 @@ export function createMetrics(options: MetricsOptions): Metrics {
   const tools = new Map<string, { tool: LoggedToolName; outcome: ToolCallOutcome; code?: ErrorCode; count: number }>();
   const transitions = new Map<string, { from: State; to: State; count: number }>();
   const health = new Map<HealthFailureCode, number>();
+  const hostBoot = new Map<string, { hostId: BootReportHost; transport: HostBootTransport; phase: HostBootPhase; code?: ErrorCode; count: number }>();
   const attachMs = emptyTiming();
+  const hostBootMs = emptyTiming();
   const toolCallMs = emptyTiming();
   let logLinesDropped = 0;
   let logLinesFallback = 0;
@@ -205,6 +240,26 @@ export function createMetrics(options: MetricsOptions): Metrics {
     recordAttach(durationMs) {
       observe(attachMs, durationMs);
     },
+    recordHostBoot(report) {
+      const { hostId, transport, phase, code } = report;
+      if (!isBootReportHost(hostId) || !isBootTransport(transport) || !isBootPhase(phase)) {
+        return;
+      }
+      if (code !== null && !isCode(code)) {
+        return;
+      }
+      const catalogue = code ?? undefined;
+      const key = `${hostId}\u0000${transport}\u0000${phase}\u0000${catalogue ?? ""}`;
+      const existing = hostBoot.get(key);
+      if (existing !== undefined) {
+        existing.count += 1;
+      } else if (hostBoot.size < MAX_HOST_BOOT_ROWS) {
+        hostBoot.set(key, { hostId, transport, phase, ...(catalogue === undefined ? {} : { code: catalogue }), count: 1 });
+      }
+      if (TIMED_BOOT_PHASES.includes(phase)) {
+        observe(hostBootMs, report.durationMs);
+      }
+    },
     recordHealthProbeFailure(code) {
       if (!isHealthCode(code)) {
         return;
@@ -239,7 +294,21 @@ export function createMetrics(options: MetricsOptions): Metrics {
           const byFrom = left.from.localeCompare(right.from);
           return byFrom !== 0 ? byFrom : left.to.localeCompare(right.to);
         }).map((row) => ({ ...row })),
-        timings: { attachMs: freezeTiming(attachMs), toolCallMs: freezeTiming(toolCallMs) },
+        hostBoot: [...hostBoot.values()]
+          .sort((left, right) => {
+            const byHost = left.hostId.localeCompare(right.hostId);
+            if (byHost !== 0) {
+              return byHost;
+            }
+            const byTransport = left.transport.localeCompare(right.transport);
+            if (byTransport !== 0) {
+              return byTransport;
+            }
+            const byPhase = left.phase.localeCompare(right.phase);
+            return byPhase !== 0 ? byPhase : (left.code ?? "").localeCompare(right.code ?? "");
+          })
+          .map((row) => ({ ...row })),
+        timings: { attachMs: freezeTiming(attachMs), toolCallMs: freezeTiming(toolCallMs), hostBootMs: freezeTiming(hostBootMs) },
         healthProbeFailures: [...health.entries()]
           .sort((left, right) => left[0].localeCompare(right[0]))
           .map(([code, count]) => ({ code, count })),
@@ -297,7 +366,7 @@ function isTiming(value: unknown): boolean {
 }
 
 export function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
-  if (!isRecord(value) || !keysMatch(value, SNAPSHOT_KEYS, SNAPSHOT_KEYS) || value["schema"] !== 1) {
+  if (!isRecord(value) || !keysMatch(value, [...SNAPSHOT_KEYS, "hostBoot"], SNAPSHOT_KEYS) || value["schema"] !== 1) {
     return false;
   }
   const timings = value["timings"];
@@ -312,9 +381,20 @@ export function isMetricsSnapshot(value: unknown): value is MetricsSnapshot {
     !Array.isArray(value["transitions"]) ||
     !Array.isArray(value["healthProbeFailures"]) ||
     !isRecord(timings) ||
-    !keysMatch(timings, ["attachMs", "toolCallMs"], ["attachMs", "toolCallMs"]) ||
+    !keysMatch(timings, ["attachMs", "toolCallMs", "hostBootMs"], ["attachMs", "toolCallMs"]) ||
     !isTiming(timings["attachMs"]) ||
     !isTiming(timings["toolCallMs"])
+  ) {
+    return false;
+  }
+  // The host-boot pair is all or nothing: a snapshot from an older daemon carries neither.
+  const hostBootRows = value["hostBoot"];
+  if (("hostBoot" in value) !== ("hostBootMs" in timings)) {
+    return false;
+  }
+  if (
+    "hostBoot" in value &&
+    (!Array.isArray(hostBootRows) || !hostBootRows.every((row) => isHostBootRow(row)) || !isTiming(timings["hostBootMs"]))
   ) {
     return false;
   }
@@ -371,5 +451,19 @@ function isHealthRow(value: unknown): boolean {
     typeof value["code"] === "string" &&
     isHealthCode(value["code"]) &&
     isFiniteNumber(value["count"])
+  );
+}
+
+function isHostBootRow(value: unknown): boolean {
+  if (!isRecord(value) || !keysMatch(value, ["hostId", "transport", "phase", "code", "count"], ["hostId", "transport", "phase", "count"])) {
+    return false;
+  }
+  const code = value["code"];
+  return (
+    isBootReportHost(value["hostId"]) &&
+    isBootTransport(value["transport"]) &&
+    isBootPhase(value["phase"]) &&
+    isFiniteNumber(value["count"]) &&
+    (code === undefined || (typeof code === "string" && isCode(code)))
   );
 }

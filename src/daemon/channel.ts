@@ -14,7 +14,16 @@ import { ERROR_CODES, makeRealmError, RealmError, type ErrorCode } from "../core
 import { dialWithin, withTimeout } from "../core/timeout.js";
 import { controlSocketPath, isSessionId } from "../session/paths.js";
 
-export const CONTROL_METHODS = ["status", "up", "down", "doctor", "tool", "metrics"] as const;
+export const CONTROL_METHODS = [
+  "status",
+  "up",
+  "down",
+  "doctor",
+  "tool",
+  "metrics",
+  "host-boot",
+  "capability-attach",
+] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 const KNOWN_METHODS: readonly string[] = CONTROL_METHODS;
@@ -24,11 +33,14 @@ const KNOWN_CODES: readonly string[] = ERROR_CODES;
 export const SOCKET_TIMEOUT_MS = 5000;
 
 // Bound for one control request, per method. down must outlast the controller teardown bound
-// (TEARDOWN_TIMEOUT_MS in lifecycle/bounds.ts, 30 s), or the CLI gives up while the daemon is
-// still tearing down. up must outlast the policy startup budget plus a margin for the reply, or the
+// (TEARDOWN_TIMEOUT_MS in lifecycle/bounds.ts, 70 s) plus the reply allowance twice (the waiter check in releaseSession) plus
+// 5 s of queue wait, or the CLI gives up while the daemon is still tearing down. The value is mirrored, not imported (P6-D10),
+// and the channel test pins it to that formula over the real constants. up must outlast the policy startup budget plus a margin for the reply, or the
 // caller reports TOOL_TIMEOUT while the daemon is still inside its own budget. doctor runs the registered items plus the
 // runtime checks; probes run together, each bounded at 5 s, so it gets 60 s. tool runs one dispatcher call under its
-// own bound, so it gets that bound plus 10 s for the reply.
+// own bound, so it gets that bound plus 10 s for the reply. host-boot records one report in memory plus at most one audit
+// line, so it gets the 5 s of status and metrics. capability-attach mints one token and writes at most one audit line, so it gets the
+// same 5 s.
 // STARTUP_BUDGET_DEFAULT_MS mirrors both the default and the maximum of startupBudgetMs in
 // policy.schema.json, so policy load refuses a budget the up request cannot wait for. The up bound is
 // that maximum plus UP_REPLY_MARGIN_MS. It is mirrored, not imported: this module keeps its
@@ -46,10 +58,12 @@ const TOOL_CALL_BOUND_MS = 30_000;
 export const CONTROL_TIMEOUT_MS: Readonly<Record<ControlMethod, number>> = Object.freeze({
   status: 5_000,
   up: STARTUP_BUDGET_DEFAULT_MS + UP_REPLY_MARGIN_MS,
-  down: 45_000,
+  down: 85_000,
   doctor: 60_000,
   tool: TOOL_CALL_BOUND_MS + 10_000,
   metrics: 5_000,
+  "host-boot": 5_000,
+  "capability-attach": 5_000,
 });
 
 // The socket is chmod to this mode after listen (P6-D3).
@@ -108,6 +122,19 @@ function isWorkspaceRoot(value: unknown): value is string {
 }
 
 // True when the record carries exactly the listed own keys, no more and no fewer.
+// A host label: a lowercase letter, then up to 31 lowercase letters, digits or hyphens.
+const HOST_LABEL = /^[a-z][a-z0-9-]{0,31}$/;
+// The most characters a token member may carry (the token is about 264 bytes at most).
+const MAX_TOKEN_CHARS = 512;
+
+function isHostLabel(value: unknown): boolean {
+  return typeof value === "string" && HOST_LABEL.test(value);
+}
+
+function isTokenText(value: unknown): boolean {
+  return typeof value === "string" && value.length <= MAX_TOKEN_CHARS;
+}
+
 function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
   const own = Object.keys(record);
   return own.length === keys.length && keys.every((key) => own.includes(key));
@@ -126,7 +153,9 @@ function selectionOfRecord(value: unknown): ControlSelection | undefined {
 }
 
 // The one validator for control selections. The daemon calls it on every request, and the client builds only
-// values it accepts. up carries only workspaceRoot and yields no selection; doctor may carry no params at all.
+// values it accepts. up carries only workspaceRoot and yields no selection; doctor may carry no params at all;
+// host-boot carries exactly { report } and yields no selection. capability-attach carries exactly { selection, host }. tool
+// carries exactly { selection, tool } plus an optional token string.
 // Every refusal is SCHEMA_INVALID.
 export function parseControlSelection(
   method: ControlMethod,
@@ -141,6 +170,14 @@ export function parseControlSelection(
   if (method === "doctor" && params === undefined) {
     return { selection: null };
   }
+  // host-boot carries exactly { report } and no selection: a boot that failed before it had a session still reports. The
+  // closed-vocabulary parse of the report is the daemon's (src/host/boot-report.ts); this module checks the frame only.
+  if (method === "host-boot") {
+    if (!isRecord(params) || !hasExactKeys(params, ["report"]) || !isRecord(params["report"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { selection: null };
+  }
   if (!isRecord(params)) {
     throw makeRealmError("SCHEMA_INVALID");
   }
@@ -148,8 +185,29 @@ export function parseControlSelection(
   if (selection === undefined) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  // tool carries its ToolCall under `tool` beside the selection; every other method carries the selection alone.
-  if (method !== "tool" && !hasExactKeys(params, ["selection"])) {
+  // capability-attach names the host that attaches. This module checks the shape of the label only; membership in HOST_IDS
+  // is the daemon's check (the channel keeps its five-import allowlist).
+  if (method === "capability-attach") {
+    if (!hasExactKeys(params, ["selection", "host"]) || !isHostLabel(params["host"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { selection };
+  }
+  // tool carries its ToolCall under `tool` beside the selection, and optionally the capability token the client holds
+  // (CAPT-06). Any other key, a host or a principal included, is refused here, so a request cannot name the identity the
+  // audit records. The token is a string of bounded length: the channel checks the shape, the gate checks the secret.
+  if (method === "tool") {
+    const withToken = hasExactKeys(params, ["selection", "tool", "token"]);
+    if (!withToken && !hasExactKeys(params, ["selection", "tool"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    if (withToken && !isTokenText(params["token"])) {
+      throw makeRealmError("SCHEMA_INVALID");
+    }
+    return { selection };
+  }
+  // Every other method carries the selection alone.
+  if (!hasExactKeys(params, ["selection"])) {
     throw makeRealmError("SCHEMA_INVALID");
   }
   return { selection };
@@ -160,7 +218,7 @@ export function selectionParams(selection: ControlSelection): { readonly selecti
   return { selection: { workspaceRoot: selection.workspaceRoot, sessionId: selection.sessionId } };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

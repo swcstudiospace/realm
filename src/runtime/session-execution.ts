@@ -19,7 +19,7 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
-import { withTimeout } from "../core/timeout.js";
+import { sleep, withTimeout } from "../core/timeout.js";
 import { bindRoot } from "../fs/root.js";
 import type { CreateRequest, ExecutionService, ProbeResult } from "../core/ports.js";
 import type { EgressRule } from "../contract/validate.js";
@@ -38,6 +38,14 @@ import { attachRuntimeEvidence } from "./create-evidence.js";
 import { liveCapabilityFailures, readHostProcStatus, type LiveProperty } from "./kernel-caps.js";
 import { readHostOciConfig } from "./seccomp-evidence.js";
 import { sandboxBindingOf } from "./driver/sandbox-binding.js";
+import { watchdogWorkload } from "./exec-watchdog.js";
+import {
+  AGENTOS_STOP_DEADLINE_MS,
+  CONTAINER_CONFIRM_POLL_MS,
+  CONTAINER_END_CONFIRM_MS,
+  CONTAINER_STOP_GRACE_MS,
+  SANDBOX_DELETE_DEADLINE_MS,
+} from "./teardown-stages.js";
 import {
   buildExecArgv,
   deleteSandbox,
@@ -57,13 +65,6 @@ import {
 
 // Bound for the whole OpenShell create, including the label poll (OQ-P3-01).
 const OPENSHELL_CREATE_DEADLINE_MS = 60_000;
-// Grace period a container gets to stop before it is killed (libpod stop timeout).
-const CONTAINER_STOP_GRACE_MS = 10_000;
-// Backstop bound on the AgentOS stop in stop() and destroy(). The supervisor's own per-call timeout normally
-// settles the stop first; this timer only guarantees the container step is reached.
-const AGENTOS_STOP_DEADLINE_MS = 15_000;
-// Bound on the delete of one session's realm sandbox in stop() and destroy(). A delete that misses it is a failed stop.
-const SANDBOX_DELETE_DEADLINE_MS = 15_000;
 // The sandbox limits come from the frozen profile, so they cannot drift from the verifier.
 const SANDBOX_CPUS = HARDENING_PROFILE.nanoCpus / 1_000_000_000;
 const SANDBOX_MEMORY = `${String(HARDENING_PROFILE.memoryBytes / 1024 ** 3)}Gi`;
@@ -354,17 +355,59 @@ export class SessionExecution implements ExecutionService {
 
   // The inspect, then the container step. A rejected inspect is a failed step, and the container step is then skipped. A stop of
   // a container the inspect reports gone is skipped too. A removal is sent regardless, since a gone container counts as removed.
+  // A stop or removal request that misses its request bound (PODMAN_MACHINE_DOWN) while Podman is still working is not yet a
+  // failure: the container state is read until it has ended, for at most CONTAINER_END_CONFIRM_MS, and only a container that has
+  // not ended by then keeps the failed step (F-46-1). Any other failure is a failed step at once.
   private async containerStep(containerId: string, mode: "stop" | "remove"): Promise<StopStep> {
+    let inspect: LibpodInspect | null;
     try {
-      const inspect = await this.libpod.inspectContainer(containerId);
+      inspect = await this.libpod.inspectContainer(containerId);
+    } catch (error) {
+      return { ok: false, causeCode: catalogueCodeOf(error) };
+    }
+    if (mode === "stop" && inspect === null) {
+      return STEP_OK;
+    }
+    try {
       if (mode === "remove") {
         await this.libpod.removeContainer(containerId, { force: true });
-      } else if (inspect !== null) {
+      } else {
         await this.libpod.stopContainer(containerId, CONTAINER_STOP_GRACE_MS);
       }
       return STEP_OK;
     } catch (error) {
-      return { ok: false, causeCode: catalogueCodeOf(error) };
+      const causeCode = catalogueCodeOf(error);
+      if (causeCode === "PODMAN_MACHINE_DOWN" && (await this.containerEnded(containerId, mode))) {
+        return STEP_OK;
+      }
+      return { ok: false, causeCode };
+    }
+  }
+
+  // Reads the container state every CONTAINER_CONFIRM_POLL_MS until the container has ended (a stop: it has stopped or is gone; a
+  // removal: it is gone), for at most CONTAINER_END_CONFIRM_MS. A read that fails is read again. False at the bound.
+  private async containerEnded(containerId: string, mode: "stop" | "remove"): Promise<boolean> {
+    const waiting = { open: true };
+    const poll = async (): Promise<boolean> => {
+      while (waiting.open) {
+        try {
+          const inspect = await this.libpod.inspectContainer(containerId);
+          if (inspect === null || (mode === "stop" && hasEnded(inspect))) {
+            return true;
+          }
+        } catch {
+          // A state that cannot be read is not an end: it is read again until the bound.
+        }
+        await sleep(CONTAINER_CONFIRM_POLL_MS);
+      }
+      return false;
+    };
+    try {
+      return await withTimeout(poll(), CONTAINER_END_CONFIRM_MS, "AGENTOS_STOP_FAILED");
+    } catch {
+      return false;
+    } finally {
+      waiting.open = false;
     }
   }
 
@@ -380,7 +423,11 @@ export class SessionExecution implements ExecutionService {
       await withTimeout(agentosFor(sessionId).stop(), this.stopDeadlineMs, "AGENTOS_STOP_FAILED");
       return { ok: true };
     } catch (error) {
-      // The deadline's own AGENTOS_STOP_FAILED adds nothing, so only a different code is kept as the cause.
+      // A failed AgentOS stop that carries its own cause keeps that cause, so the operator sees the reason, not the primary
+      // AGENTOS_STOP_FAILED. Otherwise only a code other than the stop's own is kept as the cause.
+      if (error instanceof RealmError && error.causeCode !== undefined) {
+        return { ok: false, causeCode: error.causeCode };
+      }
       const code = catalogueCodeOf(error);
       return { ok: false, causeCode: code === "AGENTOS_STOP_FAILED" ? undefined : code };
     }
@@ -477,6 +524,16 @@ export class SessionExecution implements ExecutionService {
 function isRunning(inspect: LibpodInspect): boolean {
   const state: unknown = inspect["State"];
   return typeof state === "object" && state !== null && Reflect.get(state, "Running") === true;
+}
+
+// The states in which a container holds nothing: it has not started or it has stopped. A state that cannot be read, and every
+// other state (running, paused, stopping, removing), is not an end, so the confirmation wait fails closed.
+const ENDED_STATES: Readonly<Record<string, true>> = { configured: true, created: true, exited: true, stopped: true };
+
+function hasEnded(inspect: LibpodInspect): boolean {
+  const state: unknown = inspect["State"];
+  const status: unknown = typeof state === "object" && state !== null ? Reflect.get(state, "Status") : undefined;
+  return typeof status === "string" && ENDED_STATES[status] === true;
 }
 
 // Which property of a session container the adoption verdict refused it for. The identity properties are checked first, in
@@ -740,22 +797,36 @@ export function productionOpenShellRunner(source: EnvironmentLike): OpenShellRun
 // Runs one workload in a session's running sandbox through the injected runner (D-92, D-94). The argv is the
 // pinned exec form from buildExecArgv, and output is captured and bounded per stream. A non-zero exit is a
 // successful call carrying exitCode. A runner rejection maps to REALM_NOT_ACTIVE and a deadline expiry to
-// TOOL_TIMEOUT; neither error carries child text. The runner stops the process at timeoutMs (D-91), so a
-// timed-out call keeps nothing running.
+// TOOL_TIMEOUT; neither error carries child text.
+// At timeoutMs the runner kills the local OpenShell client and its process group (D-91). That does not reach the
+// workload inside the sandbox: OpenShell does not signal it when a client goes away or its own timeout expires
+// (39-CONTEXT E-39-04), and inside the sandbox a signal to a process group is denied. The workload therefore runs
+// under the in-sandbox watchdog of exec-watchdog.ts, a bash wrapper that finds the exec's processes in /proc and
+// kills each by pid half a second after the runner deadline. The exit code of a call that resolves before timeoutMs
+// is the command's own. A run that resolves at or after timeoutMs (the client timer fired late and the wrapper's
+// exit 124 arrived first) is TOOL_TIMEOUT whatever its exit code.
+// `now` is a monotonic clock in milliseconds.
 export async function runSandboxExec(
   runner: OpenShellRunner,
   sessionId: string,
   workload: readonly string[],
   timeoutMs: number,
+  now: () => number = () => performance.now(),
 ): Promise<OpenShellRunOutcome> {
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw makeRealmError("SCHEMA_INVALID");
   }
-  const argv = buildExecArgv(sessionId, workload);
+  const argv = buildExecArgv(sessionId, watchdogWorkload(workload, timeoutMs));
+  const startedAt = now();
+  let outcome: OpenShellRunOutcome;
   try {
-    return await runner(argv, { timeoutMs, captureOutput: true });
+    outcome = await runner(argv, { timeoutMs, captureOutput: true });
   } catch (error) {
     const timedOut = error instanceof OpenShellRunnerError && error.kind === "timed-out";
     throw makeRealmError(timedOut ? "TOOL_TIMEOUT" : "REALM_NOT_ACTIVE");
   }
+  if (now() - startedAt >= timeoutMs) {
+    throw makeRealmError("TOOL_TIMEOUT");
+  }
+  return outcome;
 }

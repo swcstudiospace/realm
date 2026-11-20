@@ -368,7 +368,7 @@ async (t) => {
 void test("TOOL-05: a required-mode refusal over the lifecycle drive equals the dispatcher's own refusal",
 testTimeout(10_000),
 async (t) => {
-  const h = makeHarness(t, { policy: REQUIRED, state: "degraded" });
+  const h = makeHarness(t, { policy: REQUIRED, state: "error" });
   const call: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
   const expected = await h.dispatcher.call(call);
   assert.equal(expected.outcome, "refused");
@@ -534,7 +534,8 @@ void test("ACP on two projects: each agent writes and is audited only in its own
   const b = join(root, "b");
   mkdirSync(a, { recursive: true });
   mkdirSync(b, { recursive: true });
-  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  // The agents here dispatch through tokenless clients and the test is not about tokens, so the daemon runs with capabilityTokens off.
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory", capabilityTokens: "off" });
   t.after(async () => {
     for (const project of [a, b]) {
       await fixture.release(project).catch(() => undefined);

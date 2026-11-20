@@ -13,12 +13,13 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "podman",
   "podman-service",
   "openshell",
-  "anda-bridge",
   "control-channel",
   "agentos",
   "host-binaries",
   "kernel-hardening",
   "runtime-roots",
+  "host-plugins",
+  "capability-tokens",
 ];
 
 // The explicit host environment each doctor run receives in these tests. The doctor reads no process environment. PATH names an
@@ -246,7 +247,7 @@ void test("session-store: an absent session directory fails when no ancestor is 
 void test("the checks are registered in report order, with runtime-roots appended when no runtime config is passed", async (t) => {
   const { policyPath, stateDir } = layout(t);
   // Every seam is injected: each command fails to start and each socket is refused, so the run spawns no
-  // process and opens no socket. The andaUrl is absent, so no engine is contacted either.
+  // process and opens no socket.
   const results = await runChecks({
     policyPath,
     stateDir,
@@ -357,6 +358,6 @@ void test("the driver roots add no check id: a config adds only driver-socket an
   const { workspace, stateDir, policyPath } = layout(t);
   const results = await runChecks({ policyPath, stateDir, env: DOCTOR_ENV, runtimeConfig: rootConfig(stateDir, workspace) });
   const ids = results.map((result) => result.id);
-  assert.deepEqual(ids, [...REGISTERED_IDS, "driver-socket", "gateway"]);
+  assert.deepEqual(ids, [...REGISTERED_IDS.slice(0, -2), "driver-socket", "gateway", "host-plugins", "capability-tokens"]);
   assert.equal(new Set(ids).size, ids.length, "no check id appears twice");
 });

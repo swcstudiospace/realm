@@ -1,0 +1,431 @@
+// Declarative runtime table: the 18 GSD Core installer flags, the Omp reference entry and the three Realm-only hosts of Phase 40 (22 rows).
+// Source: 21-DISCOVERY.md (GSD Core `next`, commit 69d604e, 2026-11-16). No gemini (retired), no
+// vscode (registered upstream but not installable). Pure data and pure functions: no file system.
+
+import { isAbsolute, join } from "node:path";
+import { SchemaInvalidError } from "../contract/validate.js";
+import { isSafeRelPath } from "./recipe.js";
+import {
+  HOST_IDS,
+  type HostEnv,
+  type HostHomeSpec,
+  type HostId,
+  type HostRuntimeEntry,
+  type HostShadow,
+  type HostTier,
+  type InstallRecipe,
+  type IntegrationKind,
+} from "./types.js";
+
+interface EntryInit {
+  readonly flag: string;
+  readonly aliases?: readonly string[];
+  readonly displayName: string;
+  readonly tier: HostTier;
+  readonly homes: readonly string[] | readonly HostHomeSpec[];
+  readonly homeVerified?: boolean;
+  readonly envOverride?: string;
+  readonly envBase?: { readonly name: string; readonly sub: string };
+  readonly binaries?: readonly string[];
+  readonly recipe?: InstallRecipe;
+  readonly conflicts?: readonly string[];
+  readonly shadows?: readonly HostShadow[];
+}
+
+function toHomes(homes: EntryInit["homes"]): readonly HostHomeSpec[] {
+  return homes.map((home) => (typeof home === "string" ? { rel: home, role: "config" as const } : home));
+}
+
+// Freezes every object and array below `value` (the value itself included). Recipe values are table data: nothing mutates them.
+function deepFreeze(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return;
+  }
+  const children: readonly unknown[] = Object.values(value);
+  for (const child of children) {
+    deepFreeze(child);
+  }
+  Object.freeze(value);
+}
+
+// A private deep copy of the recipe, frozen at every level (value, keyPath, args and nested arrays included).
+function frozenRecipe(recipe: InstallRecipe): InstallRecipe {
+  const copy = structuredClone(recipe);
+  deepFreeze(copy);
+  return copy;
+}
+
+const MAX_SHADOWS = 4;
+
+// The validated, frozen copy of a table entry's `shadows`: at most 4, each a safe relative path with base "home" or "config".
+// Both entry() and createHostAdapter() call it, so a fixture entry that skips entry() is held to the same rule. The parameter is
+// loosely typed on purpose: it is the check that makes the narrow type true.
+export function checkedShadows(shadows: readonly { readonly rel: string; readonly base: string }[]): readonly HostShadow[] {
+  const valid = (shadow: { readonly rel: string; readonly base: string }): shadow is HostShadow =>
+    isSafeRelPath(shadow.rel) && (shadow.base === "home" || shadow.base === "config");
+  const checked = shadows.filter(valid);
+  if (shadows.length > MAX_SHADOWS || checked.length !== shadows.length) {
+    throw new SchemaInvalidError("host entry shadows is invalid");
+  }
+  return Object.freeze(checked.map((shadow) => Object.freeze({ rel: shadow.rel, base: shadow.base })));
+}
+
+function entry(id: HostId, init: EntryInit): HostRuntimeEntry {
+  if (init.envBase !== undefined && (init.envOverride !== undefined || init.envBase.name === "" || init.envBase.sub.includes("/") || !isSafeRelPath(init.envBase.sub))) {
+    throw new SchemaInvalidError("host entry envBase is invalid");
+  }
+  const integration: IntegrationKind = id === "omp" ? "extension" : "mcp-config";
+  const base = {
+    id,
+    flag: init.flag,
+    aliases: Object.freeze([...(init.aliases ?? [])]),
+    displayName: init.displayName,
+    tier: init.tier,
+    integration,
+    homes: Object.freeze(toHomes(init.homes).map((home) => Object.freeze({ ...home }))),
+    homeVerified: init.homeVerified ?? true,
+    envOverride: init.envOverride ?? null,
+    binaries: Object.freeze([...(init.binaries ?? [])]),
+    recipe: init.recipe === undefined ? null : frozenRecipe(init.recipe),
+  };
+  const withBase = init.envBase === undefined ? base : { ...base, envBase: Object.freeze({ ...init.envBase }) };
+  const withConflicts = init.conflicts === undefined ? withBase : { ...withBase, conflicts: Object.freeze([...init.conflicts]) };
+  return Object.freeze(init.shadows === undefined ? withConflicts : { ...withConflicts, shadows: checkedShadows(init.shadows) });
+}
+
+// Typed as a full Record over HostId, so a missing host fails compilation.
+export const HOST_RUNTIMES: Readonly<Record<HostId, HostRuntimeEntry>> = Object.freeze({
+  omp: entry("omp", {
+    flag: "--omp",
+    displayName: "Omp",
+    tier: "reference",
+    homes: [".omp/agent"],
+    envOverride: "PI_CODING_AGENT_DIR",
+    binaries: ["omp"],
+    recipe: { kind: "bundle-copy", source: "omp", dest: "extensions/realm" },
+    // An Omp plugin link (omp plugin install <checkout>) already loads Realm; the shim would load it twice.
+    conflicts: [".omp/plugins/node_modules/agent-realm"],
+  }),
+  // Evidence E-C1 to E-C4 (24-CONTEXT): the user-scope file is <home>/.claude.json, a sibling of ~/.claude; the value is what
+  // `claude mcp add --scope user realm -- realm mcp --host claude` writes. CLAUDE_CONFIG_DIR moves both homes (E-C2).
+  claude: entry("claude", {
+    flag: "--claude",
+    displayName: "Claude Code",
+    tier: "proven",
+    homes: [
+      { rel: ".claude", role: "config" },
+      { rel: ".", role: "mcp" },
+    ],
+    envOverride: "CLAUDE_CONFIG_DIR",
+    binaries: ["claude"],
+    recipe: {
+      kind: "json-merge",
+      file: ".claude.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { type: "stdio", command: "realm", args: ["mcp", "--host", "claude"], env: {} },
+      homeRole: "mcp",
+    },
+  }),
+  // Evidence E-O1 to E-O6 and D-24-03: the V1-shaped entry is read by 1.x and supported by V2; XDG_CONFIG_HOME is honoured.
+  opencode: entry("opencode", {
+    flag: "--opencode",
+    displayName: "OpenCode",
+    tier: "proven",
+    homes: [".config/opencode"],
+    envBase: { name: "XDG_CONFIG_HOME", sub: "opencode" },
+    binaries: ["opencode"],
+    recipe: {
+      kind: "json-merge",
+      file: "opencode.json",
+      keyPath: ["mcp", "realm"],
+      value: { type: "local", command: ["realm", "mcp", "--host", "opencode"] },
+    },
+  }),
+  // Evidence E-KL1, E-KL2 and D-25-02: kilo.json (never kilo.jsonc) under the XDG-relocatable config home; ~/.kilo is a detection-only skills home.
+  kilo: entry("kilo", {
+    flag: "--kilo",
+    displayName: "Kilo",
+    tier: "config-only",
+    homes: [
+      { rel: ".config/kilo", role: "config" },
+      { rel: ".kilo", role: "skills" },
+    ],
+    envBase: { name: "XDG_CONFIG_HOME", sub: "kilo" },
+    binaries: ["kilo", "kilocode"],
+    recipe: { kind: "json-merge", file: "kilo.json", keyPath: ["mcp", "realm"], value: { type: "local", command: ["realm", "mcp", "--host", "kilo"] } },
+  }),
+  // Evidence E-X1 to E-X4 and D-24-04: the owned table is the one `codex mcp add realm -- realm mcp --host codex` writes. Codex rewrites
+  // config.toml with a comment-dropping TOML editor (observed 2026-11-17, codex-cli 0.154.0), so the table is owned by its header and no marker is written.
+  codex: entry("codex", {
+    flag: "--codex",
+    displayName: "Codex",
+    tier: "proven",
+    homes: [".codex"],
+    envOverride: "CODEX_HOME",
+    binaries: ["codex"],
+    recipe: {
+      kind: "toml-table",
+      file: "config.toml",
+      table: ["mcp_servers", "realm"],
+      text: '[mcp_servers.realm]\ncommand = "realm"\nargs = ["mcp", "--host", "codex"]',
+    },
+  }),
+  // Evidence E-CP1, E-CP2 and D-25-02: `copilot mcp add` writes this canonical entry (tools and type included); COPILOT_HOME moves the directory.
+  copilot: entry("copilot", {
+    flag: "--copilot",
+    displayName: "Copilot",
+    tier: "config-only",
+    homes: [".copilot"],
+    envOverride: "COPILOT_HOME",
+    binaries: ["copilot"],
+    recipe: {
+      kind: "json-merge",
+      file: "mcp-config.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { tools: ["*"], type: "local", command: "realm", args: ["mcp", "--host", "copilot"] },
+    },
+  }),
+  // Evidence E-AG1 and D-25-02: documented-only ~/.gemini/config/mcp_config.json (three Google pages agree); no `type` is documented and no variable.
+  antigravity: entry("antigravity", {
+    flag: "--antigravity",
+    displayName: "Antigravity",
+    tier: "config-only",
+    homes: [".gemini/config"],
+    binaries: ["agy"],
+    recipe: { kind: "json-merge", file: "mcp_config.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "antigravity"] } },
+  }),
+  // Evidence E-CU1, E-CU2 and D-25-02: documented ~/.cursor/mcp.json (type "stdio" marked required); no relocation variable is documented.
+  cursor: entry("cursor", {
+    flag: "--cursor",
+    displayName: "Cursor",
+    tier: "config-only",
+    homes: [".cursor"],
+    binaries: ["cursor-agent", "cursor"],
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "cursor"] } },
+  }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-01): renamed product (E-WS1), two config files (E-WS2), the IDE was not observed.
+  windsurf: entry("windsurf", { flag: "--windsurf", aliases: ["devin-desktop"], displayName: "Windsurf", tier: "config-only", homes: [".codeium/windsurf"] }),
+  // Evidence E-AU1, E-AU2 and D-25-02: `auggie mcp add-json` writes type "stdio" into the shared settings file; AUGMENT_CACHE_DIR moves the directory.
+  augment: entry("augment", {
+    flag: "--augment",
+    displayName: "Augment",
+    tier: "config-only",
+    homes: [".augment"],
+    envOverride: "AUGMENT_CACHE_DIR",
+    binaries: ["auggie"],
+    recipe: {
+      kind: "json-merge",
+      file: "settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { type: "stdio", command: "realm", args: ["mcp", "--host", "augment"] },
+    },
+  }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-02): no documented global MCP file for the IDE (E-TR1).
+  trae: entry("trae", { flag: "--trae", displayName: "Trae", tier: "config-only", homes: [".trae"] }),
+  // Evidence E-QW1, E-QW2 and D-25-02: `qwen mcp add -s user` writes this entry into the host's whole settings file; QWEN_HOME moves the directory.
+  qwen: entry("qwen", {
+    flag: "--qwen",
+    displayName: "Qwen",
+    tier: "config-only",
+    homes: [".qwen"],
+    envOverride: "QWEN_HOME",
+    binaries: ["qwen"],
+    recipe: { kind: "json-merge", file: "settings.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "qwen"] } },
+  }),
+  // Evidence E-HM1..E-HM3 and D-25-04: mcp_servers (not mcpServers); owned by key and parsed value, no comment marker.
+  hermes: entry("hermes", {
+    flag: "--hermes",
+    displayName: "Hermes",
+    tier: "config-only",
+    homes: [".hermes"],
+    envOverride: "HERMES_HOME",
+    binaries: ["hermes"],
+    recipe: { kind: "yaml-map", file: "config.yaml", path: ["mcp_servers", "realm"], value: { command: "realm", args: ["mcp", "--host", "hermes"] } },
+  }),
+  // Evidence E-CB1..E-CB3 and D-25-06: a new .mcp.json hides the legacy mcp.json and ~/.codebuddy.json (observed), so install refuses to create it next to them.
+  codebuddy: entry("codebuddy", {
+    flag: "--codebuddy",
+    displayName: "CodeBuddy",
+    tier: "config-only",
+    homes: [".codebuddy"],
+    envOverride: "CODEBUDDY_CONFIG_DIR",
+    binaries: ["codebuddy"],
+    shadows: [
+      { rel: "mcp.json", base: "config" },
+      { rel: ".codebuddy.json", base: "home" },
+    ],
+    recipe: { kind: "json-merge", file: ".mcp.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "codebuddy"] } },
+  }),
+  // Evidence E-CL1, E-CL2 and D-25-02: the Cline CLI reads this file; the flat shape parses (the CLI writes a nested one). The IDE extension's file is unknown (OQ-25-08).
+  cline: entry("cline", {
+    flag: "--cline",
+    displayName: "Cline",
+    tier: "config-only",
+    homes: [".cline"],
+    envOverride: "CLINE_DIR",
+    binaries: ["cline"],
+    recipe: {
+      kind: "json-merge",
+      file: "data/settings/cline_mcp_settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { command: "realm", args: ["mcp", "--host", "cline"] },
+    },
+  }),
+  // Evidence E-K1 to E-K6 and D-24-05: `kimi` is Kimi CLI (the archived Python product, ~/.kimi), `kimi-code` is Kimi Code (the
+  // Node product, ~/.kimi-code). Both read mcp.json in the documented mcpServers shape. The command name `kimi` is shared by
+  // the two products, so neither row detects by binary. KIMI_SHARE_DIR moves the config home and never the skills home.
+  kimi: entry("kimi", {
+    flag: "--kimi",
+    displayName: "Kimi CLI",
+    tier: "proven",
+    homes: [
+      { rel: ".config/agents", role: "skills" },
+      { rel: ".kimi", role: "config" },
+    ],
+    envOverride: "KIMI_SHARE_DIR",
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "kimi"] } },
+  }),
+  "kimi-code": entry("kimi-code", {
+    flag: "--kimi-code",
+    displayName: "Kimi Code",
+    tier: "config-only",
+    homes: [".kimi-code"],
+    envOverride: "KIMI_CODE_HOME",
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "kimi-code"] } },
+  }),
+  // Deferred (25-CONTEXT D-25-02, OQ-25-03): GUI-owned native config, unobservable.
+  zcode: entry("zcode", { flag: "--zcode", displayName: "ZCode", tier: "config-only", homes: [".zcode"] }),
+  // Evidence E-PI1 to E-PI3 and D-25-02: `pi mcp add` writes this flat entry into a strict-JSON file; PI_CODING_AGENT_DIR is shared with omp.
+  pi: entry("pi", {
+    flag: "--pi",
+    displayName: "Pi",
+    tier: "config-only",
+    homes: [".pi/agent"],
+    envOverride: "PI_CODING_AGENT_DIR",
+    binaries: ["pi"],
+    recipe: { kind: "json-merge", file: "mcp.json", keyPath: ["mcpServers", "realm"], value: { command: "realm", args: ["mcp", "--host", "pi"] } },
+  }),
+  // Phase 40 (D-40-01, D-40-02). Realm-only host: its flag is not a GSD Core installer flag. Evidence E-40-02 to E-40-05: `muse mcp add` writes
+  // settings.json below XDG_CONFIG_HOME/muse with `mcpServers.realm` and schema_version 1; the recipe adds `required: true` (E-40-03) so a failed
+  // Realm aborts the run, seeds schema_version only into a file it creates (E-40-04) and refuses a file that also holds the rival `mcp_servers` spelling (E-40-05).
+"muse-code": entry("muse-code", {
+    flag: "--muse-code",
+    displayName: "Muse Code",
+    tier: "proven",
+    homes: [".config/muse"],
+    envBase: { name: "XDG_CONFIG_HOME", sub: "muse" },
+    binaries: ["muse"],
+    recipe: {
+      kind: "json-merge",
+      file: "settings.json",
+      keyPath: ["mcpServers", "realm"],
+      value: { type: "stdio", command: "realm", args: ["mcp", "--host", "muse-code"], required: true },
+      seed: { schema_version: 1 },
+      refuseIfPresent: ["mcp_servers"],
+    },
+  }),
+  // Evidence E-40-06: `prime-agent mcp add` writes settings.json of the agent directory (PRIME_AGENT_CODING_AGENT_DIR is that directory itself).
+  "prime-agent": entry("prime-agent", {
+    flag: "--prime-agent",
+    displayName: "Prime Agent",
+    tier: "config-only",
+    homes: [".prime/agent"],
+    envOverride: "PRIME_AGENT_CODING_AGENT_DIR",
+    binaries: ["prime-agent"],
+    recipe: { kind: "json-merge", file: "settings.json", keyPath: ["mcpServers", "realm"], value: { type: "stdio", command: "realm", args: ["mcp", "--host", "prime-agent"] } },
+  }),
+  // Evidence E-40-07 to E-40-09: the owned table is the text `grok mcp add realm -- realm mcp --host grok-build` writes into ~/.grok/config.toml
+  // (multi-line args, enabled = true): Grok's own stable form, so a later `grok mcp add` leaves it byte-identical. Grok documents no relocation variable.
+  "grok-build": entry("grok-build", {
+    flag: "--grok-build",
+    displayName: "Grok Build",
+    tier: "config-only",
+    homes: [".grok"],
+    binaries: ["grok"],
+    recipe: {
+      kind: "toml-table",
+      file: "config.toml",
+      table: ["mcp_servers", "realm"],
+      text: '[mcp_servers.realm]\ncommand = "realm"\nargs = [\n    "mcp",\n    "--host",\n    "grok-build",\n]\nenabled = true',
+    },
+  }),
+});
+
+// Alias -> id, derived from the table. Null prototype so a name like "__proto__" never matches.
+function buildAliases(): Readonly<Record<string, HostId>> {
+  const table = Object.create(null) as Record<string, HostId>;
+  for (const id of HOST_IDS) {
+    for (const alias of HOST_RUNTIMES[id].aliases) {
+      table[alias] = id;
+    }
+  }
+  return Object.freeze(table);
+}
+export const HOST_ALIASES: Readonly<Record<string, HostId>> = buildAliases();
+
+// A bare id or alias only, case-sensitive. Flags (`--claude`) are an installer concern.
+export function resolveHostId(name: string): HostId | undefined {
+  if (Object.hasOwn(HOST_RUNTIMES, name)) {
+    return name as HostId;
+  }
+  if (Object.hasOwn(HOST_ALIASES, name)) {
+    return HOST_ALIASES[name];
+  }
+  return undefined;
+}
+
+// A host has no install recipe until its phase sets one: Phase 22 sets omp, Phase 24 sets claude, opencode, codex, kimi and kimi-code, Phase 25 the rest except the three deferred hosts (windsurf, trae, zcode), Phase 40 muse-code, prime-agent and grok-build.
+export function recipePending(id: HostId): boolean {
+  return HOST_RUNTIMES[id].recipe === null;
+}
+
+function refuse(): never {
+  throw new SchemaInvalidError("host home base is not an absolute path");
+}
+
+// An absolute, non-empty variable value is the operator's base and is used as given; anything else is refused.
+function absoluteValue(value: string): string {
+  if (value === "" || !isAbsolute(value)) {
+    refuse();
+  }
+  return value;
+}
+
+// Pure: joins env.home with each home's `rel`, in table order, and returns the role with each path. An absolute
+// `envOverride` value replaces the path of every `config` and `mcp` home (never a `skills` home); an absolute `envBase` value
+// replaces the `config` homes with `<value>/<sub>`. An unset variable changes nothing; an empty or relative value is refused.
+export function resolveHomeSpecs(
+  entryValue: HostRuntimeEntry,
+  env: HostEnv,
+): readonly { readonly path: string; readonly role: HostHomeSpec["role"] }[] {
+  if (!isAbsolute(env.home)) {
+    refuse();
+  }
+  let override: string | undefined;
+  if (entryValue.envOverride !== null) {
+    const value = env.env[entryValue.envOverride];
+    override = value === undefined ? undefined : absoluteValue(value);
+  }
+  let base: string | undefined;
+  if (entryValue.envBase !== undefined) {
+    const value = env.env[entryValue.envBase.name];
+    base = value === undefined ? undefined : join(absoluteValue(value), entryValue.envBase.sub);
+  }
+  return entryValue.homes.map((home) => {
+    if (override !== undefined && home.role !== "skills") {
+      return { path: override, role: home.role };
+    }
+    if (base !== undefined && home.role === "config") {
+      return { path: base, role: home.role };
+    }
+    return { path: join(env.home, home.rel), role: home.role };
+  });
+}
+
+// The detection homes: the paths of the non-`mcp` specs, deduplicated by path (first occurrence wins).
+export function resolveHomes(entryValue: HostRuntimeEntry, env: HostEnv): readonly string[] {
+  const paths = resolveHomeSpecs(entryValue, env)
+    .filter((spec) => spec.role !== "mcp")
+    .map((spec) => spec.path);
+  return [...new Set(paths)];
+}

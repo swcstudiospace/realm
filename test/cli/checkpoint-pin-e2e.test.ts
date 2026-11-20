@@ -4,8 +4,9 @@
 // checkpoint restore, up again. Each step asserts its own outcome, and the test stops at the first step that fails, so
 // its message names that step.
 //
-// The checkpoint library proceeds only when the sandbox reports stopped, while the registry entry that names the session
-// exists only while that session is live. Down removes the entry, so a checkpoint taken after a release has no success path.
+// The checkpoint library proceeds only when the sandbox is proven stopped. Down removes the registry entry, so the
+// checkpoint after it runs in memory: the CLI pins the workspace from the policy and proves the sandbox stopped with an
+// absent control socket and an absent Podman container, and no entry is written at any point.
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
@@ -16,6 +17,7 @@ import { runCli, type CliDeps } from "../../src/cli/main.js";
 import { RealmError } from "../../src/core/errors.js";
 import type { ControlReply } from "../../src/daemon/channel.js";
 import { startRealmDaemon, type RealmDaemonFixture } from "../support/realm-daemon-fixture.js";
+import { FakeLibpod } from "../support/fake-libpod.js";
 import { boundedWait, testTimeout } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
@@ -28,6 +30,7 @@ interface Layout {
   readonly workspace: string;
   readonly stateDir: string;
   readonly configHome: string;
+  readonly runtime: string;
   readonly daemons: RealmDaemonFixture[];
 }
 
@@ -49,6 +52,8 @@ function layoutOf(t: TestContext): Layout {
   const workspace = join(base, "ws");
   const stateDir = join(base, "realm");
   const configHome = join(base, "config");
+  const runtime = join(base, "runtime");
+  mkdirSync(join(runtime, "podman"), { recursive: true });
   mkdirSync(workspace);
   mkdirSync(join(configHome, "realm"), { recursive: true });
   writeFileSync(join(workspace, "a.txt"), "alpha\n");
@@ -56,7 +61,7 @@ function layoutOf(t: TestContext): Layout {
     join(configHome, "realm", "config.json"),
     JSON.stringify({ image: IMAGE, stateDir, workspaceRoot: workspace }),
   );
-  return { base, workspace, stateDir, configHome, daemons };
+  return { base, workspace, stateDir, configHome, runtime, daemons };
 }
 
 // Runs one step's daemon call. A RealmError from the daemon fails the test with the step named and the catalogue code.
@@ -84,7 +89,10 @@ function stateOfReply(reply: ControlReply): unknown {
 
 void test("RES-04 e2e: up, down, checkpoint create, change, checkpoint restore, up again through the real control path", testTimeout(SCENARIO_BOUND_MS), async (t) => {
   const fx = layoutOf(t);
-  const deps: CliDeps = { env: { HOME: join(fx.base, "home"), XDG_CONFIG_HOME: fx.configHome } };
+  const deps: CliDeps = { env: { HOME: join(fx.base, "home"), XDG_CONFIG_HOME: fx.configHome, XDG_RUNTIME_DIR: fx.runtime } };
+  const podman = new FakeLibpod();
+  await podman.start(join(fx.runtime, "podman", "podman.sock"));
+  t.after(() => podman.stop());
 
   // Step 1: the realm comes up for the workspace root.
   const first = await startRealmDaemon({ stateDir: fx.stateDir, workspace: fx.workspace, mode: "advisory" });
@@ -100,8 +108,11 @@ void test("RES-04 e2e: up, down, checkpoint create, change, checkpoint restore, 
   assert.equal(stateOfReply(released), "unbound", "step 2 (down): the release must answer unbound");
   await atStep("step 2 (down): the daemon stops after its reply", () => boundedWait(first.done, "daemon done", DONE_BOUND_MS));
 
-  // Step 3: a checkpoint of the released session, through the CLI command the operator runs. This is the first step that
-  // cannot succeed today: the CLI refuses before any daemon call.
+  // Step 3: a checkpoint of the released session, through the CLI command the operator runs. The project has no registry
+  // entry now, so the command pins it in memory under the policy file the state directory holds, and the stopped proof is
+  // the absent control socket plus a Podman that holds no sandbox container.
+  mkdirSync(fx.stateDir, { recursive: true });
+  writeFileSync(join(fx.stateDir, "policy.json"), JSON.stringify({ mode: "advisory", workspaceRoots: [fx.workspace] }));
   const created = await runCli(["checkpoint", "create", "--workspace", fx.workspace, "--id", CHECKPOINT_ID], deps);
   assert.equal(
     created.exitCode,

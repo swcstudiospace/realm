@@ -18,10 +18,10 @@ The core guarantee, under the fail-closed policy: every file mutation either lan
 
 ## Status
 
-- v0.1.x was the first release line, for milestone v1.0 (a provisional name), and v0.2.x was the line of milestone v2.0. v0.3.x, for milestone v3.0, becomes the current line with its first release and is the only line that is supported.
+- v0.1.x was the first release line, for milestone v1.0 (a provisional name), and v0.2.x was the line of milestone v2.0. v0.3.x, for milestone v3.0, and the later lines follow the same rule. Milestone v6.0 shipped on 2026-11-19 on the 0.6.x line: capability tokens enforce by default, `realm mcp` serves its handshake before `realm up` completes, every dispatcher exec is wrapped by an in-sandbox watchdog that ends a timed-out exec's process tree, 22 host ids are registered (including Muse Code, Prime Agent and Grok Build), and a guard workflow checks the `!` marker on breaking commit subjects. The Omp cold-attach responsiveness on a quiet host was not measured and stays carried. Milestone v7.0 (Carried findings closure) shipped on 2026-11-19 on the 0.7.x line. Milestone v8.0 (Shared sandboxes and durable recovery) shipped on 2026-11-19 on the 0.8.x line. Milestone v9.0 (Doctor health and concurrent binding) is in progress on the 0.9.x line. Only the latest release line is supported: currently 0.8.x, and 0.9.x from its first release, 0.9.0.
 - `realm up` binds the AgentOS driver from the configured digest-pinned image. The production stack is the OpenShell 0.1.5 gateway, the Realm compute driver, and rootless Podman 5.x (`docs/integration/openshell.md`).
 - Linux is the only verified platform. Podman 5.x is required, and Realm does not install it.
-- The Podman-gated production live suite and Omp status checks have versioned historical receipts in [OpenShell integration](docs/integration/openshell.md), [Omp integration](docs/integration/omp.md) and [ACP integration](docs/integration/acp.md). On 2026-10-31 the parent exercised compiled Realm 0.3.26 with a temporary matching rebuilt driver on rootless Podman 5.7.1: fresh generated-config `init` → active `up`/`status` → unbound `down`, then production crash/reap/reattach and real MCP exec/write/read (2 passed, 0 skipped). The 2026-11-13 quickstart on Realm 0.3.29 is in the transcript below and covers `init`, `up`, `status` and `down` only. This is not installer provisioning or Omp containment proof. Other platforms and the Anda engine remain unverified live.
+- The Podman-gated production live suite and Omp status checks have versioned historical receipts in [OpenShell integration](docs/integration/openshell.md), [Omp integration](docs/integration/omp.md) and [ACP integration](docs/integration/acp.md). On 2026-10-31 the parent exercised compiled Realm 0.3.26 with a temporary matching rebuilt driver on rootless Podman 5.7.1: fresh generated-config `init` → active `up`/`status` → unbound `down`, then production crash/reap/reattach and real MCP exec/write/read (2 passed, 0 skipped). The 2026-11-13 quickstart on Realm 0.3.29 is in the transcript below and covers `init`, `up`, `status` and `down` only. This is not installer provisioning or Omp containment proof. Other platforms remain unverified live.
 
 ## Quick start
 
@@ -145,6 +145,8 @@ $ realm down   (from the workspace)
 {"snapshot":{"state":"unbound","reason":"no workspace","lastTransitionAt":"2026-11-13T18:29:57.820Z"},"display":{"label":"realm disconnected","degraded":false,"reason":"no workspace","lastTransitionAt":"2026-11-13T18:29:57.820Z"},"mode":"fail-closed","boundRoot":"<workspace>","sessionId":"pda297968e47c"}
 ```
 
+The display object in this 0.3.x capture has a degraded key. From the 0.4 line it has label, reason and lastTransitionAt only.
+
 This is lifecycle evidence for `init`, `up`, `status` and `down` only. It does
 not repeat the production crash, reap and MCP scenarios recorded for 0.3.26,
 and it is not a model-driven Omp sandbox write or a clean built-Realm
@@ -173,6 +175,8 @@ $ realm status
 $ realm down
 {"snapshot":{"state":"unbound","reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"display":{"label":"realm disconnected","degraded":false,"reason":"no workspace","lastTransitionAt":"2026-10-31T05:48:37.069Z"},"mode":"fail-closed"}
 ```
+
+The display object in this 0.3.x capture has a degraded key. From the 0.4 line it has label, reason and lastTransitionAt only.
 
 There was exactly one actual rootless container while active. Driver and
 daemon used the freshly generated config, with no legacy root environment
@@ -251,16 +255,22 @@ the historical install receipt and shared-config prerequisites.
 Realm ships one integration per host, each under `docs/hosts/` with a snippet:
 
 - Omp: a Realm extension, loaded from `dist/src/omp/extension.js` (see `docs/hosts/snippets/omp.md`). It attaches the sandbox when a session starts, shows its status, and gates Omp's `edit` call and Realm's `write`: under the default `fail-closed` mode it refuses them while the realm is not active, and under an explicit `advisory` mode it warns and lets them through when the daemon is reachable (with the daemon unreachable, Realm `write` refuses). With the realm active, fail-closed mode asks Omp to remove its built-in tools outside the Realm allowlist; that is a guard, not containment, until the live check passes, and the session directory must be the configured workspace root (`docs/integration/omp-lifecycle-runbook.md`).
-- Claude Code and Grok Build: the shared plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp`.
-- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcp_servers` entry.
-- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`.
-- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry.
+- Claude Code: the plugin bundle `adapters/claude-plugin`, plus an MCP entry that runs `realm mcp --host claude`. Grok Build reads the same bundle, so a Grok Build session that uses it is attributed `claude`; for a session attributed `grok-build`, register `realm mcp --host grok-build` in Grok's own configuration with `realm host install grok-build`.
+- Muse Code: the plugin bundle `adapters/muse-code`, plus an `mcpServers` entry whose launcher is `realm mcp --host muse-code` (`realm host install muse-code` registers it).
+- Hermes Agent: the MCP-only plugin bundle `adapters/hermes-agent`, whose launcher is `realm mcp --host hermes`.
+- Prime Agent: the package `adapters/prime-agent`, plus an MCP entry whose launcher is `realm mcp --host prime-agent` (`realm host install prime-agent` registers it).
 
 Each host bundle has historical isolated validator evidence; installing one
 does not provision the runtime or verify a current sandbox. Use a configured
 `realm` executable or the built CLI by absolute path as shown above.
 
 See [docs/integration/hosts.md](docs/integration/hosts.md) for the host tiers.
+
+- To add a host, read [Writing a Realm host plugin](docs/integration/writing-a-host-plugin.md). The [Host support matrix](docs/integration/host-support-matrix.md) shows what each host supports and proves, [Host plugin gaps](docs/integration/host-plugin-gaps.md) tracks what is not proven, and the [Wave 1 boot matrix](docs/integration/wave1-boot-matrix.md) shows the production-stack boot status of the five wave 1 hosts.
+
+### Capability tokens are on by default
+
+The default of `capabilityTokens.mode` is `enforce`: a client that does not attach with a host id (a `realm mcp` or `realm acp` from before capability tokens, a process that speaks the control socket without a token, or a launcher with no `--host` flag) is refused `POLICY_DENIED`. Launchers written by `realm host install` already carry the host flag, as do the Claude Code and Hermes Agent bundles. Muse Code, Prime Agent and Grok Build have the host ids `muse-code`, `prime-agent` and `grok-build`, and `realm host install` registers each launcher with its label; a launcher that is still bare is refused. A Grok Build session that loads the shared Claude plugin bundle is attributed `claude`. The opt-out is the policy value `capabilityTokens.mode` set to `off`, which restores the 0.4.x behaviour and makes `realm doctor` warn. A token is a signed label verified on every call; it does not stop a process of the same user that can read the token or the key file. See Q10 in [docs/integration/mcp.md](docs/integration/mcp.md) for the migration steps.
 
 ## Documentation
 

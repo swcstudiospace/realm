@@ -20,14 +20,14 @@ import {
   type CliResult,
   type ConnectDaemon,
   type SendControlRequest,
-  type SpawnDaemon,
 } from "../../src/cli/main.js";
-import { CONTROL_TIMEOUT_MS, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
+import type { SpawnDaemon } from "../../src/daemon/launch.js";
+import { CONTROL_TIMEOUT_MS, DaemonAbsentError, type ControlReply, type ControlRequest } from "../../src/daemon/channel.js";
 import type { EnvironmentLike } from "../../src/session/paths.js";
 import { selectionOf, type DaemonStatus } from "../../src/daemon/client.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { bindRoot } from "../../src/fs/root.js";
-import { writeWorkspacePin } from "../../src/session/workspace-pin.js";
+import { validate, type Policy } from "../../src/contract/validate.js";
 import { removeWorkspaceEntry, writeWorkspaceEntry } from "../../src/session/workspace-registry.js";
 import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { boundedWait, pollUntil, scaledMs, testTimeout } from "../support/timing.js";
@@ -100,7 +100,14 @@ function okVersion(): Promise<{ exitCode: number; stdout: string }> {
 // Fakes for the daemon client seam. Each status probe answers in order (true: a daemon answers;
 // false: the socket is absent); the last answer repeats. up and call settle with STATUS and
 // REFUSED_STATUS unless a test overrides them.
-const STATUS = { mode: "advisory" } as DaemonStatus;
+// A complete status (the shape the real client validates). The status a fake answers after the probe names the selection's own
+// root and session id, and reports what the last up reported, because the boot readback after up reads it.
+const STATUS: DaemonStatus = {
+  snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  mode: "advisory",
+  sessionId: "p0123456789ab",
+};
 // The up reply every successful realm returns: its lifecycle snapshot reports active.
 const ACTIVE_RESULT = { snapshot: { state: "active", reason: "" } };
 const REFUSED_STATUS: ToolOutcome = {
@@ -124,6 +131,8 @@ interface FakeDaemonRecord {
   connects: number;
   closes: number;
   readonly upRoots: string[];
+  // The status reads made after up began: the boot's readback.
+  readbacks: number;
 }
 
 interface FakeDaemon {
@@ -132,12 +141,16 @@ interface FakeDaemon {
 }
 
 function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
-  const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [] };
+  const record: FakeDaemonRecord = { connects: 0, closes: 0, upRoots: [], readbacks: 0 };
   let statusCalls = 0;
+  let lastUp: DaemonStatus | undefined;
   const connect: ConnectDaemon = (_socketPath, selection) => {
     record.connects += 1;
     return {
       status: () => {
+        if (record.upRoots.length > 0) {
+          record.readbacks += 1;
+        }
         const answer = options.probes[Math.min(statusCalls, options.probes.length - 1)];
         statusCalls += 1;
         if (answer === "timeout") {
@@ -146,11 +159,12 @@ function fakeDaemon(options: FakeDaemonOptions): FakeDaemon {
         if (answer !== true) {
           return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
         }
-        return Promise.resolve(STATUS);
+        return Promise.resolve({ ...(lastUp ?? STATUS), boundRoot: selection.workspaceRoot, sessionId: selection.sessionId });
       },
       up: async () => {
         record.upRoots.push(selection.workspaceRoot);
-        return options.up === undefined ? STATUS : options.up();
+        lastUp = options.up === undefined ? STATUS : await options.up();
+        return lastUp;
       },
       call: async (tool: unknown) => (options.call === undefined ? REFUSED_STATUS : options.call(tool)),
       metrics: () => Promise.reject(new RealmError("REALM_NOT_ACTIVE")),
@@ -171,6 +185,15 @@ function captureDiagnostics(): { readonly stream: Writable; readonly text: () =>
     },
   });
   return { stream, text: () => chunks.join("") };
+}
+
+// realm mcp serves before its boot settles (Phase 33): a test that asserts what the boot did, or forwards a call, first waits for
+// the readback that follows up, and one more turn for the driver to adopt (or refuse) the client.
+async function untilBooted(daemon: FakeDaemon): Promise<void> {
+  await pollUntil(() => daemon.record.readbacks > 0, "the boot reading the session back after up");
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 // Waits for runCli to return after stdin closes, failing the test if the server never shuts down,
@@ -304,6 +327,25 @@ void test("realm up exits 1 with the catalogue line when the realm is not active
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, `${JSON.stringify(errorState)}\n`);
   assert.equal(result.stderr, `AGENTOS_NOT_CONFIGURED: ${ERROR_CATALOGUE.AGENTOS_NOT_CONFIGURED.reason}\n`);
+});
+
+void test("realm up exits 1 with REALM_NOT_ACTIVE and keeps its JSON when a 0.3 daemon replies with the removed degraded state (Phase 28)", async () => {
+  const degradedState = { snapshot: { state: "degraded", reason: "bridge down" } };
+  const send: SendControlRequest = (_socketPath, request) => {
+    const reply: ControlReply = { id: request.id, result: degradedState };
+    return Promise.resolve(reply);
+  };
+  const result = await runCli(["up", "--workspace", WORKSPACE], {
+    env: ENV,
+    timeoutMs: 500,
+    connect: fakeDaemon({ probes: [true] }).connect,
+    send,
+    runCommand: okVersion,
+    connectSocket: acceptConnect,
+  });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, `${JSON.stringify(degradedState)}\n`);
+  assert.equal(result.stderr, `REALM_NOT_ACTIVE: ${ERROR_CATALOGUE.REALM_NOT_ACTIVE.reason}\n`);
 });
 
 void test("realm up and mcp refuse a non-absolute or missing --workspace value before probing or dialing (CLI-01)", async () => {
@@ -440,6 +482,14 @@ void test("unknown argv exits 2 with usage on stderr (CLI-01)", async () => {
   }
 });
 
+void test("HOST-07: the usage text names realm host and its subcommands, and host is a CLI command", async () => {
+  assert.ok((CLI_COMMANDS as readonly string[]).includes("host"));
+  const result = await runCli([], { env: ENV });
+  assert.equal(result.exitCode, 2);
+  assert.ok(result.stderr.includes("realm host <list|detect|status|install|uninstall>"), result.stderr);
+  assert.ok(result.stderr.includes("realm host token <status|rotate> [--revoke-previous]"), result.stderr);
+});
+
 void test("realm up with Podman missing reports PODMAN_MISSING and exits promptly with no spawn (CLI-02)", async () => {
   const spawns: SpawnCall[] = [];
   let sends = 0;
@@ -500,6 +550,7 @@ void test("realm mcp attaches to the daemon, claims the current directory, and s
     diagnostics: diagnostics.stream,
   });
   input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })}\n`);
+  await untilBooted(daemon);
   input.write(
     `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "status", arguments: {} } })}\n`,
   );
@@ -531,8 +582,7 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
   const daemon = fakeDaemon({ probes: [true] });
   const diagnostics = captureDiagnostics();
   const input = new PassThrough();
-  input.end();
-  const result = await runCli(["mcp", "--workspace", OTHER_WORKSPACE], {
+  const pending = runCli(["mcp", "--workspace", OTHER_WORKSPACE], {
     env: ENV,
     cwd: WORKSPACE,
     spawn: makeSpawn(spawns),
@@ -541,6 +591,9 @@ void test("realm mcp --workspace claims the named root and attaches without spaw
     mcpOutput: new PassThrough(),
     diagnostics: diagnostics.stream,
   });
+  await untilBooted(daemon);
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 0);
   assert.equal(spawns.length, 0);
   assert.deepEqual(daemon.record.upRoots, [OTHER_WORKSPACE]);
@@ -575,6 +628,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
     mcpOutput: output,
     diagnostics: diagnostics.stream,
   });
+  await untilBooted(daemon);
   input.write(
     `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "status", arguments: {} } })}\n`,
   );
@@ -590,7 +644,7 @@ void test("realm mcp still serves when up is refused and writes the refusal code
   assert.ok(diagnostics.text().startsWith("SCHEMA_INVALID: "), diagnostics.text());
 });
 
-void test("realm mcp writes an ensure failure code to stderr and exits 1 without serving (CLI-01)", async () => {
+void test("realm mcp serves, writes an ensure failure code to stderr once and exits 1 at stdin end with nothing on stdout (CLI-01)", async () => {
   const spawns: SpawnCall[] = [];
   const daemon = fakeDaemon({ probes: [false] });
   const output = new PassThrough();
@@ -598,21 +652,27 @@ void test("realm mcp writes an ensure failure code to stderr and exits 1 without
   output.on("data", (chunk) => {
     stdout += String(chunk);
   });
-  const result = await runCli(["mcp"], {
+  const input = new PassThrough();
+  const diagnostics = captureDiagnostics();
+  const pending = runCli(["mcp"], {
     env: ENV,
     cwd: WORKSPACE,
     timeoutMs: 50,
     daemonEntry: DAEMON_ENTRY,
     spawn: makeSpawn(spawns),
     connect: daemon.connect,
-    mcpInput: new PassThrough(),
+    mcpInput: input,
     mcpOutput: output,
-    diagnostics: captureDiagnostics().stream,
+    diagnostics: diagnostics.stream,
   });
+  await pollUntil(() => diagnostics.text() !== "", "the ensure failure written to diagnostics");
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.ok(result.stderr.startsWith("DAEMON_START_TIMEOUT: "), result.stderr);
-  assert.equal(stdout, "");
+  assert.equal(result.stderr, "", "the text was written when the boot settled");
+  assert.ok(diagnostics.text().startsWith("DAEMON_START_TIMEOUT: "), diagnostics.text());
+  assert.equal(stdout, "", "no frame was answered: none was sent");
   assert.equal(spawns.length, 1);
   assert.deepEqual(daemon.record.upRoots, []);
 });
@@ -766,21 +826,21 @@ void test("a failed realm acp up prints the code and the daemon log path on stde
 void test("a failed realm mcp up writes the code and the daemon log path to stderr and keeps serving (CLI-01)", async () => {
   const daemon = fakeDaemon({ probes: [true], up: () => Promise.reject(new RealmError("PODMAN_MISSING")) });
   const input = new PassThrough();
-  input.end();
   const diagnostics = captureDiagnostics();
-  const result = await untilShutdown(
-    runCli(["mcp", "--workspace", WORKSPACE], {
-      env: ENV,
-      cwd: WORKSPACE,
-      timeoutMs: 500,
-      daemonEntry: DAEMON_ENTRY,
-      spawn: makeSpawn([]),
-      connect: daemon.connect,
-      mcpInput: input,
-      mcpOutput: captureDiagnostics().stream,
-      diagnostics: diagnostics.stream,
-    }),
-  );
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
+    env: ENV,
+    cwd: WORKSPACE,
+    timeoutMs: 500,
+    daemonEntry: DAEMON_ENTRY,
+    spawn: makeSpawn([]),
+    connect: daemon.connect,
+    mcpInput: input,
+    mcpOutput: captureDiagnostics().stream,
+    diagnostics: diagnostics.stream,
+  });
+  await untilBooted(daemon);
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(result.exitCode, 0);
   assert.ok(diagnostics.text().startsWith("PODMAN_MISSING: "), diagnostics.text());
   assert.ok(diagnostics.text().includes(`${RUNTIME_STATE_DIR}/daemon.log`), diagnostics.text());
@@ -789,7 +849,7 @@ void test("a failed realm mcp up writes the code and the daemon log path to stde
 // The up reply an active realm returns, in the DaemonStatus shape the client validates.
 const ACTIVE_DAEMON_STATUS: DaemonStatus = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: "2026-10-22T00:00:00.000Z" },
   mode: "advisory",
   sessionId: "p0123456789ab",
 };
@@ -935,6 +995,60 @@ void test("a runtime config the loader refuses names its catalogue code on the s
   assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
+const RETIRED_ANDA_URL_SENTENCE = "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json";
+const HOSTILE_ANDA_URL = "https://operator:hunter2@anda.example.com/";
+
+// A config that would load but for the retired key, whose value looks like a credential.
+function configWithAndaUrl(): unknown {
+  return {
+    image: `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`,
+    stateDir: "/var/lib/realm/state",
+    workspaceRoot: "/srv/workspace",
+    andaUrl: HOSTILE_ANDA_URL,
+  };
+}
+
+void test("D-28-02: status refuses a config that carries the retired andaUrl key, with the migration sentence on the next line and no value", async () => {
+  const daemon = fakeDaemon({ probes: [true] });
+  const result = await runCli(["status"], { env: ENV, connect: daemon.connect, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n/);
+  assert.equal(result.stderr.split("\n").slice(1).join("\n"), `realm status: config.json: ${RETIRED_ANDA_URL_SENTENCE}\n`);
+  assert.doesNotMatch(result.stderr, /hunter2|operator|anda\.example\.com/);
+  assert.equal(daemon.record.connects, 0);
+});
+
+void test("D-28-02: doctor with the retired andaUrl key stays diagnostic and prints the migration sentence after its config text", async () => {
+  const result = await runCli(["doctor"], { env: ENV, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 0);
+  const checks: unknown = JSON.parse(result.stdout);
+  assert.ok(Array.isArray(checks));
+  assert.ok(result.stderr.startsWith("realm doctor: config is absent; ran "), result.stderr);
+  assert.match(result.stderr, /\(SCHEMA_INVALID\)\nrealm doctor: config\.json: andaUrl was removed in the 0\.4 release line, with the Anda bridge: delete it from config\.json\n$/);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /hunter2|operator|anda\.example\.com/);
+});
+
+void test("D-28-02: doctor --fix with the retired andaUrl key keeps its refusal text and adds the migration sentence", async () => {
+  const result = await runCli(["doctor", "--fix"], { env: ENV, readConfig: configWithAndaUrl });
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.stdout, "SCHEMA_INVALID\n");
+  assert.match(result.stderr, /realm doctor --fix: config must be present and valid; run realm init\n/);
+  assert.ok(result.stderr.endsWith(`realm doctor: config.json: ${RETIRED_ANDA_URL_SENTENCE}\n`), result.stderr);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /hunter2|operator|anda\.example\.com/);
+});
+
+void test("D-28-02: a config that cannot be read adds no migration line to the refusal", async () => {
+  const result = await runCli(["status"], {
+    env: ENV,
+    readConfig: () => {
+      throw new RealmError("SCHEMA_INVALID");
+    },
+  });
+  assert.equal(result.exitCode, 2);
+  assert.match(result.stderr, /^realm status: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
+});
+
 void test("realm doctor with no config returns the init check and does not dial a daemon", async () => {
   const daemon = fakeDaemon({ probes: [true] });
   const result = await runCli(["doctor"], {
@@ -961,8 +1075,7 @@ void test("the default daemon spawn targets daemon/main.js beside the compiled C
     const spawns: SpawnCall[] = [];
     const daemon = fakeDaemon({ probes: [false, true] });
     const input = new PassThrough();
-    input.end();
-    const result = await runCli(argv, {
+    const pending = runCli(argv, {
       env: ENV,
       cwd: WORKSPACE,
       spawn: makeSpawn(spawns),
@@ -974,6 +1087,11 @@ void test("the default daemon spawn targets daemon/main.js beside the compiled C
       mcpOutput: new PassThrough(),
       diagnostics: captureDiagnostics().stream,
     });
+    if (argv[0] === "mcp") {
+      await untilBooted(daemon);
+    }
+    input.end();
+    const result = await pending;
     assert.equal(result.exitCode, 0);
     assert.equal(spawns.length, 1);
     assert.deepEqual(spawns[0]?.args, [join(ROOT, "dist", "src", "daemon", "main.js")]);
@@ -1139,18 +1257,18 @@ void test("realm mcp writes the up notice to diagnostics once, and nothing when 
       up: () => Promise.resolve(notice === undefined ? STATUS : { ...STATUS, notice }),
     });
     const input = new PassThrough();
-    input.end();
     const diagnostics = captureDiagnostics();
-    const result = await untilShutdown(
-      runCli(["mcp", "--workspace", WORKSPACE], {
-        env: ENV,
-        spawn: makeSpawn([]),
-        connect: daemon.connect,
-        mcpInput: input,
-        mcpOutput: new PassThrough(),
-        diagnostics: diagnostics.stream,
-      }),
-    );
+    const pending = runCli(["mcp", "--workspace", WORKSPACE], {
+      env: ENV,
+      spawn: makeSpawn([]),
+      connect: daemon.connect,
+      mcpInput: input,
+      mcpOutput: new PassThrough(),
+      diagnostics: diagnostics.stream,
+    });
+    await untilBooted(daemon);
+    input.end();
+    const result = await untilShutdown(pending);
     assert.equal(result.exitCode, 0);
     assert.equal(diagnostics.text(), notice === undefined ? "" : `${STARTUP_NOTICE}\n`);
   }
@@ -1196,6 +1314,23 @@ void test("realm status prints the daemon's notice inside the JSON result with n
   assert.equal(result.exitCode, 0);
   const printed = JSON.parse(result.stdout) as Record<string, unknown>;
   assert.equal(printed["notice"], STARTUP_NOTICE);
+});
+
+void test("realm status prints a daemon reply that has no display.degraded key, and one from a 0.3 daemon that still carries it", async () => {
+  for (const display of [
+    ACTIVE_DAEMON_STATUS.display,
+    { ...ACTIVE_DAEMON_STATUS.display, degraded: false },
+  ]) {
+    const send: SendControlRequest = (_socketPath, request) => {
+      const reply: ControlReply = { id: request.id, result: { ...ACTIVE_DAEMON_STATUS, display } };
+      return Promise.resolve(reply);
+    };
+    const result = await runCli(["status"], { env: ENV, timeoutMs: 500, send, runCommand: okVersion, connectSocket: refuseConnect });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stderr, "");
+    const printed = JSON.parse(result.stdout) as { display: Record<string, unknown> };
+    assert.equal(printed.display["label"], "realm active");
+  }
 });
 
 function doctorFixFixture(t: TestContext): {
@@ -1550,12 +1685,18 @@ interface CheckpointFixture {
 
 function checkpointStatus(answer: CheckpointDaemonAnswer): Promise<DaemonStatus> {
   if (answer === "unreachable") {
-    return Promise.reject(new RealmError("REALM_NOT_ACTIVE"));
+    return Promise.reject(new DaemonAbsentError());
   }
   return Promise.resolve<DaemonStatus>({
     ...ACTIVE_DAEMON_STATUS,
     snapshot: { state: "active", reason: "realm checkpoint test", lastTransitionAt: ACTIVE_DAEMON_STATUS.snapshot.lastTransitionAt },
   });
+}
+
+function policyOf(roots: readonly string[]): Policy {
+  const result = validate("policy", { workspaceRoots: roots });
+  assert.ok(result.ok, "the policy fixture must validate");
+  return result.value;
 }
 
 function checkpointFixture(t: TestContext): CheckpointFixture {
@@ -1577,6 +1718,11 @@ function checkpointFixture(t: TestContext): CheckpointFixture {
       stateDir,
       workspaceRoot: workspace,
     }),
+    // A project stopped with realm down is pinned under the policy roots, which here are the workspace's parent.
+    readPolicy: () => policyOf([dirname(workspace)]),
+    // No sandbox container, and no container carrying its label: the second half of the stopped proof.
+    inspectContainer: () => Promise.resolve(null),
+    listContainersByLabel: () => Promise.resolve([]),
     connect: () => {
       daemon.connects += 1;
       return {
@@ -1591,13 +1737,13 @@ function checkpointFixture(t: TestContext): CheckpointFixture {
   return { workspace, stateDir, sessionId: selectionOf(workspace).sessionId, daemon, deps };
 }
 
-// What up leaves for the workspace: the pin, then the registry entry that marks the session bound.
+// What up leaves for a bound project: the registry entry, which marks the session bound. The pin that up writes for the
+// daemon is not read by the checkpoint command.
 function bindWorkspace(fx: CheckpointFixture): void {
-  writeWorkspacePin(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
   writeWorkspaceEntry(fx.stateDir, bindRoot(fx.workspace), fx.sessionId);
 }
 
-// What down leaves: the registry entry is removed and the pin stays, so the session is unbound.
+// What down leaves: the registry entry is removed, so the project is stopped and the command pins it in memory.
 function unbindWorkspace(fx: CheckpointFixture): void {
   removeWorkspaceEntry(fx.stateDir, fx.sessionId);
 }
@@ -1647,7 +1793,7 @@ void test("RES-04 CLI: after down, restore puts back the exact bytes the snapsho
   assert.equal(restored.exitCode, 0, restored.stderr);
   assert.deepEqual(treeBytes(fx.workspace), original);
   assert.equal(readFileSync(join(fx.workspace, "nested", "b.txt"), "utf8"), "beta\n");
-  assert.equal(fx.daemon.connects, 0);
+  assert.ok(fx.daemon.connects > 0, "the stopped proof asks the daemon first, then Podman");
 });
 
 void test("RES-04 CLI: a malformed id, a relative workspace, a missing flag and an unknown flag exit 2 and change nothing", async (t) => {
@@ -1684,18 +1830,21 @@ void test("RES-04 CLI: a runtime config the loader refuses makes checkpoint exit
   assert.match(result.stderr, /^realm checkpoint: cannot resolve a state directory .*\(SCHEMA_INVALID\)\n$/);
 });
 
-void test("RES-04 CLI: a workspace with no session is refused with REALM_UNBOUND and nothing is written", async (t) => {
+void test("RES-04 CLI: an unregistered workspace outside the policy roots is refused with POLICY_DENIED and nothing is written", async (t) => {
   const fx = checkpointFixture(t);
+  const elsewhere = join(dirname(fx.workspace), "elsewhere");
+  mkdirSync(elsewhere);
+  const denied = { ...fx.deps, readPolicy: () => policyOf([elsewhere]) };
   const before = treeBytes(fx.workspace);
   for (const command of ["create", "restore"] as const) {
-    const result = await runCli(checkpointArgv(command, fx, "before-edit"), fx.deps);
+    const result = await runCli(checkpointArgv(command, fx, "before-edit"), denied);
     assert.equal(result.exitCode, 1, command);
-    assert.equal(result.stdout, "REALM_UNBOUND\n");
-    assert.ok(result.stderr.includes(ERROR_CATALOGUE.REALM_UNBOUND.reason));
+    assert.equal(result.stdout, "POLICY_DENIED\n");
+    assert.ok(result.stderr.includes(ERROR_CATALOGUE.POLICY_DENIED.reason));
   }
   assert.deepEqual(treeBytes(fx.workspace), before);
   assert.equal(existsSync(join(fx.stateDir, "checkpoints")), false);
-  assert.equal(fx.daemon.connects, 0);
+  assert.equal(existsSync(join(fx.stateDir, "workspaces")), false, "no registry entry may be written");
 });
 
 void test("RES-04 CLI: a daemon that cannot answer for a bound session refuses create and restore with REALM_NOT_ACTIVE and writes nothing", async (t) => {
@@ -1773,17 +1922,23 @@ void test("CLI-01: a non-RealmError thrown by the dial after attach is one catal
     }
     return daemon.connect(socketPath, selection);
   };
-  const result = await runCli(["mcp", "--workspace", WORKSPACE], {
+  const input = new PassThrough();
+  const pending = runCli(["mcp", "--workspace", WORKSPACE], {
     env: ENV,
     cwd: WORKSPACE,
     timeoutMs: 500,
     daemonEntry: DAEMON_ENTRY,
     connect,
+    mcpInput: input,
+    mcpOutput: new PassThrough(),
     diagnostics: diagnostics.stream,
   });
+  await pollUntil(() => diagnostics.text() !== "", "the dial failure written to diagnostics");
+  input.end();
+  const result = await untilShutdown(pending);
   assert.equal(dials, 2);
   assert.equal(result.exitCode, 1);
   assert.equal(result.stdout, "");
-  assert.equal(result.stderr, `SCHEMA_INVALID: ${ERROR_CATALOGUE.SCHEMA_INVALID.reason}\n`);
-  assert.equal(diagnostics.text(), "");
+  assert.equal(result.stderr, "", "the line was written when the boot settled");
+  assert.equal(diagnostics.text(), `SCHEMA_INVALID: ${ERROR_CATALOGUE.SCHEMA_INVALID.reason}\n`);
 });

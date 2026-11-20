@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,9 @@ import {
   META_PROTOCOL_VERSION,
   UNSUPPORTED_PROTOCOL_VERSION,
 } from "../../src/mcp/protocol.js";
+import type { ToolOutcome } from "../../src/tools/dispatch.js";
 import { makeHarness, WORKLOAD } from "../support/fake-tools.js";
+import { annotationViolations } from "../support/mcp-annotation-pins.js";
 import { startRealmDaemon } from "../support/realm-daemon-fixture.js";
 import { sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { boundedWait } from "../support/timing.js";
@@ -109,6 +111,55 @@ void test("TOOL-05: a malformed line gets a parse error reply on stdout, and its
   assert.equal(parseLine(mixed.stdoutLines[0] as string)["id"], null);
   assert.equal(parseLine(mixed.stdoutLines[1] as string)["id"], 2);
   assert.match(mixed.stderr, /mcp: /, "the malformed fragment is still diagnosed on stderr");
+});
+
+// Notifications and unusable ids (Phase 7 re-verification item 7). The MCP twin of the ACP cases in test/acp/agent.test.ts
+// ("a _realm/tool notification without an id ..." and "a request whose id is neither a string, number, nor null ...").
+// A line is routed by parseRequest and handleLine in src/mcp/server.ts.
+
+// The harness dispatcher with every call recorded, so a test can prove which messages reached it.
+function spiedDispatcher(t: Parameters<typeof makeHarness>[0]): { readonly dispatcher: McpDispatcher; readonly seen: unknown[] } {
+  const h = makeHarness(t);
+  const seen: unknown[] = [];
+  const inner = h.dispatcher.call.bind(h.dispatcher);
+  const dispatcher: McpDispatcher = {
+    call: (raw: unknown): Promise<ToolOutcome> => {
+      seen.push(raw);
+      return inner(raw);
+    },
+  };
+  return { dispatcher, seen };
+}
+
+void test("TOOL-05: a JSON-RPC notification (no id) takes no reply and no diagnostic, and a tools/call notification is never dispatched", async (t) => {
+  // handleLine: parseRequest accepts a message with no id, then `request.id === undefined` returns before dispatchMethod.
+  const { dispatcher, seen } = spiedDispatcher(t);
+  const notification = (method: string, params: unknown): string => JSON.stringify({ jsonrpc: "2.0", method, params });
+  const driven = await drive(dispatcher, [
+    notification("notifications/initialized", {}),
+    notification("tools/call", { name: "write", arguments: { path: "notify.txt", content: "never" } }),
+    notification("no/such-method", {}),
+    request(7, "server/discover", {}),
+  ]);
+  assert.equal(driven.stdoutLines.length, 1, "only the request is answered; the three notifications take no reply line");
+  assert.equal(parseLine(driven.stdoutLines[0] as string)["id"], 7);
+  assert.equal(driven.stderr, "", "a notification is not an error, so nothing is diagnosed on stderr");
+  assert.equal(seen.length, 0, "the id-less tools/call notification never reaches the dispatcher");
+});
+
+void test("TOOL-05: a request whose id is neither a string, number, nor null is diagnosed on stderr only, takes no reply and is never dispatched", async (t) => {
+  // handleLine: parseRequest returns null for such an id, and because isRpcId(id) is false the Invalid Request reply branch is
+  // skipped; the line gets the fixed stderr diagnostic "mcp: rejected invalid request" and no stdout line. This is the
+  // behaviour of the code today and it differs from the ACP agent, which answers -32600 with a null id (test/acp/agent.test.ts),
+  // and from JSON-RPC 2.0 section 5, which asks for a null-id error reply to a request whose id cannot be read.
+  const { dispatcher, seen } = spiedDispatcher(t);
+  const status = { name: "status", arguments: {} };
+  const unusable = [true, { nested: 1 }, [1]].map((id) => JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: status }));
+  const driven = await drive(dispatcher, [...unusable, toolRequest(4, "status", {})]);
+  assert.equal(driven.stdoutLines.length, 1, "the three unusable-id requests take no reply; only the valid request is answered");
+  assert.equal(parseLine(driven.stdoutLines[0] as string)["id"], 4);
+  assert.equal(driven.stderr, "mcp: rejected invalid request\n".repeat(3), "each unusable-id request is diagnosed once, with fixed text");
+  assert.deepEqual(seen, [{ status: {} }], "only the valid request reached the dispatcher");
 });
 
 void test("TOOL-05: closing stdin shuts the server down without hanging", async (t) => {
@@ -291,6 +342,92 @@ void test("TOOL-05: the tool descriptors the server lists are the ones the modul
   assert.deepEqual(resultRecord(driven.stdoutLines[0])["tools"], JSON.parse(JSON.stringify(MCP_TOOL_DESCRIPTORS)));
 });
 
+// ---- Tool annotations in both eras (MCPA-01, MCPA-02) ----------------------------------------------------------------------
+// The hints are for a host that chooses to use them; nothing in src reads them (D-29-01). These tests read the real wire.
+
+// The reply lines of a legacy session: the handshake, then tools/list with no _meta.
+async function legacyTools(t: TestContext, version: string): Promise<{ list: Record<string, unknown>; tools: unknown }> {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [
+    request(1, "initialize", { protocolVersion: version, capabilities: {}, clientInfo: CLIENT }),
+    request(2, "tools/list", {}),
+  ]);
+  assert.equal(resultRecord(driven.stdoutLines[0])["protocolVersion"], version);
+  const list = resultRecord(driven.stdoutLines[1]);
+  return { list, tools: list["tools"] };
+}
+
+async function modernTools(t: TestContext): Promise<{ list: Record<string, unknown>; tools: unknown }> {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [request(1, "tools/list", { _meta: MODERN_META })]);
+  const list = resultRecord(driven.stdoutLines[0]);
+  return { list, tools: list["tools"] };
+}
+
+void test("MCPA-01: a legacy tools/list carries the pinned title and annotations for every tool", async (t) => {
+  const { list, tools } = await legacyTools(t, "2025-06-18");
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.deepEqual(Object.keys(list), ["tools"], "the legacy result is still just the tools");
+});
+
+void test("MCPA-01: a legacy 2025-11-25 session carries the same objects", async (t) => {
+  const { list, tools } = await legacyTools(t, "2025-11-25");
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.deepEqual(Object.keys(list), ["tools"]);
+});
+
+void test("MCPA-01: a modern tools/list carries the pinned title and annotations for every tool", async (t) => {
+  const { list, tools } = await modernTools(t);
+  assert.deepEqual(annotationViolations(tools), []);
+  assert.equal(list["resultType"], "complete");
+  assert.equal(typeof list["ttlMs"], "number");
+  assert.equal(list["cacheScope"], "public");
+});
+
+void test("MCPA-01: both eras list identical tool objects", async (t) => {
+  const legacy = await legacyTools(t, "2025-11-25");
+  const older = await legacyTools(t, "2025-06-18");
+  const modern = await modernTools(t);
+  assert.deepEqual(legacy.tools, modern.tools);
+  assert.deepEqual(older.tools, modern.tools);
+});
+
+void test("MCPA-02: a mutated wire descriptor is reported", async (t) => {
+  const { tools } = await modernTools(t);
+  assert.ok(Array.isArray(tools), "the result lists tools");
+  const mutated = (tools as Record<string, unknown>[]).map((tool) => {
+    if (tool["name"] !== "write") {
+      return tool;
+    }
+    return { ...tool, annotations: { ...(tool["annotations"] as Record<string, unknown>), readOnlyHint: true } };
+  });
+  const violations = annotationViolations(mutated);
+  assert.ok(
+    violations.some((message) => message.startsWith("write:")),
+    `a wire-level flip of write is reported: ${violations.join(" | ")}`,
+  );
+});
+
+void test("MCPA-01: a read-only hint relaxes nothing", async (t) => {
+  const h = makeHarness(t);
+  const driven = await drive(h.dispatcher, [
+    toolRequest(1, "read", { path: "../outside", maxBytes: 10 }),
+    toolRequest(2, "list", { path: "../outside", depth: 1 }),
+    toolRequest(3, "exec", { shell: true, script: "id" }),
+  ]);
+  assert.equal(driven.stdoutLines.length, 3);
+  const expected = ["SCHEMA_INVALID", "SCHEMA_INVALID", "SHELL_NOT_ALLOWED"] as const;
+  expected.forEach((code, index) => {
+    const result = resultRecord(driven.stdoutLines[index]);
+    assert.equal(result["isError"], true, `call ${String(index + 1)} is a tool failure`);
+    const outcome = structuredOf(driven.stdoutLines[index]);
+    assert.equal(outcome["outcome"], "refused");
+    assert.equal(outcome["code"], code);
+    assert.equal(outcome["retryable"], ERROR_CATALOGUE[code].retryable);
+  });
+  assert.equal(h.runs.length, 0, "the runner was never invoked");
+});
+
 void test("TOOL-05: each of the six tools routes to ToolDispatcher.call with the ToolCall map unchanged", async (t) => {
   const h = makeHarness(t);
   const seen: unknown[] = [];
@@ -466,7 +603,8 @@ void test("MCP on two projects: each server's write lands in its own project and
   const b = join(root, "b");
   mkdirSync(a, { recursive: true });
   mkdirSync(b, { recursive: true });
-  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory" });
+  // The servers here dispatch through tokenless clients and the test is not about tokens, so the daemon runs with capabilityTokens off.
+  const fixture = await startRealmDaemon({ stateDir: join(base, "state"), workspace: root, mode: "advisory", capabilityTokens: "off" });
   t.after(async () => {
     for (const project of [a, b]) {
       await fixture.release(project).catch(() => undefined);
@@ -476,8 +614,18 @@ void test("MCP on two projects: each server's write lands in its own project and
   await fixture.up(a);
   await fixture.up(b);
 
-  await drive(fixture.connectFor(a), [toolRequest(1, "write", { path: "a-doc.txt", content: "from a" })]);
-  await drive(fixture.connectFor(b), [toolRequest(1, "write", { path: "b-doc.txt", content: "from b" })]);
+  const driveA = await drive(fixture.connectFor(a), [toolRequest(1, "write", { path: "a-doc.txt", content: "from a" })]);
+  assert.equal(driveA.stdoutLines.length, 1, "A's write gets one reply");
+  const replyA = resultRecord(driveA.stdoutLines[0]);
+  assert.equal(parseLine(driveA.stdoutLines[0] as string)["id"], 1);
+  assert.equal(replyA["isError"], false, "A's write is answered without an error");
+  assert.equal(structuredOf(driveA.stdoutLines[0])["outcome"], "done", "A's write succeeds");
+  const driveB = await drive(fixture.connectFor(b), [toolRequest(1, "write", { path: "b-doc.txt", content: "from b" })]);
+  assert.equal(driveB.stdoutLines.length, 1, "B's write gets one reply");
+  const replyB = resultRecord(driveB.stdoutLines[0]);
+  assert.equal(parseLine(driveB.stdoutLines[0] as string)["id"], 1);
+  assert.equal(replyB["isError"], false, "B's write is answered without an error");
+  assert.equal(structuredOf(driveB.stdoutLines[0])["outcome"], "done", "B's write succeeds");
 
   assert.equal(readFileSync(join(a, "a-doc.txt"), "utf8"), "from a");
   assert.equal(readFileSync(join(b, "b-doc.txt"), "utf8"), "from b");

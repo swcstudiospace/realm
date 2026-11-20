@@ -21,7 +21,7 @@ import {
 import { addCleanupNote } from "./compute-driver-state.js";
 import { awaitRuntimeListener } from "./channel.js";
 import { installSeccompProfile } from "./seccomp-delivery.js";
-import { DriverLifecycle, type AdoptionRoots, type LifecycleLibpod } from "./lifecycle.js";
+import { DriverLifecycle, HardeningRefusal, type AdoptionRoots, type LifecycleLibpod } from "./lifecycle.js";
 import { GATEWAY_ID_PATTERN } from "../gateway-config.js";
 import { assertSha256OfFile, spawnSupervisor } from "./supervisor.js";
 import { rebuildRegistry } from "./registry-rebuild.js";
@@ -272,7 +272,7 @@ export async function startDriver(config: DriverProcessConfig, seams: DriverStar
     for (const removal of adoption.removed) {
       logAdoptionRemoved(config.driver.refusalLog, removal.containerId, removal.cause);
     }
-    await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, config: config.driver, runtime }, adoption.adopted);
+    await (seams.rebuild ?? rebuildRegistry)({ driver, lifecycle, roots, config: config.driver, runtime }, adoption.adopted);
     for (const kept of adoption.adopted) {
       logAdoptionKept(config.driver.refusalLog, kept.containerId);
     }
@@ -319,7 +319,10 @@ if (isDirectEntry(import.meta.url, process.argv[1])) {
   main().catch((error: unknown) => {
     // Only the catalogue code is printed. A raw error message can carry a path or a value.
     const code = error instanceof RealmError ? error.code : "SCHEMA_INVALID";
-    process.stderr.write(`realm compute driver failed to start: ${code}\n`);
+    // The cause code and the failed hardening property names are catalogue names, not values, so they are safe to print beside it.
+    const cause = error instanceof RealmError && error.causeCode !== undefined ? ` cause=${error.causeCode}` : "";
+    const failed = error instanceof HardeningRefusal ? ` failed=${error.failed.join(",")}` : "";
+    process.stderr.write(`realm compute driver failed to start: ${code}${cause}${failed}\n`);
     process.exitCode = 1;
   });
 }

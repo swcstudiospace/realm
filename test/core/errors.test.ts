@@ -25,8 +25,6 @@ const EXPECTED_CODES: readonly ErrorCode[] = [
   "AGENTOS_CRASH_LOOP",
   "AGENTOS_NOT_CONFIGURED",
   "AGENTOS_STOP_FAILED",
-  "ANDA_UNREACHABLE",
-  "ANDA_VERSION_MISMATCH",
   "POLICY_DENIED",
   "PATH_ESCAPE",
   "CREDENTIAL_PATH_DENIED",
@@ -53,7 +51,6 @@ const RETRYABLE_TRUE: readonly ErrorCode[] = [
   "OPENSHELL_START_FAILED",
   "AGENTOS_CRASH_LOOP",
   "AGENTOS_STOP_FAILED",
-  "ANDA_UNREACHABLE",
   "LOCK_CONFLICT",
   "WRITE_NOT_ATOMIC",
   "AUDIT_WRITE_FAILED",
@@ -70,7 +67,6 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
   "PODMAN_UNSUPPORTED_VERSION",
   "OPENSHELL_LABEL_AMBIGUOUS",
   "AGENTOS_NOT_CONFIGURED",
-  "ANDA_VERSION_MISMATCH",
   "POLICY_DENIED",
   "PATH_ESCAPE",
   "CREDENTIAL_PATH_DENIED",
@@ -86,12 +82,20 @@ const RETRYABLE_FALSE: readonly ErrorCode[] = [
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
 // The size of the catalogue. Adding a code is a one-line edit here plus one entry in EXPECTED_CODES.
-const CATALOGUE_SIZE = 31;
+const CATALOGUE_SIZE = 29;
 
 void test("the catalogue holds exactly the expected codes: the 20 D-10 codes, PODMAN_UNSUPPORTED_VERSION, AUDIT_WRITE_FAILED, the three 2026-10-22 closure codes, MCP_INPUT_FAILED, CLEANUP_FAILED, DAEMON_START_TIMEOUT, SANDBOX_NAME_IN_USE, AUDIT_OUTCOME_UNKNOWN, and OPENSHELL_GATEWAY_LOST", () => {
   assert.equal(EXPECTED_CODES.length, CATALOGUE_SIZE);
   assert.equal(ERROR_CODES.length, CATALOGUE_SIZE);
   assert.deepEqual(sorted(ERROR_CODES), sorted(EXPECTED_CODES));
+});
+
+void test("the catalogue carries no code of the removed bridge", () => {
+  const names: readonly string[] = ERROR_CODES;
+  const removed = ["unreachable", "version_mismatch"].map((suffix) => ["anda", suffix].join("_").toUpperCase());
+  for (const code of removed) {
+    assert.equal(names.includes(code), false, `${code} must not be in the catalogue`);
+  }
 });
 
 void test("the catalogue record has exactly the expected codes and no others", () => {
@@ -155,6 +159,14 @@ void test("replacing or adding a catalogue key throws a TypeError", () => {
     record.NOT_A_CODE = { reason: "added", retryable: false };
   }, TypeError);
   assert.equal(Object.keys(ERROR_CATALOGUE).length, CATALOGUE_SIZE);
+});
+
+void test("D34-1: the POLICY_DENIED reason names capability tokens and realm doctor, is carried as the message, and is not retryable", () => {
+  const err = makeRealmError("POLICY_DENIED");
+  assert.ok(err.reason.includes("capability token"), err.reason);
+  assert.ok(err.reason.includes("realm doctor"), err.reason);
+  assert.equal(err.message, err.reason);
+  assert.equal(err.retryable, false);
 });
 
 void test("AUDIT_WRITE_FAILED has the approved reason and is retryable, because the tool call did not run", () => {

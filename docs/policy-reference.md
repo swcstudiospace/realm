@@ -17,7 +17,7 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 
 - The policy path is explicit and caller-supplied. A missing file (`ENOENT`)
   yields validated defaults via `validate("policy", {})` — `fail-closed` mode, no
-  roots, shell disabled. Any other read failure throws `POLICY_DENIED`
+  roots, shell disabled, capability tokens enforce (D34-1). Any other read failure throws `POLICY_DENIED`
   (`readPolicyText`, `src/core/policy.ts`).
 - Every `workspaceRoots` entry must be absolute; otherwise
   `SchemaInvalidError("/workspaceRoots/<index> must be an absolute path")`
@@ -45,15 +45,15 @@ Loading rules (`loadPolicyFile`, `src/core/policy.ts`):
 - **Effect:** `fail-closed` is the default; `advisory` is the explicit opt-in
   (select it by writing `"mode": "advisory"` in the policy file; it is never
   applied without that value). The value changes the mutation decision for
-  non-`active` states. `active` allows a mutation in both modes, whether or
-  not an Anda bridge is configured (`decideMutation`, `src/core/policy.ts`):
+  non-`active` states. `active` allows a mutation in both modes
+  (`decideMutation`, `src/core/policy.ts`):
   - `fail-closed` + non-`active` → `deny` with code from
     `denyCodeFor` (`src/core/policy.ts`): `unbound` →
-    `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/`degraded`/
+    `REALM_UNBOUND`, `stopping` → `REALM_STOPPING`, `connecting`/
     `error` → `REALM_NOT_ACTIVE`.
   - `advisory` + non-`active` → `allow-with-warning` with message
     `` `realm is ${state}; the write proceeds under advisory policy` ``.
-  - `active` → `allow`, in both modes, whether or not an Anda bridge is configured. A configured bridge that goes down moves the session to `degraded` (reason `ANDA_UNREACHABLE`), which is handled by the rows above.
+  - `active` → `allow`, in both modes.
 - **Enforced by:**
   - `decideMutation` (`src/core/policy.ts`).
   - `gateMutation` thin wrapper mapping allow/allow-with-warning/deny to
@@ -79,7 +79,7 @@ Supersession. The product spec (`docs/specs/realm-spec.xml`, read-only) still ca
 
 ### Upgrading
 
-A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, degraded, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes. `realm doctor` names the mode and its source in its `policy-file` check, warns for an explicit `advisory`, and exits 0 whatever its checks report.
+A policy that has no `mode` key, or no policy file at all, used to load as `advisory`. It now loads as `fail-closed`. While the realm is not active (not yet started, connecting, stopping or in error), host writes that used to proceed with a warning are refused: the Omp guard blocks `write` and `edit` with `REALM_NOT_ACTIVE` (or `REALM_UNBOUND` or `REALM_STOPPING` for those states), and `write` through the tool dispatcher is denied the same way. Start the realm (`realm up`, or `/realm-retry` in Omp) to proceed. To keep the earlier behaviour, add `"mode": "advisory"` to `<stateDir>/policy.json` and restart the daemon; to take the new default, change nothing. `exec` is unchanged: it was already refused outside `active` in both modes. `realm doctor` names the mode and its source in its `policy-file` check, warns for an explicit `advisory`, and exits 0 whatever its checks report.
 
 ## `workspaceRoots`
 
@@ -220,8 +220,8 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
 - **Effect:** one deadline covering the whole startup path. In
   `LifecycleController.create` the deadline is armed before the pinned-root
   check (`verifyPinnedAt`)
-  and covers that check, record loads/writes, port create and start, and the bridge
-  handshake; each synchronous step is followed by a deadline check and each
+  and covers that check, record loads/writes, and port create and start;
+  each synchronous step is followed by a deadline check and each
   port call is raced against the time left
   (`LifecycleController.create`, `src/lifecycle/controller.ts`). Expiry
   throws/maps to `STARTUP_BUDGET_EXCEEDED` (create: `checkDeadline`,
@@ -231,9 +231,9 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   the budget destroys the container its port call later produces
   (`LifecycleController.create` and `failCreate`, `src/lifecycle/controller.ts`). The Omp plugin
   does not read this key: the policy is daemon-owned, so the plugin arms its
-  own detached attach timer from `STARTUP_BUDGET_MS` (`src/omp/plugin.ts`), a
-  constant equal to this key's schema default (`200000`), through `armTimer` in
-  the `attach` function of `registerRealmPlugin`. A project that sets another
+  own detached attach timer from `BOOT_BOUNDS.startupBudgetMs` (`src/host/boot.ts`), a
+  constant equal to this key's schema default (`200000`, held equal by `test/host/boot.test.ts`), through `armTimer` in
+  the `attach` function of `createRealmPlugin` (`src/omp/plugin.ts`). A project that sets another
   `startupBudgetMs` therefore does not change the plugin's timer. Expiry paints the
   disconnected display with the existing `STARTUP_BUDGET_EXCEEDED` code while
   the session continues, and settle clears the timer (`disarmTimer`,
@@ -246,12 +246,13 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   `status`, `down`, `doctor` and `tool` keep their own limits. Because the
   key's maximum equals the `up` request's startup allowance, the `up` wait
   always outlasts any accepted budget. The plugin's own timer
-  (`STARTUP_BUDGET_MS`, 200000) equals the maximum and the default, and a
+  (`BOOT_BOUNDS.startupBudgetMs`, 200000) equals the maximum and the default, and a
   lower configured budget does not change it. The daemon's runtime guard in
   `src/daemon/daemon.ts` remains as defence in depth for a waiter whose
   remaining client wait is shorter than the budget.
-- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (30000 ms) is a separate
-  constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/bounds.ts`).
+- **Also see:** the single teardown bound `TEARDOWN_TIMEOUT_MS` (70000 ms) is a separate
+  constant, not this key (`TEARDOWN_TIMEOUT_MS`, `src/lifecycle/bounds.ts`). It is derived
+  from the stage bounds of one session end in `src/runtime/teardown-stages.ts`.
 
 ## `toolQueueMs`
 
@@ -270,6 +271,89 @@ A policy that has no `mode` key, or no policy file at all, used to load as `advi
   either case (`waitLeavingConnecting`, `src/tools/dispatch.ts`, timer at `setTimeout(finish,
   toolQueueMs)`).
 
+## `capabilityTokens`
+
+- **Type:** `object` with the members `mode`, `ttlSeconds` and `profiles`, and no
+  other key (the `capabilityTokens` property of `src/core/policy.schema.json`;
+  `CapabilityTokenPolicy` and the optional `Policy.capabilityTokens` in
+  `src/contract/validate.ts`). A loaded policy always has it, because the schema
+  fills the default; the member is optional in the type only so that hand-built
+  `Policy` literals keep compiling, and `capabilityPolicyOf`
+  (`src/capability/admit.ts`) is the one reader that applies the default for
+  them, from `DEFAULT_CAPABILITY_POLICY` (same file), a constant that a test
+  pins equal to the schema default so the two cannot drift.
+  - `mode`: `"off" | "enforce"`.
+  - `ttlSeconds`: `integer`, minimum 60, maximum 86400.
+  - `profiles`: an object whose keys are host ids and whose values are arrays of
+    unique capability names. The host ids are exactly the 22 entries of
+    `HOST_IDS` (`src/host/types.ts`). The capability names are exactly the six of
+    the `mcp-config` ceiling (`integrationCeiling`, `src/host/capabilities.ts`):
+    `daemon.attach`, `fs.read`, `fs.write`, `fs.list`, `exec.argv` and
+    `exec.shell`. An unknown host id, an unknown capability (`net.egress` and
+    `credential.read` included), a duplicate or a non-array value fails with
+    `SCHEMA_INVALID`, and the failure names the pointer, never the value. A test
+    pins both lists to the host layer, so the schema, the token and the host
+    layer cannot drift.
+- **Default:** `{ "mode": "enforce", "ttlSeconds": 3600, "profiles": {} }` (the
+  `capabilityTokens` property of `src/core/policy.schema.json`; decision D34-1,
+  2026-11-18). A policy file with no `capabilityTokens` key, a missing policy
+  file, an object with no `mode` and an object with only some members (only
+  `ttlSeconds`, or only `profiles`) all load with the defaults of the members
+  they leave out, so they all enforce. `"capabilityTokens": { "mode": "off" }`
+  is the documented opt-out; `realm doctor` warns for it.
+- **Effect:** `enforce`, the default, turns capability tokens on for every host
+  and every session of the daemon; the policy is one document per daemon, so
+  there is no per-workspace opt-in. The daemon creates the keyring when it
+  starts. A client that holds no valid token (a `realm mcp` or `realm acp` binary
+  from before capability tokens, or one launched without `--host ID`) is refused
+  `POLICY_DENIED`. `off` is the 0.4.x behaviour: no token is minted, none is
+  checked, and a caller that reaches the control socket is admitted without one.
+  A token names a session, a host and the capabilities that host's
+  profile grants, and it lives `ttlSeconds` seconds. A host with no entry in
+  `profiles` gets all six capabilities. A host whose entry is the empty array
+  gets a token that can only call `status`. The profile function is
+  `profileFor` (`src/capability/admit.ts`), and the mapping from a tool call to
+  the capability it needs is `requiredCapability` (same file):
+
+  | Tool call | Capability needed |
+  | --- | --- |
+  | `read` | `fs.read` |
+  | `list` | `fs.list` |
+  | `write` | `fs.write` |
+  | `exec`, argv form | `exec.argv` |
+  | `exec`, shell form (`shell` is `true`) | `exec.shell` |
+  | `retry` | `daemon.attach` |
+  | `status` | none (a valid token for the session is enough) |
+
+  A token never widens what the other policy keys grant. A call is admitted only
+  if the token grants its capability and then the dispatcher's own gates still
+  pass: a token that carries `exec.shell` under `shellEnabled: false` still gets
+  `SHELL_NOT_ALLOWED` for a shell-form `exec`, and a token without `fs.write` is
+  refused `write` under a policy that allows it.
+- **Enforced by:**
+  - The schema and `validate` (`src/contract/validate.ts`) for the shape, the
+    bounds and the defaults.
+  - Token minting and verification (`mintToken` and `verifyToken`,
+    `src/capability/token.ts`), key storage and rotation (`src/capability/keyring.ts`),
+    and the mapping and profile functions (`src/capability/admit.ts`).
+  - The daemon capability gate (`src/capability/gate.ts`, called from the
+    daemon's `tool` and `capability-attach` cases) and the client
+    (`src/daemon/client.ts`). With `enforce`, the daemon mints a per-session,
+    per-host token at `capability-attach`, the host process keeps it in memory,
+    and the daemon verifies it on every `tool` request before the dispatcher
+    runs. A missing, expired, malformed, forged or mismatched token, or one
+    that lacks the capability the call needs, is refused `POLICY_DENIED` and
+    never reaches the dispatcher.
+- **What it does not do:** it gives no defence against a process of the same
+  user that can read the token or the key file: any such process can reach the
+  control socket, attach as any host, or mint a token from the key. It is not
+  an authentication of the host: the daemon cannot tell the real host from a
+  process that says it is that host, so the token is a signed label that is
+  verified on every call. It does not identify a model or a prompt, and it
+  does not protect the sandbox, which never receives a token. It adds no
+  error code: every token refusal is `POLICY_DENIED`. See Q10 of
+  `docs/integration/mcp.md`.
+
 ## What is not a policy key
 
 These look budget-like but are fixed constants, not policy keys (there is no
@@ -279,13 +363,15 @@ a policy key (D-101)" (`TOOL_CALL_TIMEOUT_MS`, `src/tools/dispatch.ts`).
 
 | Name | Value / site | Scope (not per-project policy) |
 | --- | --- | --- |
-| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. |
-| `TEARDOWN_TIMEOUT_MS` | `30_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
+| `TOOL_CALL_TIMEOUT_MS` | `30_000` (`src/tools/dispatch.ts`) | Bounds one awaited tool call: the `exec` sandbox run (`ToolDispatcher.#exec`) and the `retry` create (`ToolDispatcher.#retry`). Expiry maps to `TOOL_TIMEOUT`. For an `exec`, the process tree is ended inside the sandbox by the watchdog of `src/runtime/exec-watchdog.ts` shortly after the reply (dead about 3 s after it in the Phase 39 live run); the client kill alone does not end it. |
+| `WATCHDOG_MARGIN_MS` | `500` (`src/runtime/exec-watchdog.ts`) | Added to the 28 s runner deadline to give the in-sandbox exec watchdog its own deadline (28.5 s), so the watchdog never ends a call before the client's bound does. Not a policy key. |
+| `TEARDOWN_TIMEOUT_MS` | `70_000` (`src/lifecycle/bounds.ts`) | Single bound for `stop`/`destroy`, derived as the worst case of the stage bounds of one session end (`SESSION_END_WORST_CASE_MS`, `src/runtime/teardown-stages.ts`, 67 000 ms: the create wait 15 000, the AgentOS stop 15 000, the container step 12 000, the container confirmation wait 10 000 (`CONTAINER_END_CONFIRM_MS`, Phase 46) and the sandbox delete 15 000) plus a 3 000 ms margin; expiry returns `REALM_STOPPING` (header comment and `teardownBound` of `LifecycleController`, `src/lifecycle/controller.ts`). |
 | `OPENSHELL_CREATE_DEADLINE_MS` | `60_000` (`src/runtime/session-execution.ts`) | Bound for the whole OpenShell create including the label poll (`OPENSHELL_CREATE_DEADLINE_MS`, `src/runtime/session-execution.ts`). |
-| `CONTAINER_STOP_GRACE_MS` | `10_000` (`src/runtime/session-execution.ts`) | Libpod stop timeout grace period (`CONTAINER_STOP_GRACE_MS`, `src/runtime/session-execution.ts`). |
-| `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/session-execution.ts`) | Backstop on the AgentOS stop; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` and `stopDeadlineMs`, `src/runtime/session-execution.ts`). |
+| `CONTAINER_STOP_GRACE_MS` | `2_000` (`src/runtime/teardown-stages.ts`) | Libpod stop timeout grace period of the stop path (`CONTAINER_STOP_GRACE_MS`, `src/runtime/teardown-stages.ts`); the sandbox runtime ignores SIGTERM, so a longer grace is dead time. |
+| `AGENTOS_STOP_DEADLINE_MS` | `15_000` (`src/runtime/teardown-stages.ts`) | Backstop on the AgentOS stop, and on the wait for a create still in flight; a missed deadline is a failed stop and maps to `AGENTOS_STOP_FAILED` (`AGENTOS_STOP_DEADLINE_MS` in `src/runtime/teardown-stages.ts` and `stopDeadlineMs` in `src/runtime/session-execution.ts`). |
+| `SANDBOX_DELETE_DEADLINE_MS` | `15_000` (`src/runtime/teardown-stages.ts`) | Bound on the delete of one session's realm sandbox in `stop`/`destroy`, and on the startup reap's delete; a delete that misses it is a failed stop (`SANDBOX_DELETE_DEADLINE_MS`, `src/runtime/teardown-stages.ts`). |
 | `OPENSHELL_OUTPUT_LIMIT_BYTES` | `262144` (`src/runtime/openshell.ts`) | Per-stream capture cap for exec output (`BoundedOutput`, `src/runtime/session-execution.ts`). |
-| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts`) | Deployment inputs, not policy: image digest pin, `stateDir`, optional `andaUrl`. Numeric limits live in `HARDENING_PROFILE`, never here (header comment of `src/runtime/config.ts`). |
+| Runtime image / state dir | `RuntimeConfig` (`src/runtime/config.ts`), validated by hand-written `loadRuntimeConfig` (`src/runtime/config.ts`) | Deployment inputs, not policy: image digest pin and `stateDir`. Numeric limits live in `HARDENING_PROFILE`, never here (header comment of `src/runtime/config.ts`). |
 
 Related but separate: session identity file naming (`SESSION_ID_PATTERN`,
 `isSessionId` and `recordFileName`, `src/session/paths.ts`), state/record layout
@@ -309,9 +395,7 @@ Keys (`ACCEPTED_KEYS`, `src/runtime/config.ts`). The key set is closed, and any 
 - `workspaceRoot` (required): an absolute path.
 - `secretRoot` (optional): an absolute path, the directory that holds per-sandbox secret directories. When omitted it is `<stateDir>/secrets`, derived by `runtimeRootsOf` (`src/runtime/config.ts`).
 - `sandboxStateRoot` (optional): an absolute path, the directory that holds per-sandbox state. When omitted it is `<stateDir>/sandboxes`.
-- `andaUrl` (optional): an `http:` or `https:` URL with no userinfo. Its presence decides whether the Anda bridge is required (`andaBridgeRequired`, `src/runtime/config.ts`).
-  - Set: the bridge is required at start. The start runs the bridge handshake, and an unreachable bridge refuses the start with `ANDA_UNREACHABLE`.
-  - Absent: no Anda bridge is attached and there is no handshake, so the session goes `active` once the runner start succeeds. While `active` with no bridge, `exec` and `write` run exactly as they do with a bridge, in both policy modes. `status`, `read`, `list`, and `retry` do not need the bridge. If a configured bridge later goes down, the session moves to `degraded` and `exec` and `write` are refused as in any non-active state.
+- Retired keys: `andaUrl` was removed in the 0.4 release line with the Anda bridge. A `config.json` that still has it is refused with `SCHEMA_INVALID`, like any key outside the list above, and the CLI prints the line "andaUrl was removed in the 0.4 release line, with the Anda bridge: delete it from config.json". To migrate, delete the key. Nothing replaces it: a session is `active` once its container runs, and `exec` and `write` are refused only in the states that were already refused.
 
 An explicit `secretRoot` or `sandboxStateRoot` that equals, contains or lies inside the other explicit root or `workspaceRoot` is refused when the file loads (`SCHEMA_INVALID`). That check is lexical; the doctor's `runtime-roots` item also checks the effective (derived) roots.
 

@@ -14,7 +14,7 @@ const CHILD_PROCESS_PATHS = ["child_process", "node:child_process"];
 // host supervisor. Nothing else in the driver gains either right.
 const DRIVER_CHILD_PROCESS_ALLOWED = ["src/runtime/driver/channel.ts", "src/runtime/driver/supervisor.ts"];
 const CHILD_PROCESS_ALLOWED = [
-  "src/cli/main.ts",
+  "src/daemon/launch.ts",
   "src/doctor/checks.ts",
   "src/runtime/session-execution.ts",
   "src/runtime/agentos-workload.ts",
@@ -28,12 +28,12 @@ const SPECIAL_SRC = [
   "src/fs/write.ts",
   "src/fs/read.ts",
   "src/fs/list.ts",
-  "src/cli/main.ts",
+  "src/daemon/launch.ts",
   "src/doctor/checks.ts",
   "src/runtime/driver/supervisor.ts",
 ];
 const SPAWN_MESSAGE =
-  "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/cli/main.ts and src/runtime/driver/supervisor.ts. The driver's channel.ts holds child_process for openssl and never spawns (phase 9.5, owner decision 2).";
+  "P6-D1: spawn( is allowed only in src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/daemon/launch.ts and src/runtime/driver/supervisor.ts. The driver's channel.ts holds child_process for openssl and never spawns (phase 9.5, owner decision 2).";
 const GUARD_OWNER = {
   buildExecArgv: "src/runtime/openshell.ts",
   lockedWrite: "src/fs/write.ts",
@@ -119,7 +119,7 @@ const GENERIC = [...DYNAMIC, ...SPAWN, "openshellBinary", ...GUARDS];
 const withoutKey = (keys, drop) => keys.filter((key) => key !== drop);
 const childProcessPaths = CHILD_PROCESS_PATHS.map((name) => ({
   name,
-  message: "TOOL-02: only the allowlisted modules (src/cli/main.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process. The two driver modules are phase 9.5 owner decision 2: channel.ts runs openssl, supervisor.ts starts the host supervisor. agentos-workload.ts starts the AgentOS runner child.",
+  message: "TOOL-02: only the allowlisted modules (src/daemon/launch.ts, src/doctor/checks.ts, src/runtime/session-execution.ts, src/runtime/agentos-workload.ts, src/runtime/driver/channel.ts, src/runtime/driver/supervisor.ts) import child_process. The two driver modules are phase 9.5 owner decision 2: channel.ts runs openssl, supervisor.ts starts the host supervisor. agentos-workload.ts starts the AgentOS runner child.",
 }));
 // Dispatcher internals that host adapters (src/mcp, src/acp, src/omp) must never reference (P5-D11, P5-D12).
 const ADAPTER_INTERNALS = [
@@ -161,7 +161,8 @@ const CHANNEL_REFUSED_IMPORT = "^(?!(?:node:fs|node:net|\\.\\./core/errors\\.js|
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "coverage/**", "node_modules/**"],
+    // adapters/omp/index.js is an install template: its token is not valid JavaScript until `realm host install omp` expands it.
+    ignores: ["dist/**", "coverage/**", "node_modules/**", "adapters/omp/index.js"],
   },
   js.configs.recommended,
   {
@@ -241,7 +242,8 @@ export default tseslint.config(
     rules: { "no-restricted-syntax": syntaxRule(withoutKey(GENERIC, "guard:listDir")) },
   },
   {
-    files: ["src/cli/main.ts"],
+    // The daemon launch: the one module of the CLI and Omp wiring that spawns, so it omits the spawn rule.
+    files: ["src/daemon/launch.ts"],
     rules: { "no-restricted-syntax": syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]) },
   },
   {
@@ -275,7 +277,7 @@ export default tseslint.config(
           paths: childProcessPaths,
           patterns: [
             {
-              group: ["../runtime/session-execution*", "../doctor/checks*", "../cli/main*"],
+              group: ["../runtime/session-execution*", "../doctor/checks*", "../cli/main*", "../daemon/launch*"],
               message: "TOOL-02: exec gate modules must not import an allowlisted child_process module.",
             },
           ],
@@ -291,13 +293,13 @@ export default tseslint.config(
         {
           object: "process",
           property: "env",
-          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts, src/runtime/driver/main.ts). Pass the value in as a parameter.",
+          message: "process.env is read only at entry edges (src/cli/main.ts, src/daemon/main.ts, src/omp/extension.ts, src/runtime/driver/main.ts) and in src/daemon/launch.ts, whose startDetachedDaemon hands the host environment to the allowlist (spawn-env.ts). Pass the value in as a parameter.",
         },
       ],
     },
   },
   {
-    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/omp/extension.ts", "src/runtime/driver/main.ts"],
+    files: ["src/cli/main.ts", "src/daemon/main.ts", "src/daemon/launch.ts", "src/omp/extension.ts", "src/runtime/driver/main.ts"],
     rules: { "no-restricted-properties": "off" },
   },
   {
@@ -324,8 +326,31 @@ export default tseslint.config(
           paths: childProcessPaths,
           patterns: [
             {
+              group: ["../daemon/*", "!../daemon/client.js", "!../daemon/channel.js", "!../daemon/ensure.js", "!../daemon/launch.js"],
+              message: "Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): Omp reaches the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel, ../daemon/ensure and, for the detached daemon start, ../daemon/launch may be imported.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // src/host reads Policy data and never calls a gate. It may use appendAudit and withTimeout (installer, boot hook).
+    files: ["src/host/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...GENERIC.map((key) => SYNTAX[key]),
+        ...ADAPTER_INTERNALS.filter((name) => name !== "appendAudit" && name !== "withTimeout").map(adapterInternal),
+      ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: childProcessPaths,
+          patterns: [
+            {
               group: ["../daemon/*", "!../daemon/client.js", "!../daemon/channel.js", "!../daemon/ensure.js"],
-              message: "Adapters route tool logic only through ToolDispatcher.call (P5-D11, P5-D12): Omp reaches the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel and ../daemon/ensure may be imported.",
+              message: "Host adapters reach the daemon only through DaemonClient, so only ../daemon/client, ../daemon/channel and ../daemon/ensure may be imported.",
             },
           ],
         },
@@ -335,14 +360,14 @@ export default tseslint.config(
   {
     files: ["src/cli/main.ts"],
     rules: {
-      "no-restricted-syntax": [...syntaxRule([...DYNAMIC, ...NAMED_ONLY, "openshellBinary", ...GUARDS]), ...CLI_HANDLE_IDENTIFIERS.map(cliIdentifier)],
+      "no-restricted-syntax": [...syntaxRule(GENERIC), ...CLI_HANDLE_IDENTIFIERS.map(cliIdentifier)],
       "no-restricted-imports": [
         "error",
         {
           patterns: [
             {
-              group: ["node:*", "node:*/*", "!node:fs", "!node:net", "!node:child_process"],
-              message: "CLI-01 and P6-D7: the CLI imports only node:fs, node:net and node:child_process from the runtime.",
+              group: ["node:*", "node:*/*", "!node:fs", "!node:net"],
+              message: "CLI-01 and P6-D7: the CLI imports only node:fs and node:net from the runtime; the detached daemon spawn is in src/daemon/launch.ts.",
             },
           ],
         },

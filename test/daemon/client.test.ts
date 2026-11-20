@@ -5,6 +5,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { inspect } from "node:util";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,7 @@ const FIXED_SESSION = "p0123456789ab";
 
 const STATUS_VALUE: StatusValue = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: TS },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: TS },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: TS },
 };
 
 function statusOf(sessionId: string): DaemonStatus {
@@ -111,7 +112,7 @@ function echoSelection(request: ControlRequest): string {
     case "tool": {
       const value: StatusValue = {
         snapshot: { state: "active", reason: sessionId, lastTransitionAt: TS },
-        display: { label: "realm active", degraded: false, reason: sessionId, lastTransitionAt: TS },
+        display: { label: "realm active", reason: sessionId, lastTransitionAt: TS },
       };
       const outcome: ToolOutcome = { outcome: "done", tool: "status", value };
       return encodeReply({ id: request.id, result: outcome });
@@ -266,6 +267,42 @@ void test("a reply carrying an error throws a RealmError with that catalogue cod
   const client = connectDaemon(stub.socketPath, projectSelection(t));
   await assert.rejects(client.status(), assertRealmError("REALM_UNBOUND"));
   await assert.rejects(client.call({ status: {} }), assertRealmError("REALM_UNBOUND"));
+});
+
+void test("status accepts a reply whose display has no degraded key, and one from a 0.3 daemon that still carries degraded: false", async (t) => {
+  const selection = projectSelection(t);
+  const without = await startStub(t, (request) => encodeReply({ id: request.id, result: statusOf(selection.sessionId) }));
+  const plain = await connectDaemon(without.socketPath, selection).status();
+  assert.equal(plain.display.label, "realm active");
+  assert.equal(plain.display.reason, "realm active");
+  assert.equal(plain.display.lastTransitionAt, TS);
+  const legacy = await startStub(t, (request) =>
+    encodeReply({
+      id: request.id,
+      result: { ...statusOf(selection.sessionId), display: { ...STATUS_VALUE.display, degraded: false } },
+    }),
+  );
+  const old = await connectDaemon(legacy.socketPath, selection).status();
+  assert.equal(old.display.label, "realm active");
+  assert.equal(old.display.reason, "realm active");
+  assert.equal(old.display.lastTransitionAt, TS);
+});
+
+void test("status and up refuse a reply from a 0.3 daemon whose snapshot state is the removed degraded state", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startStub(t, (request) =>
+    encodeReply({
+      id: request.id,
+      result: {
+        ...statusOf(selection.sessionId),
+        snapshot: { state: "degraded", reason: "bridge down", lastTransitionAt: TS },
+        display: { ...STATUS_VALUE.display, degraded: true },
+      },
+    }),
+  );
+  const client = connectDaemon(stub.socketPath, selection);
+  await assert.rejects(client.status(), assertRealmError("SCHEMA_INVALID"));
+  await assert.rejects(client.up(), assertRealmError("SCHEMA_INVALID"));
 });
 
 void test("a status reply missing display is refused with SCHEMA_INVALID", async (t) => {
@@ -438,4 +475,209 @@ void test("MULTI-03: selectionOf canonicalizes the path and derives its session 
   const selection = selectionOf(root);
   assert.deepEqual(selection, { workspaceRoot: realpathSync(root), sessionId: sessionIdOfWorkspace(realpathSync(root)) });
   assert.throws(() => selectionOf(join(base, "missing")), assertRealmError("POLICY_DENIED"));
+});
+
+// A scripted capability daemon (CAPT-06): capability-attach answers the next scripted attach reply, tool answers the next
+// scripted tool reply or a done status outcome. Every frame the client sends is recorded by the stub.
+const TOKEN_ONE = "rcap1.AAAAAAAAAAAA.BBBBBBBBBBBB";
+const TOKEN_TWO = "rcap1.CCCCCCCCCCCC.DDDDDDDDDDDD";
+const DONE: ToolOutcome = { outcome: "done", tool: "status", value: STATUS_VALUE };
+
+function scripted(attachReplies: readonly string[], toolReplies: readonly string[] = []): (request: ControlRequest) => string {
+  let attaches = 0;
+  let tools = 0;
+  return (request) => {
+    if (request.method === "capability-attach") {
+      const reply = attachReplies[Math.min(attaches, attachReplies.length - 1)];
+      attaches += 1;
+      return reply ?? encodeReply({ id: request.id, error: { code: "SCHEMA_INVALID" } });
+    }
+    const toolReply = toolReplies[tools];
+    tools += 1;
+    return toolReply ?? encodeReply({ id: request.id, result: DONE });
+  };
+}
+
+function enforceReply(token: string, expiresAt: number): string {
+  return JSON.stringify({ id: 0, result: { mode: "enforce", token, expiresAt } });
+}
+
+// The stub rewrites the id of a scripted reply to the request's id (a scripted line is built before the id is known).
+async function startScripted(
+  t: TestContext,
+  attachReplies: readonly string[],
+  toolReplies: readonly string[] = [],
+): Promise<Stub> {
+  const respond = scripted(attachReplies, toolReplies);
+  return startStub(t, (request) => {
+    const line = respond(request);
+    const parsed = JSON.parse(line) as { id: number; result?: unknown; error?: unknown };
+    return `${JSON.stringify({ ...parsed, id: request.id })}\n`;
+  });
+}
+
+function framesOf(stub: Stub, method: string): ControlRequest[] {
+  return stub.requests.filter((request) => request.method === method);
+}
+
+function tokenMember(request: ControlRequest | undefined): unknown {
+  const params = request?.params as { token?: unknown } | undefined;
+  return params?.token;
+}
+
+const NOW_MS = 1_800_000_000_000;
+
+void test("CAPT-06: the first call attaches once and the tool frame carries the token; a second call does not attach again", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startScripted(t, [enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600)]);
+  const clock = { ms: NOW_MS };
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => clock.ms });
+  await client.call({ status: {} });
+  await client.call({ status: {} });
+  const attaches = framesOf(stub, "capability-attach");
+  assert.equal(attaches.length, 1);
+  assert.deepEqual(attaches[0]?.params, { selection, host: "claude" });
+  const tools = framesOf(stub, "tool");
+  assert.equal(tools.length, 2);
+  assert.equal(tokenMember(tools[0]), TOKEN_ONE);
+  assert.equal(tokenMember(tools[1]), TOKEN_ONE);
+  assert.deepEqual(Object.keys(tools[0]?.params as object).sort(), ["selection", "token", "tool"]);
+});
+
+void test("CAPT-06: 120 seconds before the expiry the next call attaches again and sends the new token", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startScripted(t, [enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600), enforceReply(TOKEN_TWO, NOW_MS / 1000 + 7200)]);
+  const clock = { ms: NOW_MS };
+  const client = connectDaemon(stub.socketPath, selection, { host: "cursor", now: () => clock.ms });
+  await client.call({ status: {} });
+  clock.ms = NOW_MS + (3600 - 121) * 1000;
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 1, "121 seconds before expiry the token is still used");
+  clock.ms = NOW_MS + (3600 - 120) * 1000;
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 2, "at 120 seconds before expiry it renews");
+  const tools = framesOf(stub, "tool");
+  assert.equal(tokenMember(tools[1]), TOKEN_ONE);
+  assert.equal(tokenMember(tools[2]), TOKEN_TWO);
+});
+
+void test("CAPT-06: a mode off answer is remembered for 60 seconds, no token is sent, and then the client asks again", async (t) => {
+  const selection = projectSelection(t);
+  const off = JSON.stringify({ id: 0, result: { mode: "off" } });
+  const stub = await startScripted(t, [off, enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600)]);
+  const clock = { ms: NOW_MS };
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => clock.ms });
+  await client.call({ status: {} });
+  clock.ms = NOW_MS + 59_999;
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 1);
+  assert.deepEqual(framesOf(stub, "tool").map(tokenMember), [undefined, undefined]);
+  assert.equal("token" in (framesOf(stub, "tool")[0]?.params as object), false);
+  clock.ms = NOW_MS + 60_000;
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 2);
+  assert.equal(tokenMember(framesOf(stub, "tool")[2]), TOKEN_ONE);
+});
+
+void test("CAPT-06: an older daemon's SCHEMA_INVALID answer to the attach is treated as mode off for 60 seconds", async (t) => {
+  const selection = projectSelection(t);
+  const old = JSON.stringify({ id: 0, error: { code: "SCHEMA_INVALID" } });
+  const stub = await startScripted(t, [old]);
+  const clock = { ms: NOW_MS };
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => clock.ms });
+  assert.deepEqual(await client.call({ status: {} }), DONE);
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 1);
+  assert.deepEqual(framesOf(stub, "tool").map(tokenMember), [undefined, undefined]);
+  clock.ms = NOW_MS + 60_000;
+  await client.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 2);
+});
+
+void test("CAPT-06: a POLICY_DENIED tool reply is returned as a refusal, and the client neither re-attaches nor retries it", async (t) => {
+  const selection = projectSelection(t);
+  const denied = JSON.stringify({ id: 0, error: { code: "POLICY_DENIED" } });
+  const stub = await startScripted(t, [enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600)], [denied]);
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => NOW_MS });
+  await assert.rejects(client.call({ status: {} }), assertRealmError("POLICY_DENIED"));
+  assert.equal(framesOf(stub, "tool").length, 1, "no second tool frame");
+  assert.equal(framesOf(stub, "capability-attach").length, 1, "no second attach");
+});
+
+void test("CAPT-06: a failed attach is thrown with its own code and no tool frame is sent", async (t) => {
+  const selection = projectSelection(t);
+  const failed = JSON.stringify({ id: 0, error: { code: "AUDIT_WRITE_FAILED" } });
+  const stub = await startScripted(t, [failed]);
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => NOW_MS });
+  await assert.rejects(client.call({ status: {} }), assertRealmError("AUDIT_WRITE_FAILED"));
+  assert.equal(framesOf(stub, "tool").length, 0);
+  const refusedAttach = await startScripted(t, [JSON.stringify({ id: 0, error: { code: "REALM_NOT_ACTIVE" } })]);
+  const other = connectDaemon(refusedAttach.socketPath, selection, { host: "claude", now: () => NOW_MS });
+  await assert.rejects(other.call({ status: {} }), assertRealmError("REALM_NOT_ACTIVE"));
+});
+
+void test("CAPT-06: a client with no host sends no attach frame and no token member, and its frames are the pre-token frames", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startScripted(t, [enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600)]);
+  const plain = connectDaemon(stub.socketPath, selection);
+  await plain.call({ status: {} });
+  const withEmpty = connectDaemon(stub.socketPath, selection, {});
+  await withEmpty.call({ status: {} });
+  assert.equal(framesOf(stub, "capability-attach").length, 0);
+  for (const frame of framesOf(stub, "tool")) {
+    assert.deepEqual(frame.params, { tool: { status: {} }, selection });
+  }
+});
+
+void test("CAPT-06: a malformed attach reply is SCHEMA_INVALID", async (t) => {
+  const selection = projectSelection(t);
+  const malformed: readonly unknown[] = [
+    { mode: "other" },
+    { mode: "enforce" },
+    { mode: "enforce", token: 7, expiresAt: 1 },
+    { mode: "enforce", token: "x".repeat(513), expiresAt: 1 },
+    { mode: "enforce", token: TOKEN_ONE, expiresAt: "9" },
+    { mode: "enforce", token: TOKEN_ONE, expiresAt: 1.5 },
+    { mode: "enforce", token: TOKEN_ONE, expiresAt: Number.MAX_SAFE_INTEGER + 2 },
+    { token: TOKEN_ONE, expiresAt: 1 },
+    "enforce",
+    null,
+    [],
+  ];
+  for (const result of malformed) {
+    const stub = await startScripted(t, [JSON.stringify({ id: 0, result })]);
+    const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => NOW_MS });
+    await assert.rejects(client.call({ status: {} }), assertRealmError("SCHEMA_INVALID"), JSON.stringify(result));
+    assert.equal(framesOf(stub, "tool").length, 0);
+  }
+});
+
+void test("CAPT-06: the token is no property of the client and appears in no key, JSON, inspect output or thrown error", async (t) => {
+  const selection = projectSelection(t);
+  const stub = await startScripted(t, [enforceReply(TOKEN_ONE, NOW_MS / 1000 + 3600)], [JSON.stringify({ id: 0, error: { code: "POLICY_DENIED" } })]);
+  const client = connectDaemon(stub.socketPath, selection, { host: "claude", now: () => NOW_MS });
+  let thrown: unknown;
+  try {
+    await client.call({ status: {} });
+  } catch (error: unknown) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof RealmError);
+  const everything = [
+    Object.keys(client).join(","),
+    Object.getOwnPropertyNames(client).join(","),
+    Object.getOwnPropertySymbols(client).map(String).join(","),
+    JSON.stringify(client),
+    inspect(client, { showHidden: true, depth: 6 }),
+    inspect(thrown, { showHidden: true, depth: 6 }),
+    JSON.stringify(thrown),
+    String(thrown),
+    thrown.message,
+    String(thrown.stack),
+  ].join("\n");
+  assert.equal(everything.includes(TOKEN_ONE), false);
+  assert.equal(everything.includes("AAAAAAAAAAAA"), false);
+  for (const value of Object.values(client)) {
+    assert.equal(typeof value, "function");
+  }
 });

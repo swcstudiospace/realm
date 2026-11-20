@@ -7,11 +7,10 @@ import { performance } from "node:perf_hooks";
 import type { Policy } from "../../src/contract/validate.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import type { StateSnapshot } from "../../src/core/state-machine.js";
-import { type ErrorCode, makeRealmError, RealmError } from "../../src/core/errors.js";
+import { type ErrorCode, RealmError } from "../../src/core/errors.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { SessionStore } from "../../src/session/store.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
-import { FakeBridge } from "../support/fake-bridge.js";
 
 const SESSION = "session-interrupt";
 const CLOCK_TIME = "2026-10-21T09:30:00.000Z";
@@ -43,17 +42,15 @@ function fixture(t: TestContext, startupBudgetMs = 10000) {
   mkdirSync(workspace);
   const store = new SessionStore(join(base, "state"));
   const exec = new FakeExecutionService();
-  const bridge = new FakeBridge();
   const controller = new LifecycleController({
     sessionId: SESSION,
     policy: policyFor(workspace, startupBudgetMs),
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
-    bridge,
     clock: () => new Date(CLOCK_TIME),
   });
-  return { workspace, store, exec, bridge, controller };
+  return { workspace, store, exec, controller };
 }
 
 // Polls until the predicate holds. The bound keeps a broken implementation from hanging the run.
@@ -347,7 +344,6 @@ void test("a create for another workspace during a first create is refused with 
     pinnedRoot: bindWorkspaceUnderPolicy([base], first),
     store,
     exec,
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_TIME),
   });
   exec.setDelay("create", 50);
@@ -358,47 +354,6 @@ void test("a create for another workspace during a first create is refused with 
 
   assert.equal(outcome.state, "active");
   assert.equal(store.load(SESSION)?.workspaceRoot, first);
-});
-
-void test("a bridge subscribe that throws moves the session to error instead of leaving it connecting (F6)", async (t) => {
-  const { workspace, store, bridge, controller } = fixture(t);
-  bridge.subscribe = () => {
-    throw new Error("subscribe exploded");
-  };
-
-  await assertRejectsWith(controller.create(workspace), "OPENSHELL_START_FAILED");
-
-  assert.equal(controller.snapshot().state, "error");
-  assert.equal(controller.snapshot().reason, "OPENSHELL_START_FAILED");
-  assert.equal(store.load(SESSION)?.state, "error");
-});
-
-void test("a store write that throws during a bridge down event keeps the degraded state, does not throw, and the next transition carries the write's code (F7)", async (t) => {
-  const { workspace, store, bridge, controller } = fixture(t);
-  await controller.create(workspace);
-  const transitions: { readonly persistCode?: string }[] = [];
-  controller.events.subscribe((event) => {
-    transitions.push(event);
-  });
-  const save = store.save.bind(store);
-  store.save = () => {
-    throw new Error("disk full");
-  };
-
-  assert.doesNotThrow(() => {
-    bridge.emit({ kind: "down", code: "ANDA_UNREACHABLE" });
-  });
-
-  assert.equal(controller.snapshot().state, "degraded");
-  assert.equal(controller.snapshot().reason, "ANDA_UNREACHABLE");
-  assert.equal(store.load(SESSION)?.state, "active");
-
-  store.save = save;
-  bridge.emit({ kind: "up" });
-
-  assert.equal(controller.snapshot().state, "active");
-  assert.equal(store.load(SESSION)?.state, "active");
-  assert.deepEqual(transitions.map((event) => event.persistCode), [undefined, "WRITE_NOT_ATOMIC"]);
 });
 
 void test("a background stop and destroy that both fail are kept, and the next destroy reports them as the cause of its own failure (G-04, F1)", async (t) => {
@@ -416,7 +371,6 @@ void test("a background stop and destroy that both fail are kept, and the next d
     pinnedRoot: bindWorkspaceUnderPolicy([workspace], workspace),
     store,
     exec,
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_TIME),
     teardownTimeoutMs: 1000,
   });
@@ -485,37 +439,19 @@ void test("a background stop and destroy that both fail are kept, and the next d
   assertOvertaken(await creating);
 });
 
-void test("a bridge connect that fails after a stop began is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
-  const { workspace, exec, bridge, controller } = fixture(t);
-  // The connect is held behind a gate, so the stop begins while the bridge handshake is in flight. The connect then fails with
-  // a port code that no background step records.
-  let connectCalled: () => void = () => undefined;
-  const inConnect = new Promise<void>((resolve) => {
-    connectCalled = resolve;
-  });
-  let openGate: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => {
-    openGate = () => {
-      resolve();
-    };
-  });
-  bridge.connect = async () => {
-    connectCalled();
-    await gate;
-    throw makeRealmError("PODMAN_MACHINE_DOWN");
-  };
+void test("a start that fails after a stop began is kept, and the next destroy reports it as the cause of its own failure (C1, G-04)", async (t) => {
+  const { workspace, exec, controller } = fixture(t);
+  // The start is delayed, so the stop begins while it is in flight. The start then fails with a port code that no
+  // other background step records.
+  exec.setDelay("start", 100);
+  exec.failNext("start", "PODMAN_MACHINE_DOWN");
 
   const creating = controller.create(workspace);
-  await inConnect;
+  await waitUntil(() => exec.callCount("start") === 1, "exec.start to be called");
   const stopped = await controller.stop();
-  openGate();
-  await creating;
+  assertOvertaken(await creating);
   assert.equal(stopped.state, "unbound");
 
   exec.failNext("destroy", "OPENSHELL_START_FAILED");
-  await assert.rejects(
-    controller.destroy(),
-    (error: unknown) =>
-      error instanceof RealmError && error.code === "OPENSHELL_START_FAILED" && error.causeCode === "PODMAN_MACHINE_DOWN",
-  );
+  await assertRejectsWithCause(controller.destroy(), "OPENSHELL_START_FAILED", "PODMAN_MACHINE_DOWN");
 });

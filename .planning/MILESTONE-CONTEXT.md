@@ -1,51 +1,63 @@
-# Milestone v3.0 context: Containment by Default
+# Milestone v9.0 context: Doctor health and concurrent binding
 
-Scope source: `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`. In `IMPROVEMENT-PROPOSALS.md` every "Proposed change" list of proposals 1 to 8 is in scope and every "Success measure" is the acceptance test. `SANDBOX-LIFECYCLE-FINDINGS.md`, `ABRUPT-END-PERSISTENCE-FINDINGS.md` and `LIVE-VERIFICATION.md` hold the evidence. Planners and executors read those files; they do not work from memory.
+The v8.0 context is archived at `.planning/milestones/v8.0-MILESTONE-CONTEXT.md`; the v7.0 context at `.planning/milestones/v7.0-MILESTONE-CONTEXT.md`; the v6.0 context at `.planning/milestones/v6.0-MILESTONE-CONTEXT.md`; the v5.0 context at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md`; the v3.0 context (owner decisions D1 to D6 of 2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. This file holds v9.0 only.
+
+Scope source: the owner's decisions of 2026-11-20 (below); the v8.0 audit (`.planning/v8.0-MILESTONE-AUDIT.md`: the carried items — STOP-01 to STOP-04 with F-41-1 and new F-51-1; KIMV-02 with GAP-43-03 narrowed; HTIER-01 with GAP-40-01 and GAP-48-01; CBIND-01..02 design-frozen pending HITL ratification — and the "v9.0 candidates" list); the phase records of Phases 49 to 54 under `.planning/phases/` (notably `51-VERIFICATION.md`, `52-VERIFICATION.md`, `53-DESIGN.md`, `50-VERIFICATION.md`); the gap rows in `docs/integration/host-plugin-gaps.md`; `docs/integration/omp.md`; `docs/integration/omp-lifecycle-runbook.md`; `docs/integration/runtime-decision.md` (the F-41-1 INFERENCE paragraph). Planners and executors read those files; they do not work from memory.
 
 ## Goal
 
-A model working through Omp does its file mutations and commands inside the sandbox by default. The sandbox and the files in it survive crashes. An operator can see what happened, prove the audit log is intact, and ship the product with provenance and a rollback path.
+Operators can see Omp plugin health from `realm doctor` with a runbook for the failing cases (HEALTH). The F-51-1 dirty-stop cause is established from a captured failed-step code and fixed or bounded (STOP-05, STOP-06). The two host-evidence items v8.0 carried get a final retest with corrected instruments: the Grok Build both-files audit line (HTIER-01) and the legacy kimi deciding rerun after the wire recorder is fixed to log before forwarding (KIMV-02). Concurrent binding is implemented on the frozen Phase 53 design (CBIND-03), gated on the owner ratifying `53-DESIGN.md` (CBIND-01..02).
 
-## Owner decisions (2026-10-29, answering the Selection section of the proposals)
+## Release line
 
-- **D1, all proposals:** all eight proposals are in this milestone, including the ones the proposals document suggested for the backlog (3, 5 and part D of 8).
-- **D2, yes:** the scripted-provider evidence changes the status of OMP-05. When the Phase 12 harness passes live, OMP-05 is recorded complete in the traceability table, with the basis stated (scripted provider through Omp's own `write` tool, not an LLM-driven run).
-- **D3, yes:** in fail-closed mode the Omp extension may remove or block Omp's built-in `write`, `edit` and `bash`, by the mechanism the spike proves. If the extension API cannot enforce removal, fail-closed stays a guard and the product claim and the docs say exactly that.
-- **D4, yes:** the default policy `mode` changes from `advisory` to `fail-closed`. A policy file with no `mode` means fail-closed. Advisory stays available by explicit opt-in. This supersedes the earlier decision to keep advisory as the default. The schema default, the loader, `docs/policy-reference.md`, the README, the Omp notes, the doctor output, the `init` templates and every test that relied on the old default change together.
-- **D5, add them:**
-  - New runtime decisions are recorded in `docs/integration/runtime-decision.md` before the code that needs them: (i) the daemon holds one session per project workspace, a descendant of a configured root, superseding "one session per daemon"; (ii) the startup reaper re-adopts a running container that passes the create-time hardening verifier and removes what cannot be proven good, superseding the "remove everything" form of D-84, D-86 and RT-08 while keeping the no-orphan guarantee in a precise form; (iii) RT-01's mount list gains the session-owned scratch volume.
-  - Two error catalogue additions are allowed: a distinct code for gateway or driver loss (TD-05), and one for audit reconciliation if no existing code fits. Each addition updates every table, doc and test that enumerates codes in the same pull request. Any other catalogue or schema change needs a reason recorded in the phase CONTEXT and is limited to what that phase's requirements need.
-- **D6, signing off:** the owner signs off the changes this milestone needs under `.github/workflows/**`, `release/**` and `scripts/release/**`: the milestone minor bump, CI steps, Dependabot configuration, the scheduled mutation workflow, the release job split, provenance attestation, the rollback workflow and the changelog filter. Each such pull request cites D6 in its body. Repository settings (TD-10: secret scanning, push protection, branch protection, `sha_pinning_required`) stay the owner's and cannot be changed from the repository.
+The release line is 0.9.x. `release/milestone.json` is `{"milestone":"v9.0","minor":9}`; the start of the milestone carries the owner's approval of that exact one-line change (HITL 2026-11-20), as PR 216 did for v7.0. A phase that changes a documented contract incompatibly uses `!` in its commit subjects so the release notes list it (Phase 55, adding a doctor check, and Phase 59, adding the binding lock, are additive; the doctor check list is an enumerating surface whose tests update in the same pull request).
 
-## Scope: eight proposals in nine phases (numbering continues at 12)
+## Owner decisions (2026-11-20, HITL)
 
-| Phase | Name | Proposal | Carries |
-|---|---|---|---|
-| 12 | Scripted-provider harness and Omp enforcement spike | 6 and the spike of 1 | OMP-05 per D2; OQ-P5-01, OQ-P5-02 |
-| 13 | Quality ratchet | 8 parts A, B and C | TD-07, TD-09 |
-| 14 | Crash-safety pack | 4 | TD-01, TD-04, FS-05, AUD-01; one catalogue code (D5) |
-| 15 | Zero-config onboarding and fail-closed default | 2 and D4 | TD-03, CLI-03; TD-02 coordination note |
-| 16 | Omp runs in the sandbox | 1 | D3 |
-| 17 | Observability and tamper-evident audit | 7 | TD-05 (catalogue code, D5), AUD-01, QUAL-03 |
-| 18 | Per-project sandboxes | 3 | runtime decision (D5 i); PRD-DRV-01 handling only as far as the phase needs |
-| 19 | Resume and checkpoint | 5 | runtime decisions (D5 ii, iii) |
-| 20 | Release pipeline hardening | 8 part D | TD-08, TD-10 (job split and attestation only), D6 |
+- **D-v9-1, start milestone v9.0** "Doctor health and concurrent binding", five items, all ticked by the owner: phases 55 to 59, numbering continues from Phase 54, release line 0.9.x.
+- **D-v9-2, Omp plugin health check (Phase 55):** add a `realm doctor` check that reports the Omp plugin install and health state with its fix text, and document the failing cases and their remedy in the Omp lifecycle runbook (HEALTH-01, HEALTH-02).
+- **D-v9-3, F-51-1 cause (Phase 56):** capture the failed-step cause code, establish the dirty variant-c stop cause in `runtime-decision.md`, and fix or bound it with a 20-iteration clean run (STOP-05, STOP-06).
+- **D-v9-4, HTIER-01 attribution retest (Phase 57):** retest the Grok Build both-files audit line live, or keep GAP-40-01 accepted-residual with the missing host feature named (HTIER-01).
+- **D-v9-5, KIMV-02 recorder fix and rerun (Phase 58):** fix the wire recorder to log before forwarding, then run the deciding live rerun; GAP-43-03 is established or stays narrowed on the new evidence (KIMV-02).
+- **D-v9-6, concurrent binding implementation (Phase 59; gated):** implement the binding lock from the frozen `53-DESIGN.md` §4 surfaces only after the owner ratifies the design; CBIND-01..02 close on ratification, CBIND-03 on the implementation (CBIND-01..03).
+- **D-v9-7, supported versions:** the latest release line is supported: currently 0.8.x, and 0.9.x from its first release, 0.9.0. `SECURITY.md`, the Safety bullet of `AGENTS.md` and the README status bullet say so.
+
+## Scope: five phases (numbering continues at 55)
+
+| Phase | Name | Requirements | Carries | Notes |
+|-------|------|--------------|---------|-------|
+| 55 | Omp plugin health check | HEALTH-01..02 | — | doctor check plus runbook section |
+| 56 | F-51-1 cause | STOP-05..06 | F-51-1 (Phase 51) | capture cause code, then fix or bound |
+| 57 | HTIER-01 attribution retest | HTIER-01 | GAP-40-01, GAP-48-01 | live both-files audit line |
+| 58 | KIMV-02 recorder fix and rerun | KIMV-02 | GAP-43-03 | log-before-forward, then deciding rerun |
+| 59 | Concurrent binding implementation (gated on Phase 53 ratification) | CBIND-01..03 | — | frozen surfaces only, no new codes |
 
 ## Ordering and dependencies
 
-- Three lanes share no mutable state and may run in parallel: **Omp** 12, 15, 16; **runtime** 14, 17, 18, 19; **pipeline** 13, 20. Inside a lane the order is strict.
-- 12 gives 16 its test bed and its enforcement answer. 14 comes before 17 because reconciliation appends audit lines that the hash chain must cover. 18 comes before 19 because adoption is per session. 20 comes last because it changes the release path that every earlier pull request ships through.
-- Each phase ships through the ship flow (pull request, Greptile 5 of 5, squash merge, release on the `0.3.x` line). A phase may ship as several pull requests.
-- The live production stack on the realm account is shared. The startup reap is account-wide, so only one live run may be active at a time; live runs take a lock.
+- The five phases are independent in code except Phase 59, which depends on the owner ratification of `53-DESIGN.md` before any code (D-v9-6). Each depends on Phase 54 only as the last phase of v8.0. Phases 56, 57 and 58 each need a live window on the production stack; the shared live lock serialises them, and the startup reap is account-wide, so only one live run is active at a time. Phase 55 needs no live window for its hermetic core (doctor checks run on injected fakes) and may run its live proof inside a Phase 56 to 58 window or its own.
+- Phases 57 and 58 both edit the host registry rows, the support matrix and `docs/integration/host-plugin-gaps.md`; their documentation edits land in order 57 then 58 (or are rebased), so the generated matrix block does not conflict.
+- Phase 55 touches `src/doctor/` (the check list is an enumerating surface: `checks.ts`, its enumerating tests and the doctor docs update together) and `docs/integration/omp-lifecycle-runbook.md`; Phase 56 touches the daemon stop and start path (`src/runtime/session-execution.ts`, `src/daemon/`, `src/lifecycle/`); Phase 59 touches the `53-DESIGN.md` §4 surfaces (`src/session/workspace-binding.ts` new, `src/session/paths.ts`, `src/lifecycle/controller.ts`, `src/daemon/sessions.ts`); Phase 58 touches the wire recorder (`test/support/host-live*.ts`) and no `src` file unless the rerun indicts `realm mcp`. No two live phases touch the same `src` file.
+- Each phase ships through the ship flow (pull request, Greptile 5 of 5, squash merge, release on the `0.9.x` line). A phase may ship as several pull requests.
 
 ## Constraints for every phase
 
 - The rules of `AGENTS.md` apply: strict TypeScript, `RealmError` with catalogue codes, a timeout on every async boundary, no silent catch, no suppression comments, `process.env` read only at the three entry edges, no new dependency without the justification, licence check and maintenance check that `CONTRIBUTING.md` requires, no host-local absolute paths in committed files.
-- Tests assert observable behaviour. No source-text tests. A change to a frozen contract updates its enumerating tests in the same pull request.
-- `docs/specs/realm-spec.xml`, `LICENSE` and `NOTICE` are not modified. Version fields and `CHANGELOG.md` belong to the release job.
-- Clean cutover: migrate every caller and remove the obsolete code in the same pull request. No compatibility shims.
-- Every claim in a document carries an evidence label and is checked against the code or a run.
+- Tests assert observable behaviour. No source-text tests. A change to a frozen contract updates its enumerating tests in the same pull request. The error catalogue stays at 29 codes unless a phase records a reason and the owner approves an addition by name (Phase 59 adds none, per `53-DESIGN.md` §3).
+- `LICENSE`, `NOTICE` and `docs/specs/realm-spec.xml` are not modified. Version fields and `CHANGELOG.md` belong to the release job. Files under `.github/workflows/**`, `release/**` and `scripts/release/**` change only with human review (the `release/milestone.json` bump itself is this start pull request).
+- Clean cutover: migrate every caller and remove the obsolete code in the same pull request. No compatibility shims (Phase 59: the binding lock is new code alongside no replacement; the in-process `LockTable` is untouched).
+- Fail closed is kept: no change makes a mutation run before the session is ready, and a stop or start fix never weakens teardown bounds or the no-orphan guarantee. The Phase 55 doctor check is read-only: it reports health, it does not install, remove or repair the plugin except through the existing `doctor --fix` rules.
+- Every claim in a document carries an evidence label and is checked against the code or a run. Live evidence is kept outside the repository and cited by date. A failed live step is recorded as failed, never relabelled as a pass, and GAP-43-03, GAP-40-01 and F-51-1 are never closed by inference alone.
+
+## Limits
+
+- Live phases depend on this host: rootless Podman 5.7.1, the OpenShell gateway, and the installed host CLIs (Muse Code, Prime Agent, Grok Build and Omp were on the PATH of the planning account on 2026-11-19; the legacy kimi-cli 1.51.0 and Kimi Code need a scratch install outside the repository, as in Phase 43, and the Phase 58 rerun needs the `realmlive` account and the shared live lock). An item that cannot run is carried with a named reason, not claimed.
+- The Phase 55 doctor check reads the Omp plugin state through the same seams the existing doctor checks use (injected probes, no process environment); what Omp exposes about its own install is the planner's to record (HEALTH-01), and the check reports `warn` or `fail` with its fix rather than guessing.
+- Capability tokens still give no defence against a same-uid reader (Phases 30, 32 and 35 records); the Grok re-run does not change that, and the host label stays a self-declared attribution, not an identity.
+
+## Open owner questions
+
+One blocking gate: the HITL ratification of `53-DESIGN.md` (D-53-H1…H6), which gates Phase 59 (D-v9-6) and closes CBIND-01..02. Defaults taken: if the Phase 57 retest still cannot produce the live audit line, GAP-40-01 stays accepted-residual with the missing host feature named; if the Phase 58 rerun shows the response the log-after-forward recorder missed, the recorder is the cause and GAP-43-03 closes on that evidence, otherwise the client's close-after-response race is recorded as the narrowed cause.
 
 ## Out of scope
 
-FS-02 closure (the owner's status call; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (engine licence), UI-01, TD-06, the TD-10 repository settings, and any change to the product spec.
+The ship-flow `--enforce` confirmation of DEBT-03 (owner-side configuration; carried), FS-02 closure (accepted limitation), UI-01 status (the owner's call; Phase 55 supplies evidence only), TD-06, the TD-10 repository settings, a model-driven tool call through a host (GAP-31-02, unless a scripted provider seam makes it a by-product of a production tier), SNAP implementation (design only in v8.0, Phase 54), F-41-1 and STOP-01 to STOP-04 (never reproduced; only F-51-1 is taken into v9.0), and any change to the product spec.

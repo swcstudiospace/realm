@@ -4,6 +4,583 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-20
+
+### Documentation
+- docs(milestone): start v9.0 Doctor health and concurrent binding (phases 55-59) (07ad4d7)
+
+## [0.8.3] - 2026-11-19
+
+### Documentation
+- docs(milestone): v8.0 shipped with accepted limitations (phases 49-54), audit (e6390c7)
+
+## [0.8.2] - 2026-11-19
+
+### Fixed
+- fix(docs): strip host paths from 53-SUMMARY (6204e20)
+
+### Documentation
+- docs(phase-51): repeat windows: OTHER-FAILURE, new finding F-51-1, STOP not met (50b8964)
+- docs(phase-52): legacy kimi cause round: NOT-ESTABLISHED, recorder indicted by code (c08e51a)
+- docs(phase-53): concurrent binding design (file-lock identity) (703da8e)
+- docs(phase-54): snapshots design (snapshot = retained RES-04 checkpoint) (834a616)
+
+## [0.8.1] - 2026-11-19
+
+### Fixed
+- fix(docs): align grok-build matrix disposition with registry (rehearsed) (6d6998e)
+- fix(host): create Grok config home in productionOverrides; Grok production tier passes live (50) (9ff6a5b)
+
+### Documentation
+- docs(phase-49): summarize calibration repeat and FINDING verdict (e91f47a)
+- docs(phase-49): record FINDING verdict window and resolution (e7a6d66)
+
+### Maintenance
+- test(omp): freeze calibrated bounds from 16 recorded controls (49) (c392362)
+- test(omp): pin bracket clamp rule on recorded failure shapes; restate feasibility (49) (fcb9af0)
+
+## [0.8.0] - 2026-11-19
+
+### Documentation
+- docs(milestone): start v8.0 Shared sandboxes and durable recovery (phases 49-54) (170e4c9)
+
+## [0.7.10] - 2026-11-19
+
+### Fixed
+- fix(docs): quote plans value in v7.0 audit frontmatter (ca9fddc)
+- fix(docs): quote reason frontmatter in 45-04-SUMMARY (1394fd3)
+- fix(test): accept run-*.scope leaves in scoped check; second calibration VOID with counted numbers (45-04) (48330e5)
+
+### Documentation
+- docs(milestone): v7.0 shipped: phases 45-48 verified, 11 of 19 requirements complete, audit with limitations (b8b4834)
+- docs(host): record Phase 48: Muse Code proven, Grok failed on harness defect, Prime blocked (48-04) (2755c8d)
+- docs(phase-45): calibration VOID on scope leaf mismatch; harness fix needed (45-04) (8de7617)
+- docs(phase-46): second window recorded: b/c/s 20 of 20 clean each, window VOID (STOP-04 not met for full set) (4ebbce0)
+
+## [0.7.9] - 2026-11-19
+
+### Documentation
+- docs(phase-45): feasibility record and frozen design: Branch S usable, Branch X in scope (45-01) (d29644e)
+
+## [0.7.8] - 2026-11-19
+
+### Documentation
+- docs(phase-48): production tier window recorded: Muse passed, Grok failed on harness defect, Prime blocked (48-03) (24ec020)
+
+## [0.7.7] - 2026-11-19
+
+### Documentation
+- docs(phase-46): verification window recorded: VOID, variant a 20 of 20 clean; variant b start failure under load observed (46-04) (#226) (c479c8d)
+
+### Maintenance
+- test(host): production-tier harness for Muse Code and Grok Build, Grok attribution tests, Prime Agent blocker (48-02) (#227) (999cb2f)
+
+## [0.7.6] - 2026-11-19
+
+### Documentation
+- docs(host): record legacy kimi window in registry, gaps, matrix and snippet (47-04) (#225) (3775439)
+
+## [0.7.5] - 2026-11-19
+
+### Fixed
+- fix(runtime): confirm a container end after a slow stop request instead of failing the teardown step (46-02, 46-03, STOP-02, STOP-03) (#222) (ea04e1c)
+
+### Documentation
+- docs(phase-47): legacy kimi window recorded: NOT-REPRODUCED, cause not established, ablation verdicts (47-02) (#224) (f34cc51)
+
+### Maintenance
+- test(omp): scoped contention gate, calibrated verdict rules and alternating-order arm test (45-03, OMPV-03..05) (#223) (7ff5430)
+
+## [0.7.4] - 2026-11-19
+
+### Maintenance
+- test(host): Grok attribution matrix, host drive probes and gated validator cells (48-01, HTIER-01) (#221) (4bb244a)
+
+## [0.7.3] - 2026-11-19
+
+### Maintenance
+- test(omp): deterministic in-process stall probe with min-of-5 rule and seeded red case (45-02, OMPV-02) (#220) (9ed99b7)
+- test(host): wire timeline, frozen legacy-kimi classification and attribution rules, evidence and probes (47-01) (#219) (d4c92b8)
+
+## [0.7.2] - 2026-11-19
+
+### Maintenance
+- test(daemon): rapid stop-then-up chain harness and frozen outcome rules (46-01, STOP-01) (#218) (a30d330)
+
+## [0.7.1] - 2026-11-19
+
+### Changed
+- No user-facing changes recorded.
+
+## [0.7.0] - 2026-11-19
+
+### Documentation
+- docs(milestone): start v7.0 Carried findings closure (phases 45 to 48), release line 0.7.x (#216) (fae4c27)
+
+## [0.6.8] - 2026-11-19
+
+### Documentation
+- docs(milestone): complete and archive v6.0 (phases 38 to 44), audit, bookkeeping, status docs (#213) (2fe19dc)
+- docs(phase-44): paired loaded A/B window recorded: VOID (3 valid pairs of 5), no effect claim (#212) (b7720c8)
+
+## [0.6.7] - 2026-11-19
+
+### Changed
+- perf(omp): split the daemon launch out of the CLI and defer the Omp attach start one turn (44-02, OMPR-05) (#211) (1c7fac8)
+
+## [0.6.6] - 2026-11-19
+
+### Maintenance
+- test(omp): corrected responsiveness window, frozen paired A/B rule and paired arm test (44-01) (#210) (d568ae4)
+
+## [0.6.5] - 2026-11-19
+
+### Documentation
+- docs(plan): plan phase 44, Omp non-blocking cold attach (owner-directed, OMPR-04..06) (#209) (445d2e1)
+- docs(phase-42): close phase 42, evidence debt (#208) (ea5f749)
+
+## [0.6.4] - 2026-11-19
+
+### Documentation
+- docs(phase-38): quiet-host window outcome VOID (six attempts, one valid run); measurement, summary and verification (#207) (a0b56de)
+
+## [0.6.3] - 2026-11-19
+
+### Maintenance
+- ci: breaking change guard workflow (42-02, option A, needs owner review of the exact head) (#205) (1c16b3a)
+
+## [0.6.2] - 2026-11-19
+
+### Added
+- feat(host): host ids and recipes for Muse Code, Prime Agent and Grok Build; launchers carry --host (40-02) (#196) (dbd42cf)
+- feat(host): json-merge seed and refuseIfPresent, multi-line toml args in the contract checker (40-01) (#192) (8c4c62b)
+
+### Fixed
+- fix(exec): end a timed-out exec's process group inside the sandbox (39-02, EXEC-02) (#194) (d80c79a)
+- fix(daemon): derive the teardown bound from the stage bounds so a stop no longer expires at 30 s with REALM_STOPPING (41-01) (#193) (4accb71)
+
+### Documentation
+- docs(phase-38): quote the plan frontmatter entries that broke the docs site build (#206) (d188721)
+- docs(phase-42): whole-suite non-root result (Set B), summaries and verification (#204) (57181f9)
+- docs(phase-39,40,41,43): close four v6.0 phases (#202) (de54c49)
+- docs(phase-40): host id validator-tier results, summaries and verification (#201) (5de4180)
+- docs(phase-42): guard replay on PR 162 and 168, D42-1, CI wiring options awaiting the owner (42-02) (#200) (9b1697b)
+- docs(phase-41): live stop-after-session result, finding F-41-1, summaries and verification (#198) (500ea73)
+- docs(phase-43): kimi and kimi-code live rehearsal results, gaps and verification (#195) (1632571)
+- docs(plan): plans for phases 38 to 43 (v6.0) (#188) (59b18dd)
+
+### Maintenance
+- test(exec): the watchdog tests deny group kill through an exported bash function so a scrubbed environment keeps the denial (#203) (62b85fe)
+- test(host): live validator tiers for Muse Code (real install), Prime Agent and Grok Build; Q10 migration table (40-03 code) (#199) (2faf19a)
+- test(daemon): live repeat of stop-after-session with a container timeline (41-02 code) (#197) (24e7722)
+- test(host): kimi and kimi-code live tiers, gate and registry (43-01) (#191) (6063212)
+- test(exec): process-tree kill proof for timed-out exec, live closeout C rewritten, C2 and D added (39-01, baseline) (#190) (34b6dd2)
+- test(omp): frozen decision rule as code, control run and per-run record for the responsiveness window (38-01 code) (#189) (861b8ff)
+
+## [0.6.1] - 2026-11-18
+
+### Added
+- feat(scripts): breaking-change guard for the ! marker convention (42-01, report-only) (#187) (cb6e38e)
+
+## [0.6.0] - 2026-11-18
+
+### Added
+- feat(milestone)!: start v6.0, responsiveness, exec kill proof, host ids and evidence debt (release line 0.6.x) (2e59bab)
+
+## [0.5.9] - 2026-11-18
+
+### Documentation
+- docs(milestone): complete and archive v5.0 (phases 33 to 37), audit, bookkeeping, AGENTS.md status (#185) (1f4d1e5)
+- docs(phase-36): OI-13 accepted (Q11 stdin trust boundary); OI-11 loaded-host result (#184) (1528fb6)
+- docs(phase-35): close phase 35, capability token evidence (#183) (bb4d021)
+
+## [0.5.8] - 2026-11-18
+
+### Documentation
+- docs(phase-34): close phase 34, capability tokens enforce by default (#182) (b3606bd)
+- docs(phase-35): record EVID-03, D35-1, spike section 10, summaries and verification (#181) (9208a7b)
+- docs(phase-34): record the stale-client live result, summaries and verification; correct the doctor item description (#180) (0fb9b2a)
+- docs(phase-36,37): close phases 36 and 37 (#179) (98743dd)
+
+## [0.5.7] - 2026-11-18
+
+### Maintenance
+- test(capability): scripted provider and live enforce proof harness, EVID-03 pins (35-03 code) (#178) (995170a)
+
+## [0.5.6] - 2026-11-18
+
+### Documentation
+- docs(phase-36): record the live re-verification of the v1.0 open items (dispositions, summary, verification) (#177) (2d8f631)
+- docs(phase-33): close phase 33, cold attach (#173) (38ac81c)
+- docs(phase-35): record EVID-01 and EVID-02 live results (2026-11-18) (#175) (8a67886)
+- docs(phase-33): record the cold-attach live results; close GAP-23-02 and GAP-31-04; summaries and verification (#171) (745d5de)
+
+### Maintenance
+- test(capability): make the memory-probe self-check deterministic (off-heap buffer needle) (#176) (04ca807)
+- test(live): live MCP sessions carry a host label so they attach under enforced capability tokens (#174) (c9130d1)
+- test(live): wait until the session is served before the first tool call in the live suites (serve-early) (#172) (7c44538)
+- test(capability): non-root memory probe with frozen verdict rule; evidence page EVID-02 design (35-02, no results yet) (#170) (d2fc568)
+
+## [0.5.5] - 2026-11-18
+
+### Added
+- feat(capability): per-client enforce proofs, refusal hint, labelled launchers, migration docs (34-03) (#168) (e4f7bea)
+
+### Fixed
+- fix(test): host health-check tiers assert a bounded connect and the six tools, not a ready session (#169) (dbdbf23)
+
+## [0.5.4] - 2026-11-18
+
+### Fixed
+- fix(test): the cold probe lists the workspace root with its required depth (#167) (439e9eb)
+
+### Documentation
+- docs(phase-35): capability token evidence page and its guard test (35-01, not-run placeholders) (#165) (fda1b77)
+- docs(mcp): serve-early boot window documented; GAP-23-02 and GAP-31-04 narrowed (33-02) (#164) (77922ea)
+
+### Maintenance
+- test(mcp): cold production tier without warm-up and the direct cold-attach probe (33-03 code) (#166) (1b0b077)
+
+## [0.5.3] - 2026-11-18
+
+### Added
+- feat(mcp): realm mcp serves the handshake before up completes (33-01, COLD-01..03) (#163) (1d7d6d9)
+
+## [0.5.2] - 2026-11-18
+
+### Added
+- feat(capability)!: enforce capability tokens by default; set capabilityTokens.mode to off to opt out (2637d9a)
+
+### Fixed
+- fix(test): drop the redundant nullish fallback (df6ecec)
+
+## [0.5.1] - 2026-11-18
+
+### Documentation
+- docs(phase-36): v1.0 open item dispositions, Anda closure, supply-chain re-verification (36-02) (#160) (5af036f)
+- docs(plan): plans for phases 33 to 36 (v5.0) (#158) (745c19f)
+- docs(spec): retire the Anda bridge statements in realm-spec.xml (SPEC-01) (#157) (90e7127)
+
+### Maintenance
+- test(phase-36): Muse live validator, Hermes gate bootstrap, Omp responsiveness harness (36-01) (#161) (32fac98)
+- test(capability): decouple the non-token tests and rigs from the capability default (34-01) (#159) (e7b4d57)
+
+## [0.5.0] - 2026-11-18
+
+### Added
+- feat(milestone)!: start v5.0, cold attach, enforced capability tokens and evidence (release line 0.5.x) (2159258)
+
+## [0.4.15] - 2026-11-18
+
+### Documentation
+- docs(milestone): complete v4.0, audit, archive and bookkeeping (#155) (3b6fdc8)
+
+## [0.4.14] - 2026-11-18
+
+### Documentation
+- docs(phase-32): close phase 32, capability tokens for stdio hosts (#154) (56363c7)
+
+## [0.4.13] - 2026-11-18
+
+### Added
+- feat(capability): realm host token status and rotate, doctor item, recipe guard, docs and decision record (32-03) (#153) (0910e14)
+
+## [0.4.12] - 2026-11-18
+
+### Documentation
+- docs(phase-31): close phase 31, wave 1 production boot rehearsals (#152) (f9aaa6d)
+
+## [0.4.11] - 2026-11-18
+
+### Documentation
+- docs(phase-31): codex production tier passed on the production stack (2026-11-18) (#151) (6bab500)
+
+## [0.4.10] - 2026-11-18
+
+### Added
+- feat(capability): capability-attach frame, gate before dispatch, audit attribution, client and host wiring (32-02) (#150) (3fc89b9)
+
+### Documentation
+- docs(phase-31): wave 1 production rehearsal results, registry and matrix; codex exit-race fix (#149) (6ddaa84)
+
+## [0.4.9] - 2026-11-18
+
+### Fixed
+- fix(test): the production tier accepts the modern handshake (server/discover); record the 2026-11-18 live results (#148) (efa7847)
+
+## [0.4.8] - 2026-11-18
+
+### Added
+- feat(capability): token core, keyring, policy key and redaction (32-01) (#145) (c1d1b8f)
+
+### Fixed
+- fix(test): host PATH puts the production podman first; warm-up uses the production PATH (#147) (e709d03)
+
+## [0.4.7] - 2026-11-18
+
+### Fixed
+- fix(test): production host tier cleanup runs every step and warm-up uses the host environment (#146) (acc009a)
+
+## [0.4.6] - 2026-11-18
+
+### Fixed
+- fix(test): warm the session before the production host tier; re-pin the OpenCode jsonc contract; record GAP-31-04 and the codex session result (#144) (5678978)
+
+## [0.4.5] - 2026-11-18
+
+### Fixed
+- fix(test): create the host-boot project before naming its sandbox; correct the OpenCode uninstall contract (observed 2026-11-17) (#141) (9da42cf)
+
+### Documentation
+- docs(phase-30): close phase 30, capability token spike (#143) (1f15910)
+- docs(phase-32): plan capability tokens for stdio hosts (CAPT-02..09) (#142) (8ae8cc5)
+- docs(phase-30): capability token spike with measured results (CAPT-01) (#140) (5503b98)
+
+## [0.4.4] - 2026-11-18
+
+### Documentation
+- docs(phase-28): close phase 28, remove the Anda bridge (#139) (29137f4)
+
+## [0.4.3] - 2026-11-17
+
+### Added
+- feat(core)!: remove the degraded state and display.degraded (ANDAX-03, ANDAX-04) (a56bc15)
+- feat(anda)!: remove the Anda bridge, the andaUrl key and the ANDA error codes (ANDAX-03) (2dda45d)
+
+### Documentation
+- docs(anda)!: retire the Anda documents, document the andaUrl and degraded-state removal (ANDAX-04, ANDAX-05) (8827afd)
+
+### Maintenance
+- chore: allowlist DEFAULT_REQUEST_TIMEOUT_MS as a test seam after the bridge removal (54b6b41)
+
+## [0.4.2] - 2026-11-17
+
+### Added
+- feat(mcp): tool annotations for every Realm tool in both protocol eras (Phase 29) (#134) (63f89c0)
+
+### Documentation
+- docs(phase-29): close phase 29, MCP tool annotations (#137) (0f76b85)
+- docs(phase-27): close phase 27, Anda disposition (#135) (803bbbc)
+
+### Maintenance
+- test(host): wave 1 boot rehearsal harness and boot matrix (31-01) (#136) (8a687e4)
+
+## [0.4.1] - 2026-11-17
+
+### Documentation
+- docs(phase-27): Anda disposition, carry list reconciliation and decision record (ANDAX-01, ANDAX-02) (#133) (4f136dc)
+
+## [0.4.0] - 2026-11-17
+
+### Documentation
+- docs(v4.0): plan phases 27 to 31 (#131) (85ea2bb)
+- docs(milestone): start v4.0 (phases 27 to 31), release line 0.4.x, Anda replacement research (#130) (20a3eb8)
+
+### Maintenance
+- test: close archived v1.0 gaps (MCP notification and id handling, reaper null container record, lockfile integrity gate) (#132) (842d5ca)
+- test(live): live closeout test for the archived v1.0 doctor, socket-mode and timed-out exec gaps (#129) (379c9a5)
+
+## [0.3.54] - 2026-11-17
+
+### Documentation
+- docs(milestone): complete v3.0 Containment by Default (#128) (d87c770)
+- docs(milestones): re-verify archived v1.0 phases 03 to 07 against later live evidence (#126) (cae9172)
+
+## [0.3.53] - 2026-11-17
+
+### Documentation
+- docs(roadmap): add checklist entries and progress rows for phases 21 to 26 (#125) (dacb9b8)
+- docs(phase-26): close phase 26 and ratchet the src/host coverage floors (#124) (73d7574)
+
+## [0.3.52] - 2026-11-17
+
+### Documentation
+- docs(host): author guide, support matrix, gaps page and their tests (TEST-HOST-07, 08) (#123) (db535c1)
+
+### Maintenance
+- test(host): boot matrix over every stdio host and conformance mutants (26-02) (#121) (7ced16a)
+
+## [0.3.51] - 2026-11-17
+
+### Maintenance
+- test(host): cross-host contract checker, registry and lifecycle matrix (26-01) (#122) (0768950)
+
+## [0.3.50] - 2026-11-17
+
+### Documentation
+- docs(phase-26): plan plugin tests and author docs, register TEST-HOST-01 to TEST-HOST-08 (#120) (772c6ee)
+
+## [0.3.49] - 2026-11-17
+
+### Documentation
+- docs(phase-25): close phase 25, host adapters wave 2 (#119) (9df0e87)
+
+## [0.3.48] - 2026-11-17
+
+### Added
+- feat(host): eight JSON recipes for the wave 2 hosts (25-01) (#118) (2540115)
+
+## [0.3.47] - 2026-11-17
+
+### Documentation
+- docs(phase-25): plan host adapters wave 2 (WAVE2-01..08) (#116) (a34041a)
+
+### Maintenance
+- test(omp): scope the host-boot recorder to the test's own sockets (BOOT-08 flake) (#117) (f2895e1)
+
+## [0.3.46] - 2026-11-17
+
+### Documentation
+- docs(phase-24): close phase 24, host adapters wave 1 (#115) (f3fa7d7)
+
+## [0.3.45] - 2026-11-17
+
+### Fixed
+- fix(host): own the Codex mcp table by header instead of comment markers (#114) (c157149)
+
+## [0.3.44] - 2026-11-17
+
+### Added
+- feat(host): host adapters wave 1 engine and recipes (24-01, 24-02) (#113) (9212949)
+
+## [0.3.43] - 2026-11-17
+
+### Documentation
+- docs(phase-24): plan host adapters wave 1, register ADPT-01 to ADPT-09 (#112) (2446cba)
+
+## [0.3.42] - 2026-11-17
+
+### Documentation
+- docs(phase-23): close phase 23, boot integration (#111) (7528a46)
+
+## [0.3.41] - 2026-11-17
+
+### Added
+- feat(host): boot integration for host plugins (Phase 23) (#110) (82928b6)
+
+## [0.3.40] - 2026-11-17
+
+### Documentation
+- docs(phase-22): close phase 22, Omp plugin on boot (#109) (81befb7)
+
+## [0.3.39] - 2026-11-17
+
+### Maintenance
+- test(omp): live boot rehearsal for the installed shim (OMPB-06); record results (#108) (4dfefff)
+
+## [0.3.38] - 2026-11-17
+
+### Documentation
+- docs(phase-23): plan boot integration, register BOOT-01 to BOOT-09 (#107) (929366f)
+
+## [0.3.37] - 2026-11-17
+
+### Added
+- feat(omp): Omp on the host contract, install recipe and auto-open (Phase 22) (#106) (819014d)
+
+## [0.3.36] - 2026-11-17
+
+### Documentation
+- docs(phase-22): plan Omp plugin on boot, register OMPB-01 to OMPB-08 (#104) (1945220)
+
+## [0.3.35] - 2026-11-17
+
+### Documentation
+- docs(phase-21): close phase 21, host plugin contract (#103) (f55ff87)
+
+## [0.3.34] - 2026-11-17
+
+### Added
+- feat(host): host plugin contract, installer engine and realm host CLI (Phase 21) (#102) (bf70847)
+
+## [0.3.33] - 2026-11-17
+
+### Documentation
+- docs(phase-21): plan the host plugin contract (HOST-01..09) (#100) (7ed1ab7)
+
+## [0.3.32] - 2026-11-17
+
+### Documentation
+- docs(phase-20): close phase 20, release pipeline hardening (#99) (58d974e)
+
+## [0.3.31] - 2026-11-17
+
+### Documentation
+- docs(release): drop stale omega-ci comments and fix release-state wording (phase 20) (#97) (339674c)
+
+## [0.3.30] - 2026-11-16
+
+### Added
+- feat(release): rollback passes the verified commit SHA and Pages revalidates it before checkout (plan 20-01) (52a5d67)
+- feat(daemon): bounded health re-attach after a probe failure (plan 19-01) (b77f128)
+- feat(driver): record the sandbox supervisor stderr to supervisor.log (plan 19-01 diagnosis) (56da493)
+- feat(driver): log sandbox supervisor spawn, exit and spawn errors (plan 19-01 diagnosis) (845c65c)
+- feat(checkpoint): pin a stopped project in memory for realm checkpoint (phase 19, RES-04) (21a3b17)
+- feat(observability): 17-02 T1 upId on lifecycle.transition (a74d7c7)
+- feat(observability): 17-02 log control.request for unrecognized control lines (5028c9b)
+- feat(onboard): realm init and doctor --fix for zero-config onboarding (phase 15) (0f141fe)
+
+### Changed
+- diag(driver): log a failed OpenShell create's exit code and redacted stderr (338db2f)
+
+### Fixed
+- fix(driver): rebuild the runtime channel when an adopted sandbox's container restarts (plan 19-01) (2ff6df9)
+- fix(daemon): re-attach restarts the runner on the recorded container, never replaces it (plan 19-01) (02be0c0)
+- fix(driver): short adoption restart grace; poll the workload after a driver restart (plan 19-01) (b21e992)
+- fix(driver): name the cause and failed hardening properties when the driver fails to start (c9fa34b)
+- fix(driver): restart an adopted sandbox's container before respawning its supervisor (plan 19-01) (4ba8ab4)
+- fix(driver): keep the supervisor log across respawns; mark each spawn (plan 19-01 diagnosis) (ddd0d6c)
+- fix(driver): keep supervisor exit log fields as strings (plan 19-01 diagnosis) (af1e430)
+- fix(driver): respawn the sandbox supervisor of an adopted container after restart (plan 19-01) (bd583ad)
+- fix(checkpoint): verifyWorkspacePin matches the in-memory pin (phase 19, plan 19-01) (ec31518)
+- fix(daemon): a failed registry cleanup at startup is a reap failure (phase 18, plan 09 T2) (1775047)
+- fix(runtime): keep the cause of a failed AgentOS stop in phase 17 (e06f7ac)
+- fix(checkpoint): record symlinks whose target climbs a file or loops, not SCHEMA_INVALID (ef9f68a)
+- fix(runtime): free a stale gateway sandbox name before a session create (0abcb80)
+
+### Documentation
+- docs(driver): restart of an adopted sandbox and the bounded health re-attach (plan 19-01) (acbd799)
+- docs(runtime): C5 follows plan 18-01 (ffbff0d)
+- docs(spec): list OPENSHELL_GATEWAY_LOST in the frozen error codes (78ea260)
+- docs(runtime): reconcile AgentOS stop comment with no-removal path in phase 17 (cb03c81)
+- docs(observability): 17-05 T3 record S17-b and gateway-lost re-run results (891c7ad)
+- docs(observability): 17-04 record O-b and O-d per session as owner choice (3cf9d64)
+- docs(observability): 17-04 correct audit.head timing and file in runtime-decision (a5ae315)
+- docs(observability): 17-04 record audit.head per session in H2 (2afd9b5)
+- docs(phase-16): summary for plan 16-01 (OMPX-02/03/04) (4f5b5ba)
+- docs(onboarding): finish phase 15 plan 16 documentation items (58b671d)
+- docs(spec): annotate remaining advisory-default lines as superseded by D4 (fc07976)
+- docs(spec): annotate the advisory-default lines as superseded by D4 (237048c)
+- docs(spec): record the fail-closed default (D4); owner-directed spec edit (fabc4b7)
+- docs(onboard): status and down with --workspace work from another directory (e84b39c)
+- docs(onboard): status and down need the workspace while a daemon runs; L-D2 active frame (727391f)
+- docs(onboard): quickstart and Omp install record from the current build (phase 15) (1f80f7a)
+
+### Maintenance
+- ci(release): run the release, publish, rollback, pages and mutation jobs on GitHub-hosted runners (plan 20-02) (5c9ac7e)
+- test(release): behavior tests for the ci.yml release decision steps (plan 20-03) (d97c7c5)
+- test(live): start each scenario after the previous scenario's host supervisors are gone (plan 19-01) (40a0aec)
+- chore(gates): export-usage allowlist for the test-only seams and drop stale entries (phase 19) (4cb5e14)
+- test(driver): mark the FakeRuntime override explicitly (plan 19-01) (236324f)
+- test(live): drop redundant optional chain on the inspected volume (phase 19, plan 19-01 gap c lint) (52d2428)
+- test(live): add scenario 5c and the driver-restart scenario (phase 19, plan 19-01 gap c) (f031064)
+- test(live): gate the stopped checkpoint round trip and root device/inode checks (phase 19, plan 19-01 gap b) (93457e5)
+- test(checkpoint): cover the stopped-project round trip (phase 19, plan 19-01 gap a) (2dd0008)
+- test(fixture): down takes the project (plan 18-11 T1) (85eeccf)
+- test(daemon): key the MULTI-03 leftover registry entry by its workspace (phase 18 gap fix) (4ad91be)
+- test(daemon): startup line test uses a real leftover entry and record (phase 18, plan 09 T2) (ec94fec)
+- test(daemon): close phase 18 plan 18-06 gaps for T1 (g) and OBS-02 (99edfda)
+- test(mcp): assert the MCP write reply in the two-project case (phase 18, plan 18-11 T2) (eb6e846)
+- test(runtime): pin retry-only contract of gateway-lost hold in phase 17 (e11a283)
+- test(live): remove scenario 13's checkpoint so the next run can reuse its id (d46e322)
+- build(deps): bump @rivet-dev/agentos-core from 0.4.4 to 0.4.7 (4b73f77)
+- test(live): clean each scenario's own state and workspace files (41e890e)
+- test(live): pass the pinned workspace to realm metrics (02c902a)
+- test(live): run a scenario against the driver's own state root (0192120)
+- test(live): carry the host OpenShell registration into each scenario (13e7267)
+- test(live): opt-in keep of a scenario's state for diagnosis (6b75278)
+- build(sandbox): repin the agentos runner digest for the current source (98fd655)
+
 ## [0.3.29] - 2026-11-13
 
 ### Changed

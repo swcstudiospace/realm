@@ -614,7 +614,7 @@ test("runCheck returns 2 for usage, floors file and lcov errors", async () => {
 test("the committed floors file is valid and every floor is a number", () => {
   const committed = JSON.parse(readFileSync(new URL("./coverage-floors.json", import.meta.url), "utf8"));
   validateConfig(committed);
-  assert.deepEqual(Object.keys(committed.floors), DIRECTORIES);
+  assert.deepEqual(Object.keys(committed.floors), [...DIRECTORIES, "src/host"]);
 });
 
 test("the coverage child runs without source maps even when NODE_OPTIONS enables them", () => {

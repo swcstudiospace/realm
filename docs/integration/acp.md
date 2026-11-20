@@ -37,7 +37,7 @@ Which generation Realm targets is not decided here. Phase 5 decides and records 
 
 Sourced answer (v2 transports page, https://agentclientprotocol.com/protocol/v2/transports; v1 transports page is the same in substance):
 
-1. **stdio** (defined): the client launches the agent as a subprocess; newline-delimited JSON-RPC on stdin/stdout. Messages MUST NOT contain embedded newlines. The agent MUST NOT write anything to stdout that is not a valid ACP message. Stderr is for logs. Agents and clients SHOULD support stdio whenever possible.
+1. **stdio** (defined): the client launches the agent as a subprocess; newline-delimited JSON-RPC on stdin/stdout. Messages MUST NOT contain embedded newlines. The agent MUST NOT write anything to stdout that is not a valid ACP message. Stderr is for logs. Agents and clients SHOULD support stdio whenever possible. Realm's trust in the stdin of `realm acp` (and of `realm mcp`) is stated in Q11 of `docs/integration/mcp.md`.
 2. **Streamable HTTP** (not defined): listed as "draft proposal in progress". No normative binding exists in the pages read.
 3. **Custom transports**: permitted, if they preserve the JSON-RPC message format and lifecycle requirements.
 
@@ -64,6 +64,12 @@ The leading underscore follows the ACP extensibility rules (https://agentclientp
 Capability advert: the `initialize` reply carries `agentCapabilities: { _meta: { "realm/tool": true } }` next to `protocolVersion` and `agentInfo`, so a client can discover the extension. The extensibility page suggests `com.example/<name>` keys under `_meta`; Realm controls no reverse-DNS domain, so the key is the method name without its underscore.
 
 Realm is a tool bridge, not a full ACP agent. It implements `initialize` and the one extension method `_realm/tool`, and answers `session/new` and `session/prompt` with `-32601`. A standard ACP host therefore cannot start a session with it; only a Realm-aware client that calls `_realm/tool` can use the tools.
+
+### Q6. Boot sequence under `realm acp`
+
+`realm acp [--workspace <absolute path>] [--host <id>] [--reattach]` runs the six boot steps in order (resolve, ensure, up, readback, settle, expose) and starts its agent only after step 5 settles, so for ACP the first protocol reply is still the readiness signal. `realm mcp`, by contrast, creates its server right after step 1 and boots behind it (`docs/integration/mcp.md`, Q7). The flag grammar, the teardown on stdin EOF and on `SIGTERM`, `SIGINT` and `SIGHUP`, the rule that no boot path sends `down`, and the logging levels are the same.
+
+ACP is stricter than MCP about what it serves. It still answers only after the boot settles: it starts only when the boot is `ready` and the realm's state is `active`. A refused `up`, an attach failure, or any other state exits 1 before any frame, with the catalogue code (and, for a state, `code: reason`) on stderr and nothing on stdout, and a failed boot still exits 1. A refused `up` is not kept: `realm acp` closes that client and exits. `--reattach` applies to link loss after a successful boot only; a boot failure with `--reattach` still exits 1. A session started with no `--host` is reported as `unlabelled`. The serve-early change of Phase 33 does not apply to `realm acp`; the tests that show it are `test/cli/stdio-cold-attach.test.ts` and `test/cli/stdio-host.test.ts`. No protocol claim in Q1 to Q5 changes.
 
 ### Live check (2026-10-29)
 

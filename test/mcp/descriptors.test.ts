@@ -48,6 +48,11 @@ void test("TOOL-05: the descriptors list exactly the six tools the frozen schema
   for (const descriptor of MCP_TOOL_DESCRIPTORS) {
     assert.equal(typeof descriptor.description, "string");
     assert.ok(descriptor.description.length > 0, `${descriptor.name} has a description`);
+    assert.equal(typeof descriptor.title, "string");
+    assert.ok(descriptor.title.length > 0, `${descriptor.name} has a title`);
+    assert.equal(typeof descriptor.annotations, "object", `${descriptor.name} has annotations`);
+    assert.notEqual(descriptor.annotations, null);
+    assert.equal(typeof descriptor.inputSchema, "object", `${descriptor.name} keeps its input schema`);
   }
 });
 

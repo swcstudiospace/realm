@@ -1,7 +1,7 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v3.0 — Containment by Default",
+  "milestone": "v9.0",
   "phases": [
     {
       "number": "1",
@@ -96,17 +96,17 @@
     {
       "number": "12",
       "name": "Scripted-provider harness and Omp enforcement spike",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "13",
       "name": "Quality ratchet",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "14",
       "name": "Crash-safety pack",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "15",
@@ -116,33 +116,228 @@
     {
       "number": "16",
       "name": "Omp runs in the sandbox",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "17",
       "name": "Observability and tamper-evident audit",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "18",
       "name": "Per-project sandboxes",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "19",
       "name": "Resume and checkpoint",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "20",
       "name": "Release pipeline hardening",
+      "status": "complete"
+    },
+    {
+      "number": "21",
+      "name": "Host plugin contract and installer",
+      "status": "complete"
+    },
+    {
+      "number": "22",
+      "name": "Omp plugin on boot",
+      "status": "complete"
+    },
+    {
+      "number": "23",
+      "name": "Boot integration for host plugins",
+      "status": "complete"
+    },
+    {
+      "number": "24",
+      "name": "Host adapters wave 1: Claude Code, OpenCode, Codex, Kimi CLI",
+      "status": "complete"
+    },
+    {
+      "number": "25",
+      "name": "Host adapters wave 2: remaining GSD Core runtimes",
+      "status": "complete"
+    },
+    {
+      "number": "26",
+      "name": "Plugin contract tests, boot tests and author docs",
+      "status": "complete"
+    },
+    {
+      "number": "27",
+      "name": "Anda disposition and v4.0 requirement closure",
+      "status": "complete"
+    },
+    {
+      "number": "28",
+      "name": "Remove the Anda bridge",
+      "status": "complete"
+    },
+    {
+      "number": "29",
+      "name": "MCP tool annotations",
+      "status": "complete"
+    },
+    {
+      "number": "30",
+      "name": "Capability token spike",
+      "status": "complete"
+    },
+    {
+      "number": "31",
+      "name": "Production-stack boot rehearsals for wave 1 hosts",
+      "status": "complete"
+    },
+    {
+      "number": "32",
+      "name": "Capability tokens for stdio hosts",
+      "status": "complete"
+    },
+    {
+      "number": "33",
+      "name": "Cold attach",
+      "status": "complete"
+    },
+    {
+      "number": "34",
+      "name": "Capability tokens enforce by default",
+      "status": "complete"
+    },
+    {
+      "number": "35",
+      "name": "Capability token evidence",
+      "status": "complete"
+    },
+    {
+      "number": "36",
+      "name": "Live re-verification of the v1.0 open items",
+      "status": "complete"
+    },
+    {
+      "number": "37",
+      "name": "Spec update",
+      "status": "complete"
+    },
+    {
+      "number": "38",
+      "name": "Omp responsiveness during cold attach",
+      "status": "complete"
+    },
+    {
+      "number": "39",
+      "name": "Timed-out exec kill proof",
+      "status": "complete"
+    },
+    {
+      "number": "40",
+      "name": "Host ids for Muse Code, Prime Agent and Grok Build",
+      "status": "complete"
+    },
+    {
+      "number": "41",
+      "name": "Daemon teardown flake",
+      "status": "complete"
+    },
+    {
+      "number": "42",
+      "name": "Evidence debt",
+      "status": "complete"
+    },
+    {
+      "number": "43",
+      "name": "Kimi and kimi-code rehearsal",
+      "status": "complete"
+    },
+    {
+      "number": "44",
+      "name": "Omp non-blocking cold attach",
+      "status": "complete"
+    },
+    {
+      "number": "45",
+      "name": "Omp responsiveness, a measurement that can yield a valid verdict",
+      "status": "pending"
+    },
+    {
+      "number": "46",
+      "name": "Rapid stop then up (F-41-1)",
+      "status": "pending"
+    },
+    {
+      "number": "47",
+      "name": "Legacy kimi production tier and environment forwarding",
+      "status": "pending"
+    },
+    {
+      "number": "48",
+      "name": "Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build",
+      "status": "pending"
+    },
+    {
+      "number": "49",
+      "name": "Omp calibration repeat",
+      "status": "pending"
+    },
+    {
+      "number": "50",
+      "name": "Grok harness fix and production re-run",
+      "status": "pending"
+    },
+    {
+      "number": "51",
+      "name": "Rapid stop then up repeat (F-41-1)",
+      "status": "pending"
+    },
+    {
+      "number": "52",
+      "name": "Legacy kimi cause (GAP-43-03)",
+      "status": "pending"
+    },
+    {
+      "number": "53",
+      "name": "Concurrent binding design (HITL, owner-approved scope)",
+      "status": "pending"
+    },
+    {
+      "number": "54",
+      "name": "Snapshots design (HITL, owner-approved scope)",
+      "status": "pending"
+    },
+    {
+      "number": "55",
+      "name": "Omp plugin health check",
+      "status": "pending"
+    },
+    {
+      "number": "56",
+      "name": "F-51-1 cause",
+      "status": "pending"
+    },
+    {
+      "number": "57",
+      "name": "HTIER-01 attribution retest",
+      "status": "pending"
+    },
+    {
+      "number": "58",
+      "name": "KIMV-02 recorder fix and rerun",
+      "status": "pending"
+    },
+    {
+      "number": "59",
+      "name": "Concurrent binding implementation",
       "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd-progress --next",
-    "label": "Advance to the next step (verify)",
-    "reason": "Phase 1 of 9 · 70% · ready to verify"
+    "command": "/gsd-progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-11-14T08:46:18.998Z"
+  "updated_at": "2026-11-20T09:00:00.000Z"
 }

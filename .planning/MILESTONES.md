@@ -1,5 +1,62 @@
 # Milestones
 
+## v6.0 Responsiveness, exec kill proof, host ids and evidence debt (Shipped: 2026-11-19)
+
+**Phases completed:** 7 phases, 17 plans (plans 38-02 and 38-03 were superseded by Phase 44 and not executed)
+
+**Requirements:** 19 audited (OMPR-01..06, EXEC-01..03, HOSTID-01..03, TEAR-01..02, DEBT-01..03, KIMI-01..02): 17 marked Complete (OMPR-02 not triggered, OMPR-03 as VOID, HOSTID-02 and DEBT-03 with recorded partials), OMPR-01 carried (not met) and OMPR-06 partial. Audit: `milestones/v6.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- The Omp cold attach could not be measured on a quiet host: Phase 38's window made six attempts and recorded one valid run (case `serving-stall`), so its frozen rule gave VOID and OMPR-01 stays not met with OI-11 `Carried (no quiet slot)`. The owner (2026-11-19) took that run and the loaded runs as sufficient to act, and Phase 44 corrected the harness (the verdict window starts at Omp's ready frame; control-relative and CPU-pressure secondary measures), split the daemon launch out of the CLI (the extension's value imports 98 to 43) and deferred the attach start one turn (hermetic proof, fail closed kept), then ran a paired loaded A/B window that ended VOID (three valid pairs of five, OMPR-06 partial). No effect of the change is claimed, and `src/omp/plugin.ts` is at the 1000-line ceiling.
+- A real defect was closed (F-3, Phase 39): a timed-out exec left its process tree running in the sandbox, because the group kill is denied by the sandbox seccomp. An in-sandbox bash `/proc`-sweep watchdog now wraps every dispatcher exec; live closeout C showed the tree dead 2988 ms after the `TOOL_TIMEOUT` reply with 269 s of the sleeper's life left. The earlier Phase 24 closeout C and Phase 36 records were invalid for the kill claim and are corrected; the reply, bounds, audit line and error catalogue are unchanged.
+- Muse Code, Prime Agent and Grok Build have host ids and recipes (22 host ids, pinned in docs and tests) and attach under the enforce default (GAP-34-01 closed); the evidence is the daemon proof and the hosts' own CLIs at the validator tier, with no production tier and no model-driven call, and a Grok Build session that loads the shared Claude files stays attributed `claude` (GAP-40-01).
+- The slow daemon stop was explained and bounded (Phase 41): the stage bounds of one session end summed to more than the 30 s stop bound; the bound was derived and 10 live stops showed none near 30 s. Finding F-41-1 (a start failure after a rapid stop) is carried with its cause not established.
+- The v5.0 evidence debt was paid (Phase 42): the whole unit suite as uid 5002 (5542 tests, 0 failures, after a stale-build artefact and one test fix), a breaking-change marker guard (`scripts/check/breaking-change-guard.mjs`, 46 tests) and its CI workflow (option A, merged on the owner's review of the exact head, green on a real pull request), the ENF-04 closure statement; the ship flow's own `--enforce` run is owner-side and unconfirmed (DEBT-03 partial).
+- Kimi Code 2.6.3 passed the validator and production tiers cold, and the legacy kimi-cli 1.51.0 passed its validator tier and failed its production tier (cause not established; GAP-43-01 to GAP-43-03). Owner decisions of 2026-11-18/19: v6.0 scope A to F, release line 0.6.x, the latest release line is supported, CI option A, take the loaded evidence for Phase 44, complete v6.0; the v7.0 candidates are the Omp responsiveness repeat with a harness fix, F-41-1, the legacy kimi CLI and GAP-43-01, GAP-40-01 and production tiers for the new hosts, and the ship-flow enforce confirmation.
+
+---
+
+## v5.0 Cold attach, enforced capability tokens and evidence (Shipped: 2026-11-18)
+
+**Phases completed:** 5 phases, 13 plans, 0 tasks
+
+**Requirements:** 14 audited (COLD-01..04, ENF-01..04, EVID-01..03, V1LIVE-01..02, SPEC-01), all Complete (ENF-04 with a recorded partial). Audit: `milestones/v5.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- `realm mcp` answers the MCP handshake and `tools/list` at once and boots behind a not-active gate (calls refused `REALM_NOT_ACTIVE`, retryable, until ready; the same connection serves afterwards): the first answer came in 500 ms where it took 35 to 60 s, and claude 2.1.322, opencode 1.19.5 and codex-cli 0.154.0 connected cold within the bound with the warm-up removed (GAP-31-04 and GAP-23-02 closed). Release line 0.5.x.
+- Capability tokens enforce by default, a breaking change with a documented opt-out (`"mode": "off"`): every shipped client attaches under enforce (a test per client class), a stale or unlabelled client is refused `POLICY_DENIED` with the cause and the fix on every text channel, and two real stale binaries were refused live. Muse Code, Prime Agent and Grok Build have no host id and stay refused (GAP-34-01); ENF-04 is partial (the 34-03 squash title lacks the `!` marker; the flip commit is in the changelog).
+- The token claims were measured: Set A of the capability tests ran twice as a regular user on a `ptrace_scope` 1 host (494 of 494), a non-descendant same-uid process was denied at the memory open (descendant and root controls found the secrets), and a live enforce proof on the production stack showed claude cold to active with audit lines carrying host and kid, using a scripted loopback provider and no real model. Tokens give no defence against a same-uid reader.
+- The v1.0 live items this host can run were re-verified or carried with a named reason, and all 14 open items have a final label; OI-13 closed by the owner (Q11), the Anda items dropped (D-27-01), and OI-11 (Omp responsiveness) recorded as a loaded-host run that failed its thresholds, carried with finding F-3 into a v5.1 candidate phase.
+- `docs/specs/realm-spec.xml` no longer describes the Anda bridge, `andaUrl`, the `ANDA_` codes or the degraded state (five states), with history kept and marked retired, on the owner's instruction of 2026-11-18. Owner decisions of 2026-11-18: complete v5.0; OI-13 accepted; OI-11 accepted as a loaded-host run; F-3 and OI-11 planned for v5.1, not built.
+
+---
+
+## v4.0 Anda removal, MCP hardening and production boot proof (Shipped: 2026-11-18)
+
+**Phases completed:** 6 phases, 14 plans, 0 tasks
+
+**Requirements:** 18 audited (ANDAX-01..05, MCPA-01..02, CAPT-01..09, BOOTP-01..02), all Complete. Audit: `milestones/v4.0-MILESTONE-AUDIT.md` (passed_with_accepted_limitations).
+
+**Key accomplishments:**
+- Every open Anda item dispositioned by recorded owner decisions (D-27-01 to D-27-05), the v2.0 carry list reconciled, and the Anda bridge removed with a clean cutover: no `andaUrl` key (refused with a migration sentence), no `ANDA_` codes, no degraded state, no doctor check (release line 0.4.x, breaking change).
+- `realm mcp` advertises tool annotations for all six tools in both protocol eras, pinned by an independent table, a mutation test and the smoke gate.
+- A bounded capability-token spike recorded its criteria outcome (DROP) and the owner's override to BUILD; Phase 32 built per-session, per-host HMAC capability tokens for stdio hosts (keyring with rotation and revoke, gate before dispatch fail-closed with policy, audit attribution, `realm host token`, doctor item), default off, with the no-defence-against-a-same-uid-reader limit documented.
+- Production-stack boot rehearsals on rootless Podman 5.7.1: claude 2.1.322 and codex-cli 0.154.0 (and opencode 1.19.5) booted through their own CLIs on 2026-11-18; kimi and kimi-code are named gaps.
+- Owner decisions of 2026-11-18: complete v4.0; plan enforce-by-default capability tokens and a serve-early cold-attach phase as v5.0 candidates.
+
+---
+
+## v3.0 v3.0 (Shipped: 2026-11-17)
+
+**Phases completed:** 15 phases, 68 plans, 0 tasks
+
+**Key accomplishments:**
+- Closes the code side of verification gap 1 (CR-01): under advisory, a host `edit` and a Realm `write` are refused when the realm status cannot be read. HARN-02 and OMP-05 are NOT closed by this plan; the live half stays with plan 12-03.
+- Closes the code and test side of verification gap 2 (WR-01): the four HARN-02 registered-write tests now exist and run over the real dispatcher, pinned filesystem, lock table and audit log. The live guard cases are re-pointed to the owner's 2026-11-12 ruling, and the guard docs describe them. HARN-02's live half, HARN-03, HARN-04 and OMP-05 are NOT closed by this plan.
+- Status: complete.
+
+---
+
 ## v2.0 Host Adapters, Live Verification and Production Isolation (Shipped: 2026-10-29; releases 0.2.0 and 0.2.1)
 
 **Phases completed:** 11 phases (8, 9, 9.1 to 9.7, 10 and 11), 12 plans (task count not recomputed in this archive)

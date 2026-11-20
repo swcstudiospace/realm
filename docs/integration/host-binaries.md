@@ -54,7 +54,7 @@ What a pin does:
 Observed with Podman 5.7.1:
 
 - With no daemon, on 2026-10-28, when the report still had eleven items, `realm doctor` ran its local checks and exited 0.
-- With a daemon answering, every check passed except `anda-bridge` (no engine URL is configured, expected) and `host-binaries`. `host-binaries` warned only because the daemon's environment carried no `REALM_DRIVER_SUPERVISOR_BINARY`, so the supervisor could not be located: the check reads the path from the environment of the process that answers.
+- With a daemon answering, every check passed except `anda-bridge` (no engine URL is configured, expected) and `host-binaries`. `host-binaries` warned only because the daemon's environment carried no `REALM_DRIVER_SUPERVISOR_BINARY`, so the supervisor could not be located: the check reads the path from the environment of the process that answers. This record is from a 0.3.x build; the item or field it names no longer exists.
 - With the path and the pin in that environment, `host-binaries` passed and printed `supervisor 0.1.5 1b97e115b63b`, `openshell 0.1.5 446f766842d2`, `openshell-gateway 0.1.5 c8fa78fd49f2` and `podman 5.7.1 190c130ac5e3` (digest prefixes of 12 characters, matching the table above).
 - `kernel-hardening` reported yama `ptrace_scope` 1.
 

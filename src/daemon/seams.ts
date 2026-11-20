@@ -1,19 +1,17 @@
-// The daemon's production seams and their helpers: the options a handle is built from, the default execution and Anda bridge,
+// The daemon's production seams and their helpers: the options a handle is built from, the default execution,
 // the libpod client and the AgentOS supervisors, the control socket file and its liveness probe, and the selection, status
 // and refusal helpers of the control dispatch. startDaemon and buildDaemonHandle compose them; this module reads no process
 // environment.
 
 import { rmSync } from "node:fs";
-import { AndaBridge } from "../anda/client.js";
 import type { Policy, PolicyMode } from "../contract/validate.js";
 import { makeRealmError, RealmError } from "../core/errors.js";
-import type { BridgePort, ExecutionService } from "../core/ports.js";
+import type { ExecutionService } from "../core/ports.js";
 import type { StateSnapshot } from "../core/state-machine.js";
 import { displayStatus, type DisplayStatus } from "../core/status.js";
 import { dialWithin, sleep } from "../core/timeout.js";
-import type { Logger } from "../observe/logger.js";
 import { AgentOsSupervisor, type AgentOsDriver } from "../runtime/agentos.js";
-import { andaBridgeRequired, type RuntimeConfig } from "../runtime/config.js";
+import type { RuntimeConfig } from "../runtime/config.js";
 import { LibpodClient } from "../runtime/libpod-client.js";
 import type { OpenShellRunner } from "../runtime/openshell.js";
 import { SessionExecution, type SessionContainers, type SupervisorFor } from "../runtime/session-execution.js";
@@ -33,14 +31,11 @@ export interface BuildDaemonHandleOptions {
   readonly policyPath: string;
   readonly policy?: Policy;
   readonly sessionId: string;
-  // Adapter seam (P6-D12). When exec or bridge is omitted the production
+  // Adapter seam (P6-D12). When exec is omitted the production
   // adapter is built from the seams below; tests inject the existing fakes here.
   readonly exec?: ExecutionService;
-  readonly bridge?: BridgePort;
   readonly runOpenShell?: OpenShellRunner;
   readonly clock?: () => Date;
-  // Request log (OBS-02). The Anda bridge built here writes its listener diagnostics to it.
-  readonly logger?: Logger;
   // Production construction seams, used only when exec is omitted.
   readonly libpod?: SessionContainers;
   readonly libpodSocketPath?: string;
@@ -57,6 +52,8 @@ export interface BuildDaemonHandleOptions {
   // reads are used. The startup adoption verdict takes the same readers.
   readonly readOciConfig?: (path: string) => string;
   readonly readProcStatus?: (pid: number) => string;
+  // The bound of one session's teardown in milliseconds. Defaults to TEARDOWN_TIMEOUT_MS. A test injects a small value; production never sets it.
+  readonly teardownTimeoutMs?: number;
 }
 
 // The report of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with
@@ -188,19 +185,9 @@ export function defaultExec(
     config: {
       image: config.image,
       stateDir: config.stateDir,
-      ...(config.andaUrl !== undefined ? { andaUrl: config.andaUrl } : {}),
     },
     egressAllow: policy.egressAllow,
   });
-}
-
-// The Anda bridge over the configured URL, or null when no URL is configured, so the session has no
-// bridge and runs no handshake (C4).
-export function defaultBridge(config: RuntimeConfig, logger: Logger | undefined): BridgePort | null {
-  if (!andaBridgeRequired(config)) {
-    return null;
-  }
-  return new AndaBridge({ url: config.andaUrl, ...(logger === undefined ? {} : { logger }) });
 }
 
 // Dials a Unix socket and closes it at once, mirroring the doctor default

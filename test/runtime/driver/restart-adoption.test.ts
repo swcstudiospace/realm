@@ -5,7 +5,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { credentials, makeClientConstructor, type ServiceDefinition, type ServiceError } from "@grpc/grpc-js";
 import { makeRealmError, RealmError } from "../../../src/core/errors.js";
@@ -13,7 +13,8 @@ import { COMPUTE_DRIVER_SERVICE_NAME, loadComputeDriverService, type ComputeDriv
 import { startDriver, type DriverProcessConfig, type DriverStartSeams } from "../../../src/runtime/driver/main.js";
 import type { LifecycleLibpod } from "../../../src/runtime/driver/lifecycle.js";
 import { sandboxBindingOf, type SandboxBinding } from "../../../src/runtime/driver/sandbox-binding.js";
-import { DESCRIPTOR_FILE_NAME, secretDirOf, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
+import { DESCRIPTOR_FILE_NAME, SSH_DIR_NAME, secretDirOf, writeLaunchMaterial } from "../../../src/runtime/driver/secret-store.js";
+import type { SupervisorHandle, SupervisorSpawn } from "../../../src/runtime/driver/supervisor.js";
 import {
   HARDENING_PROFILE,
   RUNTIME_ARGV,
@@ -43,12 +44,14 @@ interface Survivor {
 }
 
 // The engine a fresh driver starts against. It holds the containers and the scratch volumes the previous generation left, and it records
-// every container removal, so a test can show what the start and each RPC removed. Nothing is created or started here: a restart creates
-// no container.
+// every container removal, stop and start, so a test can show what the start and each RPC did to them. Nothing is created here: a restart
+// creates no container, and it restarts each adopted one.
 class RestartEngine implements LifecycleLibpod {
   readonly containers = new Map<string, Survivor>();
   readonly volumes = new Map<string, Readonly<Record<string, string>>>();
   readonly removals: string[] = [];
+  readonly stops: string[] = [];
+  readonly starts: string[] = [];
 
   info(): Promise<LibpodInfo> {
     return Promise.resolve({ rootless: true, version: ENGINE_VERSION });
@@ -68,7 +71,8 @@ class RestartEngine implements LifecycleLibpod {
     return Promise.resolve(survivor === undefined ? null : structuredClone(survivor.inspect));
   }
 
-  stopContainer(): Promise<void> {
+  stopContainer(reference: string): Promise<void> {
+    this.stops.push(reference);
     return Promise.resolve();
   }
 
@@ -82,8 +86,9 @@ class RestartEngine implements LifecycleLibpod {
     return Promise.reject(makeRealmError("SCHEMA_INVALID"));
   }
 
-  startContainer(): Promise<void> {
-    return Promise.reject(makeRealmError("SCHEMA_INVALID"));
+  startContainer(reference: string): Promise<void> {
+    this.starts.push(reference);
+    return Promise.resolve();
   }
 
   createVolume(name: string, labels: Readonly<Record<string, string>>): Promise<void> {
@@ -288,8 +293,16 @@ void test("restart: the start adopts a conforming survivor and rebuilds its regi
   // survivor with the sandbox's id and name.
   assert.deepEqual(engine.removals, [], "the start removed no container");
   assert.equal(engine.containers.has(id), true, "the survivor's container is kept");
+  assert.deepEqual([engine.stops, engine.starts], [[name], [name]], "the survivor's container was restarted once, so its runtime accepts the new supervisor");
   assert.equal(engine.volumes.has(scratchVolumeNameOf(session)), true, "the survivor's scratch volume is kept");
   assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "launch.json")), true, "the survivor's launch material is kept");
+  // The runtime consumed its bootstrap in the previous life, so the restart wrote a fresh one before it started the container.
+  assert.equal(
+    existsSync(join(secretDirOf(config.secretRoot, name), "channel", "bootstrap.json")),
+    true,
+    "the runtime's bootstrap was written again for the restarted container",
+  );
+  assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "channel", "server.key")), false, "the TLS key is removed once the listener answered");
   assert.equal(runtime.spawns.length, 1, "the supervisor was respawned once");
   const args = runtime.spawns[0]?.args ?? [];
   assert.equal(args[args.indexOf("--sandbox-id") + 1], SANDBOX_ID);
@@ -339,6 +352,27 @@ void test("restart: a survivor whose supervisor cannot be respawned is destroyed
   assert.equal(existsSync(processConfig.socketPath), false, "the failed start left no socket");
 });
 
+void test("restart: a survivor whose container cannot be restarted is destroyed, and no supervisor is spawned for it", async (t) => {
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(dirname(config.sandboxStateRoot), { recursive: true, force: true });
+  });
+  const engine = new RestartEngine();
+  const name = leaveSurvivor(engine, config);
+  engine.startContainer = (): Promise<void> => Promise.reject(makeRealmError("OPENSHELL_START_FAILED"));
+  const runtime = new FakeRuntime();
+  const processConfig = processConfigOf(config);
+
+  await assert.rejects(
+    startDriver(processConfig, seamsOver(engine, runtime)),
+    (error: unknown) => error instanceof RealmError && error.code === "OPENSHELL_START_FAILED",
+  );
+
+  assert.equal(runtime.spawns.length, 0, "no supervisor was spawned against a container that did not restart");
+  assert.equal(engine.containers.size, 0, "the survivor's container was removed");
+  assert.equal(existsSync(secretDirOf(config.secretRoot, name)), false, "the survivor's secret directory was removed");
+});
+
 void test("restart: the start logs an adopted line for the kept container, and a removed line with its cause for one with no record", async (t) => {
   const config = driverConfig();
   t.after(() => {
@@ -367,4 +401,40 @@ void test("restart: the start logs an adopted line for the kept container, and a
     `realm compute driver adoption removed: container=${orphanId} cause=no-record`,
     `realm compute driver adoption adopted: container=c-${kept}`,
   ]);
+});
+
+// A runtime whose spawn records whether the survivor's ssh directory is still on disk when the supervisor starts.
+class SshAtSpawnRuntime extends FakeRuntime {
+  readonly sshDir: string;
+  readonly sshDirAtSpawn: boolean[] = [];
+  constructor(sshDir: string) {
+    super();
+    this.sshDir = sshDir;
+  }
+  override spawnSupervisor(options: SupervisorSpawn): Promise<SupervisorHandle> {
+    this.sshDirAtSpawn.push(existsSync(this.sshDir));
+    return super.spawnSupervisor(options);
+  }
+}
+
+void test("restart: the respawned supervisor starts with no ssh directory left by the previous supervisor", async (t) => {
+  const config = driverConfig();
+  t.after(() => {
+    rmSync(dirname(config.sandboxStateRoot), { recursive: true, force: true });
+  });
+  const engine = new RestartEngine();
+  const name = leaveSurvivor(engine, config);
+  // The previous supervisor created its ssh directory and bound its socket in it, then exited with the previous driver.
+  const sshDir = join(secretDirOf(config.secretRoot, name), SSH_DIR_NAME);
+  mkdirSync(sshDir, { mode: 0o700 });
+  writeFileSync(join(sshDir, "ssh.sock"), "");
+  const runtime = new SshAtSpawnRuntime(sshDir);
+  const server = await startDriver(processConfigOf(config), seamsOver(engine, runtime));
+  t.after(async () => {
+    await server.close();
+  });
+
+  assert.equal(runtime.spawns.length, 1, "the supervisor was respawned once");
+  assert.deepEqual(runtime.sshDirAtSpawn, [false], "the previous supervisor's ssh directory was removed before the respawn");
+  assert.equal(existsSync(join(secretDirOf(config.secretRoot, name), "launch.json")), true, "the survivor's launch material is kept");
 });

@@ -556,6 +556,7 @@ export function createScenarioEnvironment(inputs: LiveInputs, spec: ScenarioSpec
 // The state-root entries the run may create, by directory. Entries already present are never removed.
 const SHARED_STATE_DIRECTORIES: readonly string[] = Object.freeze([
   "audit",
+  "capability",
   "checkpoints",
   "runtime",
   "run",
@@ -1080,7 +1081,7 @@ export interface McpExit {
 }
 
 // One `realm mcp` child and the JSON-RPC conversation with it. stdout carries only MCP messages and diagnostics go to stderr
-// (src/cli/main.ts runMcp), so stderr is kept, bounded, for failure messages.
+// (src/cli/stdio-host.ts runStdioHost), so stderr is kept, bounded, for failure messages.
 export interface McpSession {
   // Sends one request and resolves with its result. Rejects when the JSON-RPC response is an error, when the child ends first,
   // or when no response arrives within timeoutMs.
@@ -1095,12 +1096,38 @@ export interface McpSession {
   kill(): void;
   // The clipped stderr text, as one JSON string.
   stderr(): string;
+  // The child's pid, for a probe aimed at it; undefined when the process could not start.
+  readonly pid: number | undefined;
 }
 
-// Starts `realm mcp --workspace <pinned root>` on the current node binary with the scenario's explicit environment and stdio
-// pipes. Nothing is written until the first request.
-export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment): McpSession {
-  const child = spawn(process.execPath, [inputs.cliPath, "mcp", "--workspace", inputs.workspaceRoot], {
+// The host label of every `realm mcp` session the live suites start. Capability tokens are enforced by default, and a session with no
+// host id carries no token, so the daemon refuses its calls POLICY_DENIED. The label is unauthenticated: it only selects the token
+// profile. These suites test the daemon, not a host, so they use one fixed label.
+export const LIVE_MCP_HOST = "claude";
+
+export interface McpSessionOptions {
+  // The host id after --host. Absent: LIVE_MCP_HOST. null: the unlabelled form (no host flag), which an enforcing daemon refuses.
+  readonly host?: string | null;
+  // The project the session claims. Absent: the pinned workspace root.
+  readonly workspace?: string;
+}
+
+// The argv after node for a live `realm mcp` session: the compiled CLI, the host label (unless unlabelled) and the workspace.
+export function mcpSessionArgv(inputs: LiveInputs, options: McpSessionOptions = {}): readonly string[] {
+  const host = options.host === undefined ? LIVE_MCP_HOST : options.host;
+  return [inputs.cliPath, "mcp", ...(host === null ? [] : ["--host", host]), "--workspace", options.workspace ?? inputs.workspaceRoot];
+}
+
+// The argv of `realm mcp` for a live session at the pinned workspace root with the default label.
+export function mcpArgvOf(inputs: LiveInputs): readonly string[] {
+  return mcpSessionArgv(inputs);
+}
+
+// Starts `realm mcp --host <host> --workspace <root>` on the current node binary with the scenario's explicit environment and stdio
+// pipes (default host LIVE_MCP_HOST, default workspace the pinned root; see McpSessionOptions). Nothing is written until the first
+// request. The child's pid is exposed so a probe can be aimed at it.
+export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironment, options: McpSessionOptions = {}): McpSession {
+  const child = spawn(process.execPath, mcpSessionArgv(inputs, options), {
     env: { ...scenario.cliEnvironment },
     cwd: scenario.root,
     stdio: ["pipe", "pipe", "pipe"],
@@ -1210,6 +1237,7 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
     stderr() {
       return clip(stderrText);
     },
+    pid: child.pid,
   };
 }
 
@@ -1219,7 +1247,7 @@ export function startMcpSession(inputs: LiveInputs, scenario: ScenarioEnvironmen
 // The legacy revision a realm mcp session handshakes with (src/mcp/protocol.ts), the one Claude Code uses.
 export const MCP_LEGACY_REVISION = "2025-11-25";
 // The bound on every MCP response. The first one, the answer to initialize, is the exception: realm mcp claims the workspace
-// before it reads any input (src/cli/main.ts runMcp: ensure the daemon, then up, then serve), so that answer waits for the
+// before it reads any input (src/cli/stdio-host.ts runStdioHost: ensure the daemon, then up, then serve), so that answer waits for the
 // attach, which has its own 60 s control bound after the daemon start. A hung server fails the test with a clear message, unless
 // the 5 minute scenario timeout fires first: the sum of the bounds can exceed it.
 export const MCP_RESPONSE_TIMEOUT_MS = 60_000;
@@ -1257,6 +1285,47 @@ export async function initializeMcp(session: McpSession): Promise<void> {
   );
   assert.equal(field(initialized, "protocolVersion"), MCP_LEGACY_REVISION, `initialize: ${describeValue(initialized)}`);
   session.notify("notifications/initialized");
+}
+
+// realm mcp answers the handshake at once (serve-early) and refuses every tool call REALM_NOT_ACTIVE, retryable, until the daemon
+// has adopted the client. A live test that calls a tool straight after the handshake must first wait until the session is served.
+// The bound is the cold-attach ready bound (COLD_PROBE_READY_TIMEOUT_MS, 240 s); the helper lives here because cold-attach-probe.ts
+// imports this module.
+export const SERVED_TIMEOUT_MS = 240_000;
+export const SERVED_POLL_INTERVAL_MS = 2_000;
+
+export interface ServedOptions {
+  readonly timeoutMs?: number;
+  readonly intervalMs?: number;
+  readonly clock?: PollClock;
+}
+
+// Polls a status tools/call until it is not refused REALM_NOT_ACTIVE. Any other tool error fails at once with its fields; a bound
+// that passes while the session still refuses fails with the last refusal and the child's stderr. A child that ends rejects the
+// request, which the poll lets through.
+export async function waitUntilServed(session: Pick<McpSession, "request" | "stderr">, options: ServedOptions = {}): Promise<void> {
+  const outcome = await pollUntil(
+    async () => {
+      const result = await session.request("tools/call", { name: "status", arguments: {} }, MCP_RESPONSE_TIMEOUT_MS);
+      if (field(result, "isError") !== true) {
+        return { done: true };
+      }
+      const refusal = toolErrorOf(result);
+      if (refusal === undefined || refusal.code !== "REALM_NOT_ACTIVE") {
+        assert.fail(`the status call that waits for the served session returned a tool error that is not REALM_NOT_ACTIVE: ${describeValue(result)}; realm mcp stderr ${session.stderr()}`);
+      }
+      return { done: false, detail: `REALM_NOT_ACTIVE retryable ${String(refusal.retryable)}` };
+    },
+    {
+      timeoutMs: options.timeoutMs ?? SERVED_TIMEOUT_MS,
+      intervalMs: options.intervalMs ?? SERVED_POLL_INTERVAL_MS,
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
+    },
+  );
+  assert.ok(
+    outcome.ok,
+    `realm mcp must serve a tool call within ${String((options.timeoutMs ?? SERVED_TIMEOUT_MS) / 1000)} s of the handshake; ${String(outcome.attempts)} status calls were refused, the last: ${outcome.detail}; realm mcp stderr ${session.stderr()}`,
+  );
 }
 
 // ---- Log files ----------------------------------------------------------------------------------------------------------------

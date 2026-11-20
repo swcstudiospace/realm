@@ -1,0 +1,47 @@
+name: Breaking change guard
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+permissions:
+  contents: read
+
+concurrency:
+  group: breaking-change-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Breaking change marker
+    # Fork pull requests are skipped, as in ci.yml: this repository's own code is the only code that runs.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.x
+
+      # The script reads the title, the body and the base and head commits from the event file named by GITHUB_EVENT_PATH.
+      # Nothing from the event is interpolated into this shell line. The merge method is not known in a pull request
+      # event, so the landing is unknown and the strict rule applies (a marked title and a marked commit).
+      - name: Check the breaking-change marker
+        run: |
+          set -euo pipefail
+          node scripts/check/breaking-change-guard.mjs --enforce

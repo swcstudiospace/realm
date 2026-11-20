@@ -102,6 +102,35 @@ export type ToolOutcome =
 interface CallScope {
   readonly correlationId: string;
   readonly upId?: string;
+  // The verified attribution of a call made with a capability token (CAPT-07): host and key id on every line of the call.
+  readonly host?: string;
+  readonly kid?: string;
+}
+
+// The verified principal the daemon passes when a capability token authorised the call: exactly host and kid.
+interface CallPrincipal {
+  readonly host: string;
+  readonly kid: string;
+}
+
+const PRINCIPAL_HOST = /^[a-z][a-z0-9-]{0,31}$/;
+const PRINCIPAL_KID = /^[a-z0-9]{1,16}$/;
+
+// Exactly the keys host and kid, both strings of their shapes. Anything else is malformed.
+function isPrincipal(value: unknown): value is CallPrincipal {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const names = Object.keys(value);
+  const host: unknown = Reflect.getOwnPropertyDescriptor(value, "host")?.value;
+  const kid: unknown = Reflect.getOwnPropertyDescriptor(value, "kid")?.value;
+  return (
+    names.length === 2 &&
+    typeof host === "string" &&
+    typeof kid === "string" &&
+    PRINCIPAL_HOST.test(host) &&
+    PRINCIPAL_KID.test(kid)
+  );
 }
 
 export class ToolDispatcher {
@@ -124,7 +153,7 @@ export class ToolDispatcher {
   // the call share one (D-1703). The tool result shape is unchanged.
   async call(
     raw: unknown,
-    context?: { readonly correlationId?: string; readonly upId?: string },
+    context?: { readonly correlationId?: string; readonly upId?: string; readonly principal?: CallPrincipal },
   ): Promise<ToolOutcome> {
     const parsed = validate("tools", raw);
     if (!parsed.ok) {
@@ -139,7 +168,15 @@ export class ToolDispatcher {
     if (upId !== undefined && !isCorrelationId(upId)) {
       return refused(tool, "SCHEMA_INVALID");
     }
-    const scope: CallScope = { correlationId: supplied ?? newCorrelationId(), ...(upId === undefined ? {} : { upId }) };
+    const principal: unknown = context?.principal;
+    if (principal !== undefined && !isPrincipal(principal)) {
+      return refused(tool, "SCHEMA_INVALID");
+    }
+    const scope: CallScope = {
+      correlationId: supplied ?? newCorrelationId(),
+      ...(upId === undefined ? {} : { upId }),
+      ...(principal === undefined ? {} : { host: principal.host, kid: principal.kid }),
+    };
     try {
       return await this.#run(parsed.value, scope);
     } catch (error: unknown) {
@@ -194,12 +231,14 @@ export class ToolDispatcher {
   }
 
   // exec runs only while active, in both modes (D-89, D-109). The argv form and the shell form both
-  // reach the runner through buildExecArgv and runSandboxExec. The dispatcher also bounds the call with
-  // TOOL_CALL_TIMEOUT_MS, so a runner that ignores its own deadline still returns TOOL_TIMEOUT.
+  // reach the runner through runSandboxExec, which runs the workload under the in-sandbox watchdog and
+  // builds the pinned exec argv. The audit summary below comes from the caller's params, so the watchdog
+  // never appears in an audit line. The dispatcher also bounds the call with TOOL_CALL_TIMEOUT_MS, so a
+  // runner that ignores its own deadline still returns TOOL_TIMEOUT.
   async #exec(params: ExecParams, scope: CallScope): Promise<ToolOutcome> {
     checkExecPolicy(this.deps.policy, params);
     const workload: readonly string[] = "argv" in params ? params.argv : ["/bin/sh", "-c", params.script];
-    // Refuses a malformed argv before admission. runSandboxExec builds the same argv again.
+    // Refuses a malformed workload before admission. runSandboxExec adds the watchdog prefix and builds the argv.
     buildExecArgv(this.deps.sessionId, workload);
     let state = this.deps.controller.snapshot().state;
     if (state === "connecting") {
@@ -312,7 +351,6 @@ function execRefusalCode(state: Exclude<State, "active">): ErrorCode {
     case "stopping":
       return "REALM_STOPPING";
     case "connecting":
-    case "degraded":
     case "error":
       return "REALM_NOT_ACTIVE";
   }

@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,20 +10,25 @@ import type { OmpExtensionApi, OmpSessionContext } from "../../src/omp/plugin.js
 import type { HostToolDefinition } from "../../src/omp/tools.js";
 import { controlSocketPath, sessionIdOfWorkspace } from "../../src/session/paths.js";
 import { RealmError } from "../../src/core/errors.js";
+import { BOOT_BOUNDS, resolveBoot } from "../../src/host/boot.js";
+import { defaultManifestFor, parseHostPluginManifest } from "../../src/host/manifest.js";
+import { parseHostBootReport, type HostBootReport } from "../../src/host/boot-report.js";
+import { isCorrelationId } from "../../src/observe/ids.js";
+import { pollUntil } from "../support/timing.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const AT = "2026-10-22T00:00:00.000Z";
 // The status every stand-in control socket answers with: an active, advisory daemon.
 const ACTIVE_STATUS = {
   snapshot: { state: "active", reason: "realm active", lastTransitionAt: AT },
-  display: { label: "realm active", degraded: false, reason: "realm active", lastTransitionAt: AT },
+  display: { label: "realm active", reason: "realm active", lastTransitionAt: AT },
   mode: "advisory",
 };
 
 // The status a daemon reports while no realm is bound: inactive, advisory.
 const INACTIVE_STATUS = {
   snapshot: { state: "unbound", reason: "no realm bound", lastTransitionAt: AT },
-  display: { label: "realm disconnected", degraded: false, reason: "no realm bound", lastTransitionAt: AT },
+  display: { label: "realm disconnected", reason: "no realm bound", lastTransitionAt: AT },
   mode: "advisory",
 };
 // The refusal a stand-in daemon gives a forwarded write while its realm is not active. It touches no file.
@@ -44,6 +49,30 @@ interface StubRequest {
 // What a stand-in daemon answers: a result, or a catalogue error code.
 type StubReply = { readonly result: unknown } | { readonly error: { readonly code: string } };
 
+// The host-boot reports the extension sends after an attach and at session end. The stand-in answers them itself, before
+// respond sees them: a report names no workspace, so a respond built on a workspace would throw on one. A test that cares reads
+// requests and sets reply; every test that does restores both through hostBootRecorder's cleanup. Only requests that arrive on a
+// socket the test named (watched) are recorded: an earlier test's session sends its closing report while it shuts down, possibly
+// after the next test began, and that late report must not count in the next test's requests.
+const hostBoot: { requests: StubRequest[]; reply: StubReply; watched: Set<string> } = {
+  requests: [],
+  reply: { result: { recorded: true } },
+  watched: new Set<string>(),
+};
+
+function hostBootRecorder(t: TestContext, ...sockets: string[]): void {
+  const reset = (): void => {
+    hostBoot.requests = [];
+    hostBoot.reply = { result: { recorded: true } };
+    hostBoot.watched = new Set<string>();
+  };
+  reset();
+  for (const socket of sockets) {
+    hostBoot.watched.add(socket);
+  }
+  t.after(reset);
+}
+
 // A stand-in daemon on one control socket. It answers each NDJSON request with respond(request) and reports the request with
 // the socket it arrived on. By default it answers every request with an active status.
 function startStub(
@@ -61,6 +90,13 @@ function startStub(
       }
       const request = JSON.parse(text.slice(0, end)) as StubRequest;
       onRequest({ socketPath, method: request.method });
+      if (request.method === "host-boot") {
+        if (hostBoot.watched.has(socketPath)) {
+          hostBoot.requests.push(request);
+        }
+        socket.end(`${JSON.stringify({ id: request.id, ...hostBoot.reply })}\n`);
+        return;
+      }
       socket.end(`${JSON.stringify({ id: request.id, ...respond(request) })}\n`);
     });
   });
@@ -102,6 +138,10 @@ function pinnedDaemon(status: object, upReply: (workspaceRoot: string) => StubRe
       }
       const reply = upReply(params.workspaceRoot);
       return "result" in reply ? answeredFor(request, reply.result) : reply;
+    }
+    if (request.method === "capability-attach") {
+      // The Omp client attaches before its first tool call (CAPT-06). This daemon enforces no tokens.
+      return { result: { mode: "off" } };
     }
     if (request.method === "tool") {
       return { result: REFUSED_WRITE };
@@ -636,4 +676,285 @@ void test("an attach for a directory that does not exist is refused with POLICY_
   await startOmpSession(t, host, paints, join(base, "missing"), "POLICY_DENIED");
 
   assert.deepEqual(hits, [], "no socket is opened for a directory that does not exist");
+});
+
+// ---- presence marker and manifest bounds ----------------------------------------------------------------------------------------
+
+// A session context whose status paints are recorded; its timers are real and the plugin clears them at shutdown.
+function recordingCtx(cwd: string, statuses: string[]): OmpSessionContext {
+  return {
+    cwd,
+    ui: {
+      setStatus(_key: string, text: string): void {
+        statuses.push(text);
+      },
+      notify(): void {},
+    },
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    setInterval: (callback, ms) => setInterval(callback, ms),
+    clearTimer: (handle) => {
+      clearTimeout(handle as NodeJS.Timeout);
+    },
+  };
+}
+
+function markerFile(base: string): string {
+  return join(base, "state", "hosts", "omp-active", `${String(process.pid)}.json`);
+}
+
+void test("OMPB-07: the extension writes a presence marker after an attach and removes it on session_shutdown", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  realmExtension(host.pi);
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start, "the extension registers a session_start handler");
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  await pollUntil(() => existsSync(markerFile(base)), "the presence marker is written");
+  const record = JSON.parse(readFileSync(markerFile(base), "utf8")) as Record<string, unknown>;
+  assert.equal(record.schemaVersion, 1);
+  assert.equal(record.pid, process.pid);
+  assert.equal(record.attach, "attached");
+  assert.equal(record.code, null);
+  assert.equal(record.sessionId, sessionIdOfWorkspace(realpathSync(base)));
+  assert.ok(statuses.some((text) => text.includes("realm active")), "the status was painted before the marker");
+  const shutdown = host.handlers.get("session_shutdown");
+  assert.ok(shutdown, "the extension registers a session_shutdown handler");
+  shutdown({ type: "session_shutdown" }, recordingCtx(base, statuses));
+  await pollUntil(() => !existsSync(markerFile(base)), "the presence marker is removed");
+});
+
+void test("OMPB-07: a presence failure writes one stderr line with only a code and changes no attach outcome", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  // A regular file where the hosts directory belongs: the marker cannot be created.
+  writeFileSync(join(base, "state", "hosts"), "blocked");
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string | Uint8Array): boolean => {
+    lines.push(String(chunk));
+    return true;
+  });
+  const host = createHost();
+  realmExtension(host.pi);
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start);
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  await pollUntil(() => lines.some((line) => line.startsWith("realm: presence marker not updated")), "the presence failure is reported");
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith("realm: presence marker not updated")),
+    ["realm: presence marker not updated: PATH_ESCAPE\n"],
+  );
+  assert.ok(statuses.some((text) => text.includes("realm active")), "the attach still ends active");
+  assert.equal(statuses.some((text) => /error|refus/i.test(text)), false, "no failure is painted");
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, statuses));
+});
+
+void test("OMPB-06: the omp manifest default resolves to BOOT_BOUNDS, and REALM_OMP_REATTACH=1 turns only re-attach on", () => {
+  const manifest = defaultManifestFor("omp", "1.2.3");
+  const off = resolveBoot(parseHostPluginManifest({ ...manifest, boot: { reattach: { enabled: reattachEnabledOf(undefined) } } }));
+  assert.deepEqual(off, BOOT_BOUNDS);
+  const on = resolveBoot(parseHostPluginManifest({ ...manifest, boot: { reattach: { enabled: reattachEnabledOf("1") } } }));
+  assert.equal(on.reattach.enabled, true);
+  assert.deepEqual({ ...on, reattach: { ...on.reattach, enabled: false } }, BOOT_BOUNDS);
+});
+
+// ---- boot observability through the shared observer ----------------------------------------------------------------------------
+
+// The report a host-boot request carries, parsed through the daemon's own parser.
+function bootReportOf(request: StubRequest | undefined): HostBootReport {
+  assert.ok(request, "a host-boot request was recorded");
+  assert.equal(request.method, "host-boot");
+  const params = request.params;
+  assert.ok(typeof params === "object" && params !== null && "report" in params, "params carry a report");
+  assert.deepEqual(Object.keys(params), ["report"]);
+  return parseHostBootReport(params.report);
+}
+
+// Captures what the process writes to stderr for the rest of the test.
+function captureStderr(t: TestContext): string[] {
+  const lines: string[] = [];
+  t.mock.method(process.stderr, "write", (chunk: string | Uint8Array): boolean => {
+    lines.push(String(chunk));
+    return true;
+  });
+  return lines;
+}
+
+void test("BOOT-08: one attach sends one host-boot report for omp and session_shutdown sends closed, under one boot id", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  hostBootRecorder(t, socketPath);
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  await startOmpSession(t, host, [], base, "realm active");
+  await pollUntil(() => hostBoot.requests.some((request) => bootReportOf(request).phase === "attached"), "the attached report reaches the daemon");
+  const attached = bootReportOf(hostBoot.requests.find((request) => bootReportOf(request).phase === "attached"));
+  assert.equal(attached.hostId, "omp");
+  assert.equal(attached.transport, "extension");
+  assert.equal(attached.phase, "attached");
+  assert.equal(attached.code, null);
+  assert.equal(attached.state, "active");
+  assert.equal(isCorrelationId(attached.bootId), true);
+  assert.equal(attached.attempt, 1);
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, []));
+  await pollUntil(() => hostBoot.requests.some((request) => bootReportOf(request).phase === "closed"), "the closed report reaches the daemon");
+  const closed = bootReportOf(hostBoot.requests.find((request) => bootReportOf(request).phase === "closed"));
+  assert.equal(closed.phase, "closed");
+  assert.equal(closed.bootId, attached.bootId);
+  assert.equal(closed.hostId, "omp");
+});
+
+void test("BOOT-08: a failed attach that is not kept sends failed with its catalogue code", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  const elsewhere = join(base, "elsewhere");
+  mkdirSync(project);
+  mkdirSync(elsewhere);
+  const socketPath = configure(t, base, project);
+  hostBootRecorder(t, socketPath);
+  const status = { ...INACTIVE_STATUS, boundRoot: realpathSync(project), sessionId: sessionIdOfWorkspace(realpathSync(elsewhere)) };
+  await serveDaemon(t, socketPath, [], raisedAfterUp(status));
+  const host = createHost();
+  await startOmpSession(t, host, [], project, "AGENTOS_NOT_CONFIGURED");
+  await pollUntil(() => hostBoot.requests.length >= 1, "the failed report reaches the daemon");
+  const failed = bootReportOf(hostBoot.requests[0]);
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.code, "AGENTOS_NOT_CONFIGURED");
+  assert.equal(failed.hostId, "omp");
+  const marker = JSON.parse(readFileSync(markerFile(base), "utf8")) as Record<string, unknown>;
+  assert.equal(marker.attach, "failed");
+  assert.equal(marker.code, "AGENTOS_NOT_CONFIGURED");
+});
+
+void test("BOOT-08: a default-level session writes nothing to stderr; REALM_LOG_LEVEL=debug shows host.boot lines with one correlation id", async (t) => {
+  const quietBase = scratchDir(t);
+  const quietSocket = configure(t, quietBase, quietBase);
+  hostBootRecorder(t, quietSocket);
+  await serveDaemon(t, quietSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines = captureStderr(t);
+  const quiet = createHost();
+  await startOmpSession(t, quiet, [], quietBase, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 1, "the attached report reaches the daemon");
+  quiet.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(quietBase, []));
+  await pollUntil(() => hostBoot.requests.length === 2, "the closed report reaches the daemon");
+  assert.deepEqual(lines, [], "a default-level session adds nothing to stderr");
+
+  const loudBase = scratchDir(t);
+  const loudSocket = configure(t, loudBase, loudBase);
+  hostBoot.watched.add(loudSocket);
+  setProcessEnv(t, { REALM_LOG_LEVEL: "debug" });
+  await serveDaemon(t, loudSocket, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const loud = createHost();
+  await startOmpSession(t, loud, [], loudBase, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 3, "the attached report of the debug session reaches the daemon");
+  loud.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(loudBase, []));
+  await pollUntil(() => hostBoot.requests.length === 4, "the closed report of the debug session reaches the daemon");
+  // assert.deepEqual earlier in this test narrows `lines` to never[]; widen it back before reading it.
+  const stderrLines: readonly string[] = lines;
+  const bootLines = stderrLines
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => {
+      const event = line["event"];
+      return typeof event === "string" && event.startsWith("host.boot.");
+    });
+  const events = bootLines.map((line) => line.event);
+  assert.ok(events.includes("host.boot.attached"));
+  assert.ok(events.includes("host.boot.closed"));
+  const bootId = bootReportOf(hostBoot.requests[2]).bootId;
+  for (const line of bootLines.filter((entry) => entry.event === "host.boot.attached" || entry.event === "host.boot.closed")) {
+    assert.equal(line.correlationId, bootId, "the log line and the report share one boot id");
+  }
+});
+
+void test("BOOT-08: a daemon that answers SCHEMA_INVALID to host-boot changes no outcome and adds no stderr line", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  hostBootRecorder(t, socketPath);
+  hostBoot.reply = { error: { code: "SCHEMA_INVALID" } };
+  await serveDaemon(t, socketPath, [], (request) => answeredFor(request, ACTIVE_STATUS));
+  const lines = captureStderr(t);
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, base, "realm active");
+  await pollUntil(() => hostBoot.requests.length === 1, "the report was sent and refused");
+  host.handlers.get("session_shutdown")?.({ type: "session_shutdown" }, recordingCtx(base, []));
+  await pollUntil(() => hostBoot.requests.length === 2, "the closed report was sent and refused");
+  assert.equal(paints.some((text) => /error|refus/i.test(text)), false, "no failure is painted");
+  assert.deepEqual(lines, [], "a refused report adds no stderr line");
+});
+
+void test("CAPT-06: the Omp extension attaches its capability token as the host id omp, before its first tool call", async (t) => {
+  const base = scratchDir(t);
+  const project = join(base, "project");
+  mkdirSync(project);
+  const root = realpathSync(project);
+  const socketPath = configure(t, base, project);
+  const seen: StubRequest[] = [];
+  await serveDaemon(t, socketPath, [], (request) => {
+    seen.push(request);
+    if (request.method === "capability-attach") {
+      return { result: { mode: "off" } };
+    }
+    if (request.method === "tool") {
+      return { result: REFUSED_WRITE };
+    }
+    return answeredFor(request, ACTIVE_STATUS);
+  });
+  const host = createHost();
+  const paints: string[] = [];
+  await startOmpSession(t, host, paints, project, "realm active");
+  assert.equal(seen.some((request) => request.method === "capability-attach"), false, "an attach alone does not ask for a token");
+
+  await realmWrite(host).execute("call-1", { path: "notes.txt", content: "hello" });
+  const methods = seen.map((request) => request.method).filter((method) => method === "capability-attach" || method === "tool");
+  assert.deepEqual(methods, ["capability-attach", "tool"]);
+  const attach = seen.find((request) => request.method === "capability-attach");
+  assert.deepEqual(attach?.params, { selection: { workspaceRoot: root, sessionId: sessionIdOfWorkspace(root) }, host: "omp" });
+});
+
+// OMPR-05 (K2): the entry passes the plugin a deferral set to setImmediate, so the attach starts one event-loop turn after the
+// session_start handler returns. The global is replaced by a recorder for the window and restored before the callbacks run.
+void test("OMPR-05: the real entry starts the attach through setImmediate, one turn after session_start returns", async (t) => {
+  const base = scratchDir(t);
+  const socketPath = configure(t, base, base);
+  const hits: Hit[] = [];
+  await serveDaemon(t, socketPath, hits, (request) => answeredFor(request, ACTIVE_STATUS));
+  const host = createHost();
+  realmExtension(host.pi);
+  t.after(() => {
+    host.handlers.get("session_shutdown")?.();
+  });
+  const realSetImmediate = globalThis.setImmediate;
+  const recorded: Array<() => void> = [];
+  const restore = (): void => {
+    globalThis.setImmediate = realSetImmediate;
+  };
+  t.after(restore);
+  globalThis.setImmediate = ((callback: () => void) => {
+    recorded.push(callback);
+    return realSetImmediate(() => undefined);
+  }) as unknown as typeof setImmediate;
+  const statuses: string[] = [];
+  const start = host.handlers.get("session_start");
+  assert.ok(start, "the extension registers a session_start handler");
+  start({ type: "session_start" }, recordingCtx(base, statuses));
+  // A few turns of the real loop pass; the recorded callback has not run, so the attach has not started.
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise<void>((resolve) => {
+      realSetImmediate(resolve);
+    });
+  }
+  restore();
+  assert.equal(recorded.length, 1, "the entry handed the attach's start to setImmediate once");
+  assert.deepEqual(hits, [], "no stand-in socket was dialled while the deferral is held");
+  assert.ok(statuses.length > 0 && statuses.every((text) => !text.includes("realm active")), "the status item shows connecting");
+
+  recorded[0]?.();
+  await pollUntil(() => statuses.some((text) => text.includes("realm active")), "the attach proceeds once the deferral runs");
+  assert.ok(hits.length > 0, "the stand-in answered the attach");
 });

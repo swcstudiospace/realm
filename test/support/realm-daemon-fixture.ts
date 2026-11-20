@@ -12,9 +12,11 @@ import { connectDaemon, type DaemonClient, selectionOf } from "../../src/daemon/
 import type { ControlSelection } from "../../src/daemon/channel.js";
 import { startDaemon, type StartedDaemon } from "../../src/daemon/daemon.js";
 import type { PolicyMode } from "../../src/contract/validate.js";
+import type { Logger } from "../../src/observe/logger.js";
 import type { PodmanProbeResult } from "../../src/runtime/podman-probe.js";
-import { FakeBridge } from "./fake-bridge.js";
 import { FakeExecutionService } from "./fake-execution.js";
+import type { HostId } from "../../src/host/types.js";
+import { CAPABILITY_TOKENS_OFF } from "./policy-document.js";
 
 const IMAGE = `registry.example.com/realm/workload@sha256:${"0".repeat(64)}`;
 const CLOCK_ISO = "2026-10-21T09:30:00.000Z";
@@ -27,13 +29,21 @@ export interface RealmDaemonOptions {
   readonly stateDir: string;
   readonly workspace: string;
   readonly mode: PolicyMode;
+  // The daemon's structured logger, so a test can read the daemon log lines. Absent: the daemon's own default.
+  readonly logger?: Logger;
+  // The capabilityTokens posture of the policy document the fixture writes. "default" (the default) writes no capabilityTokens key, so the
+  // daemon follows the product default. "off" spreads the shared opt-out member in, for a test whose client is tokenless and is not about tokens.
+  // "no-policy-file" writes no policy file at all: policyPath names a file that does not exist, so the daemon loads the validated defaults.
+  // An object writes a capabilityTokens member with those per-host profiles and no mode, so the default mode applies.
+  readonly capabilityTokens?: "default" | "off" | "no-policy-file" | { readonly profiles: Readonly<Record<string, readonly string[]>> };
 }
 
 export interface RealmDaemonFixture {
   readonly socketPath: string;
   readonly policyPath: string;
-  // Sends the same { method: "down" } request `realm down` sends for the configured workspace, then awaits the daemon's done.
-  down(): Promise<void>;
+  // Sends the same { method: "down" } request `realm down` sends for one project, the configured workspace when none is given.
+  // Without a project it awaits the daemon's done; with one it resolves after the reply, since another live session keeps the daemon running.
+  down(project?: string): Promise<void>;
   // Sends the same { method: "down" } request for one project and resolves with its reply. The daemon keeps running while
   // another session is live, so done is not awaited here.
   release(project: string): Promise<ControlReply>;
@@ -43,9 +53,12 @@ export interface RealmDaemonFixture {
   status(project?: string): Promise<ControlReply>;
   // The selection of one project, built by the production selectionOf.
   selectionFor(project: string): ControlSelection;
-  // A client attached to one project's selection, the client an MCP or ACP surface dispatches through.
-  connectFor(project: string): DaemonClient;
+  // A client attached to one project's selection, the client an MCP or ACP surface dispatches through. With a host id it attaches
+  // as that host, as a labelled realm mcp or realm acp does; without one it is tokenless.
+  connectFor(project: string, host?: HostId): DaemonClient;
   readonly done: Promise<void>;
+  // Stops the daemon in process without a control message, for a daemon that admits no project and so cannot be released by down.
+  readonly stop: () => Promise<void>;
 }
 
 async function awaitDone(daemon: StartedDaemon): Promise<void> {
@@ -66,12 +79,22 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
   const policyDir = dirname(options.stateDir);
   mkdirSync(policyDir, { recursive: true });
   const policyPath = join(policyDir, "policy.json");
-  writeFileSync(policyPath, JSON.stringify({ mode: options.mode, workspaceRoots: [options.workspace] }));
+  if (options.capabilityTokens !== "no-policy-file") {
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        mode: options.mode,
+        workspaceRoots: [options.workspace],
+        ...(options.capabilityTokens === "off" ? CAPABILITY_TOKENS_OFF : {}),
+        ...(typeof options.capabilityTokens === "object" ? { capabilityTokens: { profiles: options.capabilityTokens.profiles } } : {}),
+      }),
+    );
+  }
   const daemon = await startDaemon({
     runtimeInput: { image: IMAGE, stateDir: options.stateDir, workspaceRoot: options.workspace },
     policyPath,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     exec: new FakeExecutionService(),
-    bridge: new FakeBridge(),
     clock: () => new Date(CLOCK_ISO),
     runOpenShell: () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", truncated: false }),
     // A libpod double whose realm listing is empty, so the startup reap removes nothing.
@@ -99,9 +122,12 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     socketPath: daemon.socketPath,
     policyPath,
     done: daemon.done,
-    async down(): Promise<void> {
-      await release(options.workspace);
-      await awaitDone(daemon);
+    stop: () => daemon.stop(),
+    async down(project?: string): Promise<void> {
+      await release(project ?? options.workspace);
+      if (project === undefined) {
+        await awaitDone(daemon);
+      }
     },
     release,
     up(project: string): Promise<ControlReply> {
@@ -121,8 +147,8 @@ export async function startRealmDaemon(options: RealmDaemonOptions): Promise<Rea
     selectionFor(project: string): ControlSelection {
       return selectionOf(project);
     },
-    connectFor(project: string): DaemonClient {
-      return connectDaemon(daemon.socketPath, selectionOf(project));
+    connectFor(project: string, host?: HostId): DaemonClient {
+      return connectDaemon(daemon.socketPath, selectionOf(project), host === undefined ? {} : { host });
     },
   });
 }

@@ -147,6 +147,16 @@ void test("CRASH-03: a failing directory fsync on delete is a RealmError WRITE_N
   assertRejectsWith(() => { store.delete("session-1"); }, "WRITE_NOT_ATOMIC");
 });
 
+void test("a record file whose stored state is degraded, removed in Phase 28, fails load with SCHEMA_INVALID and is still listed", (t) => {
+  const { store, stateDir, sessionsDir } = fixture(t);
+  store.save(recordFor(stateDir, "session-1"));
+  const recordPath = join(sessionsDir, recordFileName("session-1"));
+  const stored = JSON.parse(readFileSync(recordPath, "utf8")) as Record<string, unknown>;
+  writeFileSync(recordPath, JSON.stringify({ ...stored, state: "degraded" }));
+  assertRejectsWith(() => store.load("session-1"), "SCHEMA_INVALID");
+  assert.deepEqual(store.list(), ["session-1"]);
+});
+
 void test("a session id that could leave the sessions directory is refused with SCHEMA_INVALID (D-37)", (t) => {
   const { store, stateDir } = fixture(t);
   assertRejectsWith(() => { store.save(recordFor(stateDir, "../escape")); }, "SCHEMA_INVALID");

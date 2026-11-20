@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { OpenShellRunnerError } from "../../src/runtime/openshell.js";
 import { type ErrorCode, makeRealmError } from "../../src/core/errors.js";
 import type { State } from "../../src/core/states.js";
 import { createEventBus } from "../../src/core/events.js";
@@ -80,7 +81,6 @@ void test("TOOL-03: read, list, and status run with no gate and no lock probe, b
     assert.fail("expected a done status");
   }
   assert.equal(status.value.snapshot.state, "active");
-  assert.equal(status.value.display.degraded, false);
   assert.deepEqual(stagesOf(h), ["snapshot"], "only status reads the state");
   assert.deepEqual(h.phases(), ["admission", "result", "admission", "result", "admission", "result"]);
 });
@@ -127,7 +127,7 @@ void test("TOOL-03: a schema failure has zero side effects and reaches no later 
 });
 
 void test("TOOL-03: SHELL_NOT_ALLOWED precedes the state check (D-89)", async (t) => {
-  const h = makeHarness(t, { state: "degraded" });
+  const h = makeHarness(t, { state: "error" });
   const outcome = await h.dispatcher.call({ exec: { shell: true, script: "echo hi" } });
   assert.deepEqual(outcome, refusal("exec", "SHELL_NOT_ALLOWED", false));
   assert.deepEqual(h.observations, [], "the shell form never reaches the state check");
@@ -154,7 +154,6 @@ void test("TOOL-03: an admission failure runs no execution (D-89, S-21)", async 
 void test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)", async (t) => {
   const cases: ReadonlyArray<{ readonly state: State; readonly code: ErrorCode; readonly retryable: boolean }> = [
     { state: "unbound", code: "REALM_UNBOUND", retryable: false },
-    { state: "degraded", code: "REALM_NOT_ACTIVE", retryable: true },
     { state: "error", code: "REALM_NOT_ACTIVE", retryable: true },
     { state: "stopping", code: "REALM_STOPPING", retryable: false },
   ];
@@ -169,8 +168,8 @@ void test("TOOL-03: exec is refused unless active, in both modes (D-89, D-109)",
   }
 });
 
-void test("TOOL-03: a write in degraded under advisory policy proceeds with a warning (D-98)", async (t) => {
-  const h = makeHarness(t, { state: "degraded" });
+void test("TOOL-03: a write in error under advisory policy proceeds with a warning (D-98)", async (t) => {
+  const h = makeHarness(t, { state: "error" });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "advisory" } });
   expectDone(outcome, "write");
   if (outcome.outcome !== "done" || outcome.tool !== "write") {
@@ -181,8 +180,8 @@ void test("TOOL-03: a write in degraded under advisory policy proceeds with a wa
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-void test("TOOL-03: a write in degraded under required policy is refused with no audit line (D-98)", async (t) => {
-  const h = makeHarness(t, { state: "degraded", policy: REQUIRED });
+void test("TOOL-03: a write in error under required policy is refused with no audit line (D-98)", async (t) => {
+  const h = makeHarness(t, { state: "error", policy: REQUIRED });
   const outcome = await h.dispatcher.call({ write: { path: "doc.txt", content: "blocked" } });
   assert.deepEqual(outcome, refusal("write", "REALM_NOT_ACTIVE", true));
   assert.equal(h.doc(), "original");
@@ -190,7 +189,7 @@ void test("TOOL-03: a write in degraded under required policy is refused with no
 });
 
 void test("TOOL-03: retry follows the state, returning the snapshot except from error, unbound, and stopping (D-95)", async (t) => {
-  for (const state of ["connecting", "active", "degraded"] as const) {
+  for (const state of ["connecting", "active"] as const) {
     const h = makeHarness(t, { state });
     const outcome = await h.dispatcher.call({ retry: {} });
     expectDone(outcome, "retry");
@@ -326,3 +325,33 @@ function auditIds(text: string): string[] {
     .filter((line) => line.length > 0)
     .map((line) => (JSON.parse(line) as { correlationId?: string }).correlationId ?? "");
 }
+
+void test("EXEC-03: the audit lines of an argv exec name the caller's argv and carry no watchdog text, while the runner got the wrapper", async (t) => {
+  const h = makeHarness(t);
+  expectDone(await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } }), "exec");
+  const text = h.auditText();
+  assert.ok(text.includes("/usr/bin/agent") && text.includes("--serve"), "the audit lines carry the caller's argv");
+  assert.doesNotMatch(text, /realm-exec-wd|\/usr\/bin\/bash|wait -n/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-4), ["realm-exec-wd", "28.5", ...WORKLOAD]);
+});
+
+void test("EXEC-03: the audit line of a shell exec carries the script's size and hash and no wrapper text, and the run ends with the shell and the script", async (t) => {
+  const h = makeHarness(t, { policy: { ...ADVISORY, shellEnabled: true } });
+  expectDone(await h.dispatcher.call({ exec: { shell: true, script: "echo hi" } }), "exec");
+  const text = h.auditText();
+  assert.match(text, /"scriptBytes":7/);
+  assert.match(text, /"sha256":"[0-9a-f]{64}"/);
+  assert.doesNotMatch(text, /realm-exec-wd|\/usr\/bin\/bash|wait -n|echo hi/);
+  assert.deepEqual(h.runs[0]?.argv.slice(-5), ["realm-exec-wd", "28.5", "/bin/sh", "-c", "echo hi"]);
+});
+
+void test("EXEC-03: a runner that rejects as timed out still gives the retryable TOOL_TIMEOUT refusal with no cause code, audited admission then result", async (t) => {
+  const h = makeHarness(t);
+  h.setRunner(() => Promise.reject(new OpenShellRunnerError("timed-out")));
+  const outcome = await h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
+  assert.deepEqual(outcome, refusal("exec", "TOOL_TIMEOUT", true));
+  assert.equal("causeCode" in outcome, false);
+  assert.deepEqual(h.phases(), ["admission", "result"]);
+  assert.equal(h.auditLines()[1]?.["outcome"], "TOOL_TIMEOUT");
+  assert.equal(h.runs[0]?.options.timeoutMs, 28000);
+});

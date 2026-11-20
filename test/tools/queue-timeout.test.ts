@@ -51,7 +51,7 @@ void test("TOOL-04: a queued call proceeds at once when active is reached during
   const h = makeHarness(t, { state: "connecting", policy: { ...ADVISORY, toolQueueMs: 5000 } });
   const pending = h.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   await nextTurn();
-  h.machine.transition("active", "bridge up");
+  h.machine.transition("active", "container running");
   const outcome = await pending;
   assert.equal(outcome.outcome, "done");
   assert.equal(h.runs.length, 1, "execution ran after the transition");
@@ -59,17 +59,17 @@ void test("TOOL-04: a queued call proceeds at once when active is reached during
   assert.deepEqual(h.phases(), ["admission", "result"]);
 });
 
-void test("TOOL-04: the timer is cleared on settle and degraded never waits (D-91)", async (t) => {
+void test("TOOL-04: the timer is cleared on settle and error never waits (D-91)", async (t) => {
   const quick = makeHarness(t, { state: "connecting", policy: { ...ADVISORY, toolQueueMs: 60 } });
   const expired = await quick.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(expired, refusal("exec", "REALM_NOT_ACTIVE", true));
   assert.equal(quick.listeners(), 0, "expiry removed the queue listener");
 
-  const degraded = makeHarness(t, { state: "degraded" });
+  const errored = makeHarness(t, { state: "error" });
   const started = Date.now();
-  const outcome = await degraded.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
+  const outcome = await errored.dispatcher.call({ exec: { argv: [...WORKLOAD] } });
   assert.deepEqual(outcome, refusal("exec", "REALM_NOT_ACTIVE", true));
-  assert.ok(Date.now() - started < 1000, "degraded returns at once");
-  assert.equal(degraded.listeners(), 0, "degraded never subscribes");
-  assert.equal(degraded.runs.length, 0);
+  assert.ok(Date.now() - started < 1000, "error returns at once");
+  assert.equal(errored.listeners(), 0, "error never subscribes");
+  assert.equal(errored.runs.length, 0);
 });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bindRoot } from "../../src/fs/root.js";
 import { checkpointSessionDirOf, sessionIdOfWorkspace } from "../../src/session/paths.js";
-import { writeWorkspacePin } from "../../src/session/workspace-pin.js";
+import { workspaceEntryOf } from "../../src/session/workspace-registry.js";
 import { scaledMs, testTimeout } from "../support/timing.js";
 
 // The bound on the snapshot child. A read that blocks on a FIFO never returns, so the child is killed here and the test fails
@@ -20,7 +20,7 @@ const p = JSON.parse(process.env.REALM_CHILD_PAYLOAD);
 const { snapshotWorkspace } = await import(p.checkpointUrl);
 let code = "RETURNED";
 try {
-  await snapshotWorkspace(p.request);
+  await snapshotWorkspace({ ...p.request, sandboxRunning: () => false });
 } catch (error) {
   code = error?.code ?? "UNEXPECTED";
 }
@@ -48,8 +48,9 @@ function createFifo(path: string): void {
   }
 }
 
-// An unbound session: a pin names the workspace, and no registry entry exists. The lock path of its session directory is a
-// FIFO with no writer. A lock read that opened the FIFO would block forever; the verified read refuses it instead.
+// A session with an in-memory entry, the way a stopped project is pinned: the entry names the workspace, and no registry
+// file exists. The lock path of its session directory is a FIFO with no writer. A lock read that opened the FIFO would
+// block forever; the verified read refuses it instead.
 void test(
   "a snapshot whose lock path is a FIFO is refused with LOCK_CONFLICT and never blocks",
   testTimeout(30_000),
@@ -63,7 +64,7 @@ void test(
     const state = join(base, "state");
     const pinned = bindRoot(ws);
     const sessionId = sessionIdOfWorkspace(pinned.realPath);
-    writeWorkspacePin(state, pinned, sessionId);
+    const entry = workspaceEntryOf(pinned, sessionId);
     const sessionDir = checkpointSessionDirOf(state, sessionId);
     mkdirSync(sessionDir, { recursive: true });
     // checkpoint-lock.ts names its lock file .lock in the session directory.
@@ -71,7 +72,7 @@ void test(
 
     const outcome = runSnapshotChild({
       checkpointUrl: new URL("../../src/session/checkpoint.js", import.meta.url).href,
-      request: { entry: null, sessionId, stateRoot: state, checkpointId: "c1" },
+      request: { entry, stateRoot: state, checkpointId: "c1" },
     });
 
     assert.equal(outcome.code, "LOCK_CONFLICT");

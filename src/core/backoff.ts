@@ -1,6 +1,6 @@
-// Bounded exponential backoff with full jitter (ANDA-03, RT-04, D-49). Pure: the random
+// Bounded exponential backoff with full jitter (RT-04, D-49). Pure: the random
 // source is injected and sleeping stays with the caller. Callers pass their own base and
-// cap (Anda 500/30000 per D-62, AgentOS 500/8000 per D-59); this module holds no defaults.
+// cap (AgentOS 500/8000 per D-59); this module holds no defaults.
 //
 // Contract: random() returns a number in [0, 1]. The delay is random() times
 // min(cap, base * 2^attempt), so it lies in [0, min(cap, base * 2^attempt)] and never

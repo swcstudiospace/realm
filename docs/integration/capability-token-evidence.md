@@ -1,0 +1,102 @@
+# Capability token evidence
+
+This page is the measured evidence for capability tokens: one section per requirement (EVID-01 the non-root run, EVID-02 the memory probe, EVID-03 the live enforce proof), and every cell is the result of a dated run or the word `not-run`. A cell that names no date and no version has no result behind it, and a skipped test is `not-run`, never a pass.
+
+This page does not give a defence. A process of the same user that can read the key file or run the attach step is not stopped, whatever the memory result is. The page measures claims; it adds no protection.
+
+## Status of each requirement
+
+| Requirement | Status | Tier | Date | Version and run | Section |
+| --- | --- | --- | --- | --- | --- |
+| EVID-01 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, Set A twice as uid 5002 | EVID-01: the non-root run |
+| EVID-02 | recorded | - | 2026-11-18 | commit 7c44538 on Node v24.18.0, kernel 6.8.0-149-generic, ptrace_scope 1, verdict settled | EVID-02: the memory probe |
+| EVID-03 | recorded | scripted client, scripted provider | 2026-11-18 | claude 2.1.322 on the production stack (Podman 5.7.1), both drives ran, main at the merge of PR 178 | EVID-03: the live enforce proof |
+
+The vocabulary of the Status cell is exactly four words. `not-run`: no dated run produced a result. `recorded`: a dated run produced the result the requirement asks for. `partial`: a dated run produced part of it, and the row names which part. `failed`: a dated run failed, and the row names the first failing assertion or the catalogue code.
+
+## Machine and run facts
+
+Each value is read in a window and never assumed. The label is `Observed` only for a value a person read in a window, with its date; `From code` and `Inference` are used as in the Phase 32 documents.
+
+| Fact | Value | Evidence label | Date |
+| --- | --- | --- | --- |
+| Kernel release | 6.8.0-149-generic | Observed | 2026-11-18 |
+| Yama ptrace_scope as read | 1 | Observed | 2026-11-18 |
+| Security modules listed | lockdown, capability, landlock, yama, apparmor | Observed | 2026-11-18 |
+| Node version | v24.18.0 | Observed | 2026-11-18 |
+| Account uid and gid | uid 5002, gid 5002, no supplementary groups | Observed | 2026-11-18 |
+| Harness account | realmlive | Observed | 2026-11-18 |
+| Podman version | 5.7.1 (rootless, the realmlive account's stack) | Observed | 2026-11-18 |
+
+## EVID-01: the non-root run
+
+The capability test set (Set A) run twice, and the whole unit suite (Set B) run once when the owner chooses it, as a regular user (the realmlive account, not root) from a copy of the built tree owned by that account, on a host where Yama `ptrace_scope` was read as 1 in the same window, with a scrubbed environment, a short temporary directory and no live gate variable. The first run is made before the probe test moves into its own file; the final run is made with the final file list.
+
+| Run | Test set | Commit | Node | Account | ptrace_scope | Tests | Pass | Fail | Skipped | Status | Date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| first run (plan 35-01 window) | Set A | - | - | - | - | - | - | - | - | not-run | - |
+| final run (plan 35-02 window) | Set A, 24 files | 7c44538 | v24.18.0 | uid 5002 gid 5002, not root | 1 | 494 (both runs) | 494 (both runs) | 0 | 0 | recorded | 2026-11-18 |
+| Set B whole suite (plan 42-03 window) | Set B, the whole compiled unit suite (dist/test) | 62b85fe | v24.18.0 | uid 5002 gid 5002, not root | 1 | 5542 | 5459 | 0 | 83 | recorded | 2026-11-18 |
+
+Observed on 2026-11-18, the two final Set A runs agreed: each ran 494 tests, 494 passed, 0 failed, 0 were skipped. The harness ran as root and the tests as the realmlive account, and the host was clean before and after (0 containers, 0 sandboxes, 0 daemons, an empty workspace and an unchanged policy hash). The old informational probe test of the capability token work no longer exists (it was removed in plan 35-02), and the new probe tests ran and were not skipped. No separate first-run result of the plan 35-01 window is recorded on this page, so that row stays `not-run`. Set B is recorded without gating the token tests, which Set A covers (From code, the plan definition of Set B).
+
+Set B, recorded (Phase 42, plan 42-03). Observed on 2026-11-18 at 22:55 UTC, the whole compiled unit suite ran once as the realmlive account (uid 5002, gid 5002, no supplementary groups, not root; the harness ran as root) on commit 62b85fe, which is main after PR 203, with Node v24.18.0, kernel 6.8.0-149-generic and Yama `ptrace_scope` 1. The tree was rebuilt clean (the old compiled output was removed first) and copied under the account's home, and the run used a scrubbed environment (`env -i` with HOME, PATH, TMPDIR and XDG_RUNTIME_DIR set, no live gate variable) and `node --test --test-concurrency=2` over `dist/test/**/*.test.js`. Result: 5542 tests, 5459 passed, 0 failed, 83 skipped. A skipped test is `not-run`, never a pass, so the 83 are not counted in the passing total; Inference: they are the gated live and integration tests, since the scrubbed environment sets no gate variable, and the grouping of the skip reasons is kept in the evidence directory. A scan of the run's output for the token and key shapes found 0 hits. The before and after snapshots were equal: 0 containers, 0 sandboxes, an empty workspace, no daemons and an unchanged policy hash. The evidence is kept outside the repository.
+
+Findings of the Set B window, in order (Observed, 2026-11-18). The first Set B run, on commit d80c79a, ran from a build directory that still held the compiled output of the deleted Anda tests (`dist/test/anda` and `dist/src/anda`, left from before Phase 28), and showed 42 failures. 41 were those stale compiled Anda tests: a stale-build artefact and not a product failure, removed by the clean rebuild. 1 was a real test defect: `test/runtime/exec-watchdog.test.ts`, the case "the group-kill denial of the sandbox is reproduced by the BASH_ENV used above", failed only under a scrubbed environment, because bash did not read BASH_ENV and the denial function never loaded. It is a test assumption and not a product failure (class b of the triage), and PR 203 fixed it by exporting the denial as a bash function (`BASH_FUNC_kill`) so a scrubbed environment keeps it. The rerun on commit 62b85fe from a clean rebuild had 0 failures, and that rerun is the row above. Set C (the script tests) is not part of this row and was not recorded in this window.
+
+Set A file list (24 compiled test files): the capability tests admit, gate, keyring, limiter and token; the daemon tests capability-wire, capability-e2e, channel, client and capability-memory-probe; the cli tests host-token and stdio-host; the omp test extension; the doctor test capability-checks; the audit tests redaction and principal; the tools test principal; the core test policy.schema; the host tests recipes-bare, adapters-labelled and refusal-hint; the docs tests capability-token-doc and capability-token-evidence; the support test memory-probe. Skip reasons: none, 0 tests were skipped in either run. Evidence labels: Observed for the counts, From code for the file list.
+
+## EVID-02: the memory probe
+
+The question: can a process that is the same user as the token holder, is not root and is not an ancestor of the holder read the capability token or the signing key out of the holder's memory, and what does it learn from the holder's environment? The probe reads `/proc/PID/status`, `/proc/PID/environ` and `/proc/PID/maps`, opens `/proc/PID/mem` read-only and scans every readable private writable region in chunks of 1 MiB with an overlap of 1280 bytes, with no cap on the number or the size of regions and a bound only on the total (2 GiB read and 60 seconds, with a truncated flag when a bound is hit). It searches for the token prefix and for the token and the key it was given, in Latin-1 and in UTF-16LE. It never writes to the target, never attaches with `ptrace` and never signals, and its report holds counts, error names, 8-character digest prefixes and decoded public claims, and never a token, a key or a needle (From code).
+
+The result is read only with its controls, because a refusal means nothing when the scanner could not find a token it was allowed to read. Arm N, the subject, is a non-root probe of the same user, started detached so that it is reparented and is not an ancestor of the holder, aimed at a real client that holds a real token from a real daemon in enforce mode, with the real signing key in the same process. Arm D, the descendant control, is a probe that starts a synthetic holder itself, so the kernel's descendant rule allows the read: it shows that the scanner finds a token in a Node heap when the read is allowed. Arm R, the root control, is the same probe as arm N run as root against the same kind of holder: it shows that the scanner finds the real token and key when no kernel rule applies. Arms N and D run when the test file runs as a regular user and arm R when it runs as root; the file chooses by user, so no gate variable exists (From code).
+
+What the kernel is expected to do (Inference from the kernel's Yama documentation, until a window measures it): opening `/proc/PID/mem` needs the ptrace attach check, which at `ptrace_scope` 1 admits only an ancestor of the target, a process with `CAP_SYS_PTRACE` or a target that allowed it; reading `/proc/PID/environ` needs the weaker read check, which Yama does not restrict. The probe measures both and does not rely on this reading.
+
+The decision rule, fixed before any run (From code: `verdictOf` in the probe support module). With controls D and R both found and the coverage in N complete: N denied at the open of the memory file, or N read every region with zero hits, makes the claim settled for the recorded kernel and `ptrace_scope`; N found makes it refuted for that configuration; a control not found, or coverage incomplete without a recorded cause, makes it inconclusive, and the claim stays an Inference. The environment read is recorded separately and never changes this rule. The result is about one kernel, one `ptrace_scope` value and one Node version, the ones read in the window (Inference for any other).
+
+| Arm | Probe | Target | Result | Coverage | Status | Date |
+| --- | --- | --- | --- | --- | --- | --- |
+| N (subject) | non-root probe of uid 5002, started detached and reparented, not a descendant of the holder | the token holder, a real client with a real token | mem open denied EACCES; token hits 0, key hits 0 | 153 regions listed, 0 read | recorded | 2026-11-18 |
+| D (descendant control) | same uid, a descendant of the synthetic holder | a synthetic holder started by the probe | mem open ok; the synthetic needle found 4 times in Latin-1, so the scanner works | 53 regions read, 53188352 bytes | recorded | 2026-11-18 |
+| R (root control) | the same probe run as root | the same target as N | mem open ok; the real token found 16 times in Latin-1, key bytes found 3 times raw, key text found 14 times in Latin-1 | 154 regions listed, 92768512 bytes | recorded | 2026-11-18 |
+| Keyring file readability | read of the key file as uid 5002 | the keyring file of the same user | readable by the same uid | not applicable, one file | recorded | 2026-11-18 |
+| Holder environment | read of the environment block as uid 5002 | the environment block of the same target | readable; no token in it, 0 token shapes; the markers PATH, HOME and TMPDIR are present | not applicable | recorded | 2026-11-18 |
+| Cross-check with coreutils | `head -c 64` on the memory file of a same-uid non-descendant synthetic holder, and a read of the environment file of a same-uid sleeper | a synthetic holder read with head, no probe code | the memory read was refused with Permission denied; the environment file was readable and the planted marker was found | not applicable | recorded | 2026-11-18 |
+
+Verdict: recorded. Observed on 2026-11-18, the frozen rule gives settled: arm N was denied at the open of the memory file (EACCES) with 0 token hits and 0 key hits, arm D found the synthetic needle and arm R found the real token and key, so both controls found. Observed, the environment of the holder is readable by the same uid and holds no token, which is why the token is never put in the environment. Inference, the result holds for Linux kernel 6.8.0-149-generic with Yama `ptrace_scope` 1 and Node v24.18.0 only, and other kernels and other `ptrace_scope` values are not covered. Inference, a reader that is root or a descendant of the holder is not covered, and the controls show only that the scanner finds the token when the kernel allows the read. From code, the key file at rest is readable by a same-uid process and no defence is added, so a same-uid process that can read the key file and run the attach step can obtain a token, whatever this memory result is.
+
+## EVID-03: the live enforce proof
+
+Claude through the daemon on the production stack with the default policy (the policy file names no `capabilityTokens` member, so the mode is enforce and nothing hides a change of the default), the host attached, and the audit lines checked for host and kid. Two drives, each with its own tier: a script driving the registered host command `realm mcp --host claude`, and the real claude CLI driven against a scripted loopback provider that this repository's test owns.
+
+| Drive | Tier | Version | Result | Audit lines checked | Leak scan | Status | Date |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| launcher-driven | scripted client driving the registered command | registered command of claude 2.1.322, Podman 5.7.1 | effective mode enforce, keyring present before the first call, doctor item capability-tokens pass; cold start active after 8088 ms and 5 status calls (REALM_NOT_ACTIVE x4, then active); status and list then ran (3 calls); active kid k1, key file mode 600; an unlabelled session (no host flag) was refused POLICY_DENIED with no tool work, and the daemon logs hold 1 capability.refused line | 8 lines: 1 attach, 3 admission, 3 result, 1 refusal; the attach line has tool capability.attach, outcome ok, host claude, kid k1; every call line has host claude and kid k1; realm audit verify exit 0; the unedited copy exit 0, the host-edited copy exit 1, the kid-edited copy exit 1 | clean: 71 sinks over the whole run, the token shape and 3 key texts, no hit | recorded | 2026-11-18 |
+| host-driven | scripted provider, no credential, no real model | claude 2.1.322 | claude itself issued one tools/call for status against the scripted provider, through a wire recorder, against the warm session: exit 0 after 1670 ms; wire methods server/discover, tools/list (all six tools), tools/call x1; provider requests 2, 0 rejected | 11 lines: 2 attach, 4 admission, 4 result, 1 refusal; the check passed with 4 calls, host claude and kid k1 on every call line; realm audit verify exit 0 | clean: 71 sinks over the whole run, the token shape and 3 key texts, no hit | recorded | 2026-11-18 |
+| live probe observation | non-descendant probe of the same uid, ptrace_scope 1, no needle passed | Node v24.18.0 | the realm mcp process: 109 regions listed, 0 read, mem open denied EACCES, 0 token candidates, environment has no token shape; the daemon: 158 regions listed, 0 read, mem open denied EACCES, 0 candidates, key file readable by the same uid | not applicable | reports redacted: no token shape in either | recorded | 2026-11-18 |
+
+Status `recorded`: both drives ran and every check passed (Observed, 2026-11-18). The host-driven turn used a scripted loopback provider with a placeholder key value, no credential and no real model, so what is shown is claude itself issuing the tool call and completing it through the daemon under enforce, not a model deciding to use Realm (Observed). The call lines carry the host label and the key id of the token the daemon minted at the attach, and the attach line precedes the first call line; each new process that attached wrote its own attach line (the launcher session one, claude's own process a second) (Observed). The attach step is unauthenticated, so the lines attribute a call to the host label the client named, not to a verified process (From code).
+
+The feasibility check ran first on the validator tier, with the real recipe installed and a stub realm behind the registered command: claude print mode against the scripted provider issued tools/call for status, exit 0 after 1888 ms, 2 provider messages, 6 MCP tools offered, 0 rejected (Observed, 2026-11-18). It needs `ENABLE_TOOL_SEARCH` set to `false`: by default claude defers MCP tool schemas behind its tool search and offers the provider no MCP tool by name, so a scripted reply that waits for the status tool never fires (Observed, claude 2.1.322). Before the run the host was clean (0 containers, 0 sandboxes, 0 daemons, an empty workspace); a keyring existed and was left as it was; afterwards the policy file was restored, the receipt and presence entries were as before, the operator's real claude file was unchanged and nothing remained (Observed).
+
+## Not shown
+
+What this evidence does not cover, however the rows above fall:
+
+- Other kernels and other `ptrace_scope` values: only the value read in a window is measured (Inference from the kernel documentation for any other value).
+- Node 22.x: CI covers it as a regular user; only the Node version read in a window is run (From code, the CI matrix).
+- Any reader that is a descendant of the holder, or root (Inference from the kernel documentation; the root control only shows the scanner works).
+- `process_vm_readv` and `ptrace` attach: not exercised; the probe covers the access routes of `/proc/PID/mem` and `/proc/PID/environ` only (Inference from the kernel documentation that the access check is the same).
+- A same-user reader of the key file: the key file is readable by the same user, the page records that beside the memory result, and a same-user reader can mint tokens whatever the memory result is (From code).
+- A real model turn: the host-driven drive used a scripted loopback provider with a placeholder key, so claude issued the tool call and no model decided to (Observed, 2026-11-18).
+- One claude version (2.1.322), one machine, one kernel and one day; a scripted provider is not a model (Observed, 2026-11-18).
+- The interplay of enforce with the cold attach was observed once (4 refusals REALM_NOT_ACTIVE, then active) and is not the Phase 33 cold-attach proof (Observed, 2026-11-18).
+- The attach step is unauthenticated, so the audit lines attribute a call to a host label, not to a verified process (From code).
+- Hosts other than claude (From code).
+- The whole unit suite (Set B) ran once as uid 5002, on one commit (62b85fe), one machine, one Node version and one day; 83 of its 5542 tests were skipped and count as `not-run`, and its first run on another commit failed before the stale build and one test assumption were fixed (Observed, 2026-11-18). Node 22.x as that user is not run here; CI covers it (From code, the CI matrix).
+
+## Evidence kept outside the repository
+
+Raw evidence is kept in a directory outside the repository, with mode 0700 and files 0600, named on this page only as the evidence directory with the dates of its contents. It holds TAP output, audit-line copies, probe reports, snapshots and wire logs. Nothing from it is copied into the repository except counts, statuses, 8-character digest prefixes and decoded public claims.

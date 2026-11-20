@@ -172,7 +172,7 @@ async (t) => {
 
   // A required-mode write while non-active: refused by the mutation gate
   // with the catalogue code, on a second harness both surfaces share.
-  const gated = makeHarness(t, { policy: REQUIRED, state: "degraded" });
+  const gated = makeHarness(t, { policy: REQUIRED, state: "error" });
   const blocked: ToolCall = { write: { path: "doc.txt", content: "blocked" } };
   const mcpGated = (await mcpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;
   const acpGated = (await acpOutcomes(gated.dispatcher, [blocked]))[0] as ToolOutcome;

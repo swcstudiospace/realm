@@ -458,3 +458,60 @@ void test("an oversize append fails with AUDIT_WRITE_FAILED and leaves the file 
     assert.equal(readFileSync(auditFile(stateDir), "utf8"), before);
   });
 });
+
+void test("CAPT-07: host and kid are written after upId only when present, and an entry with neither is the pre-token shape", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", path: "a.txt", upId: "up-1" });
+    appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", path: "a.txt", upId: "up-1", host: "cursor", kid: "k1" });
+    const [plain, tokened] = readLines(stateDir);
+    const plainKeys = Object.keys(JSON.parse(plain ?? "") as Record<string, unknown>);
+    assert.deepEqual(plainKeys, ["seq", "prev", "at", "sessionId", "upId", "tool", "outcome", "path"].filter((key) => plainKeys.includes(key)));
+    assert.equal(plainKeys.includes("host"), false);
+    assert.equal(plainKeys.includes("kid"), false);
+    const tokenedKeys = Object.keys(JSON.parse(tokened ?? "") as Record<string, unknown>);
+    assert.equal(tokenedKeys.indexOf("host"), tokenedKeys.indexOf("upId") + 1);
+    assert.equal(tokenedKeys.indexOf("kid"), tokenedKeys.indexOf("host") + 1);
+  });
+});
+
+void test("CAPT-07: the plain 0.4.3 line shape is byte-identical apart from the timestamp and the chain fields", () => {
+  withStateDir((stateDir) => {
+    appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", phase: "admission", path: "a.txt", correlationId: "c1" });
+    const text = readLines(stateDir)[0] ?? "";
+    const stripped = text.replace(/"at":"[^"]*"/, '"at":"T"');
+    assert.match(stripped, /^\{"seq":1,"prev":"0{64}","at":"T","sessionId":"[^"]+","correlationId":"c1","tool":"read","outcome":"ok","phase":"admission","path":"a\.txt"\}$/);
+  });
+});
+
+void test("CAPT-07: host and kid pattern boundaries are enforced and a mismatch writes nothing", () => {
+  withStateDir((stateDir) => {
+    const ok: readonly { host: string; kid: string }[] = [
+      { host: "a", kid: "k" },
+      { host: `a${"b".repeat(31)}`, kid: "k".repeat(16) },
+      { host: "kimi-code", kid: "k1" },
+    ];
+    for (const principal of ok) {
+      appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", ...principal });
+    }
+    assert.equal(readLines(stateDir).length, 3);
+    const bad: readonly { host: string; kid: string }[] = [
+      { host: "Cursor", kid: "k1" },
+      { host: "", kid: "k1" },
+      { host: `a${"b".repeat(32)}`, kid: "k1" },
+      { host: "1a", kid: "k1" },
+      { host: "cursor", kid: "k".repeat(17) },
+      { host: "cursor", kid: "" },
+      { host: "cursor", kid: "K1" },
+      { host: "cursor", kid: "k-1" },
+    ];
+    for (const principal of bad) {
+      assert.throws(
+        () => {
+          appendAudit(stateDir, { sessionId: SESSION, tool: "read", outcome: "ok", ...principal });
+        },
+        (error: unknown) => error instanceof RealmError && error.code === "SCHEMA_INVALID",
+      );
+    }
+    assert.equal(readLines(stateDir).length, 3, "nothing was written for a mismatch");
+  });
+});

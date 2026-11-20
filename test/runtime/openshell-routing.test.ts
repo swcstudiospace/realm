@@ -7,6 +7,7 @@ import { AgentOsSupervisor } from "../../src/runtime/agentos.js";
 import { HARDENING_PROFILE, RUNTIME_ARGV, RUNTIME_BINARY, scratchVolumeNameOf, tmpfsOptionsOf } from "../../src/runtime/hardening.js";
 import { LibpodClient } from "../../src/runtime/libpod-client.js";
 import { sandboxBindingOf } from "../../src/runtime/driver/sandbox-binding.js";
+import { watchdogWorkload } from "../../src/runtime/exec-watchdog.js";
 import { buildExecArgv, OPENSHELL_BINARY, realmSandboxName } from "../../src/runtime/openshell.js";
 import { SessionExecution } from "../../src/runtime/session-execution.js";
 import { FakeAgentOsDriver } from "../support/fake-agentos.js";
@@ -236,7 +237,8 @@ void test("TOOL-03: every exec routes through the shared dispatcher and reaches 
   const outcome = await h.dispatcher.call({ exec: { argv: [...DISPATCH_WORKLOAD] } });
   assert.equal(outcome.outcome, "done");
   assert.equal(h.runs.length, 1, "the dispatcher ran the workload once, through the runner");
-  assert.deepEqual(h.runs[0]?.argv, [...buildExecArgv(DISPATCH_SESSION, DISPATCH_WORKLOAD)]);
+  assert.deepEqual(h.runs[0]?.argv, [...buildExecArgv(DISPATCH_SESSION, watchdogWorkload(DISPATCH_WORKLOAD, 28000))]);
+  assert.equal(h.runs[0].options.timeoutMs, 28000);
   assert.equal(h.runs[0].options.captureOutput, true);
 });
 

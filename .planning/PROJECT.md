@@ -10,31 +10,66 @@ When an agent edits code, every file mutation either lands inside the realm unde
 
 ## Current State
 
-Shipped: **v2.0 Host Adapters, Live Verification and Production Isolation** (2026-10-29), as releases 0.2.0 to 0.2.3 (`CHANGELOG.md` and the GitHub releases). The 0.3.x line, which starts with the first release of milestone v3.0, is the supported line (`SECURITY.md`). The record is in `.planning/milestones/`: `v2.0-ROADMAP.md`, `v2.0-REQUIREMENTS.md`, `v2.0-MILESTONE-AUDIT.md`, `v2.0-INTEGRATION-CHECK.md` and `v2.0-phases/`. Release 0.2.3 records the lifecycle and persistence findings of 2026-10-29 (`.planning/quick/261029-g7m-lifecycle-and-persistence-findings/`) and the Omp lifecycle runbook (`docs/integration/omp-lifecycle-runbook.md`).
+Shipped: **v8.0 Shared sandboxes and durable recovery** (2026-11-19, release line 0.8.x), and milestone v9.0 is in progress. Earlier: v7.0 (2026-11-19, 0.7.x), v6.0 (2026-11-19, 0.6.x), v5.0 (2026-11-18, 0.5.x), v4.0 (2026-11-18, 0.4.x), v3.0 (2026-11-17, 0.3.x) and v2.0 (2026-10-29, releases 0.2.0 to 0.2.3; `CHANGELOG.md` and the GitHub releases). The supported-version statement is in `SECURITY.md` (the latest release line). The record is in `.planning/milestones/`: for example `v6.0-ROADMAP.md`, `v6.0-REQUIREMENTS.md`, `v6.0-MILESTONE-AUDIT.md` and `v6.0-phases/`, and the same set for v2.0 to v5.0 (`v2.0-INTEGRATION-CHECK.md` for v2.0); v8.0 is `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/v8.0-MILESTONE-AUDIT.md` and `.planning/phases/49-54/`.
 
 What exists, and what was verified live on the production stack (the realm account: rootless Podman 5.7.1, the OpenShell 0.1.5 gateway, the Realm compute driver): `realm up`, `down`, `status`, `doctor`, `mcp` and `acp`; the Omp plugin; adapter bundles for Claude Code, Grok Build, Muse Code, Hermes Agent, Prime Agent and Omp. The MCP server serves both protocol eras, and Claude Code and Grok Build connect to it (connection checks, 2026-10-29). The nine-scenario production live suite passes 31 of 31 on the installed 0.2.1. Releases carry `SHA256SUMS` and a CycloneDX SBOM, and the documentation site deploys from the release job.
 
 Verified only as far as a connection and a scripted run: no LLM-driven tool call has run through any host. A scripted OpenAI-compatible provider drove Omp's own `write` tool through the guard in both modes (2026-10-29), and the findings show that Omp's own tools do not run in the sandbox: the extension registers no tool and only gates `write` and `edit`.
 
-## Current Milestone: v3.0 Containment by Default
+## Current Milestone: v9.0 Doctor health and concurrent binding
 
-**Goal:** A model working through Omp does its file mutations and commands inside the sandbox by default; the sandbox and the files in it survive crashes; an operator can see what happened, prove the audit log is intact, and ship the product with provenance and a rollback path.
+**Goal:** Operators can see Omp plugin health from `realm doctor` with a runbook for the failing cases, the F-51-1 dirty-stop cause is established and bounded, the two v8.0-carried host-evidence items get a final retest (HTIER-01 attribution, KIMV-02 recorder fix plus rerun), and concurrent binding is implemented on the frozen Phase 53 design once the owner ratifies it.
 
 **Target features:**
 
-- Scripted-provider end-to-end harness and the Omp enforcement spike; OMP-05 recorded complete on that evidence (owner decision D2)
-- Quality ratchet: dependency audit and Dependabot, coverage floors, de-flaked timing tests, property tests and a scheduled mutation run
-- Crash-safety pack: orphan temp-file sweep, audit reconciliation, durable record deletion, real-SIGKILL tests, TD-01 and TD-04
-- Zero-config onboarding (`realm init`, `doctor --fix`, roots in `config.json`, an allowlisted daemon environment) and fail-closed as the default policy mode (D4)
-- Omp tools backed by the sandbox, with the built-in `write`, `edit` and `bash` removed or blocked in fail-closed mode (D3)
-- Observability and a tamper-evident audit log: structured logs with correlation ids, local metrics, a hash chain with `realm audit verify`, and a distinct code for gateway or driver loss (TD-05)
-- Per-project sandboxes: one session per project workspace
-- Resume and checkpoint: re-adoption of a surviving sandbox, a session-owned scratch volume, workspace snapshots and restore
-- Release pipeline hardening: job split, build provenance attestation, rollback workflow, changelog filter (D6)
+- Omp plugin health check (Phase 55): a `realm doctor` check reports the Omp plugin install and health state with its fix text, and the Omp lifecycle runbook documents the failing cases and their remedy (HEALTH-01, HEALTH-02)
+- F-51-1 cause (Phase 56): the failed-step cause code is captured, the dirty variant-c stop cause is established in `docs/integration/runtime-decision.md`, and the cause is fixed or bounded with a 20-iteration clean run (STOP-05, STOP-06)
+- HTIER-01 attribution retest (Phase 57): the Grok Build both-files audit line is retested live, or GAP-40-01 stays accepted-residual with the missing host feature named (HTIER-01)
+- KIMV-02 recorder fix and rerun (Phase 58): the wire recorder logs before forwarding, then the deciding live rerun runs and GAP-43-03 is established or stays narrowed with the new evidence (KIMV-02)
+- Concurrent binding implementation (Phase 59, gated on owner ratification of the Phase 53 design): the binding lock from `53-DESIGN.md` is implemented per the frozen surfaces, with CBIND-01..02 closing on ratification and CBIND-03 on the implementation (CBIND-01..03)
 
-The owner decisions D1 to D6 (2026-10-29) are recorded in `.planning/MILESTONE-CONTEXT.md`. The scope source is `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/` (`IMPROVEMENT-PROPOSALS.md`), whose defaults for D1 to D6 those answers supersede. The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (12 to 20) in `.planning/ROADMAP.md`.
+The owner decisions of 2026-11-20 (v9.0 scope; Phase 59 gated on ratification of `53-DESIGN.md`) are recorded in `.planning/MILESTONE-CONTEXT.md`. The requirement IDs are in `.planning/REQUIREMENTS.md` and the phases (55 to 59) in `.planning/ROADMAP.md`. The ship-flow `--enforce` confirmation of DEBT-03 remains owner-side configuration; carried.
 
-**Carried, not in this milestone** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`): FS-02 (race-resistant path resolution is an accepted approximation; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (live-gated; the engine licence conflict, OQ-P3-11, blocks vendoring Anda code), PRD-DRV-01 (its amendment awaits the owner, except as far as Phase 18 needs the driver's workspace handling) and UI-01 (an accepted limitation). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
+**Carried, not in this milestone** (reasons and owners: `.planning/v8.0-MILESTONE-AUDIT.md`): F-41-1 and STOP-01 to STOP-04 (never reproduced; F-51-1 is Phase 56), SNAP implementation (design only in v8.0, Phase 54), GAP-48-02/04 (Prime Agent blockers), FS-02 (accepted limitation), UI-01 status (the owner's call), Anda items, DEBT-03 ship-flow `--enforce` (unchanged). Owner decisions still open: the HITL ratification of the Phase 53 concurrent binding design, which gates Phase 59.
+
+## Last Milestone: v8.0 Shared sandboxes and durable recovery (shipped 2026-11-19)
+
+**Result:** v8.0 shipped on 2026-11-19 (release line 0.8.x, phases 49 to 54, 4 of 12 requirements ticked Complete; audit `.planning/v8.0-MILESTONE-AUDIT.md`, passed with accepted limitations). Phase 49 froze `CALIBRATED_BOUNDS` and closed OMPR-01/06 + OI-11 on the FINDING. Phase 50 passed the Grok production tier and closed GAP-48-03, but HTIER-01 stayed carried. Phase 51 never reproduced F-41-1 and recorded new finding F-51-1. Phase 52 narrowed GAP-43-03 to NOT-ESTABLISHED. Phase 53 froze the concurrent binding design pending HITL ratification. Phase 54 froze the snapshots design.
+
+**What shipped:**
+
+- Omp calibration repeat (Phase 49): bracket step not-needed, `CALIBRATED_BOUNDS` frozen before the verdict window, FINDING with paired NOT-REPRODUCED over 5 valid pairs; OMPV-04 met, OMPR-01, OMPR-06 and OI-11 closed
+- Grok harness fix and production re-run (Phase 50): `productionOverrides` creates `<grok-home>/.grok`; Grok Build 1.0.77 production tier passed cold, registry T3 `rehearsed`, GAP-48-03 closed; HTIER-01 live audit line not reproduced (cold mandatory audit)
+- Rapid stop then up repeat (Phase 51): OTHER-FAILURE, 0 `OPENSHELL_START_FAILED` in 123 ups, 3 dirty variant-c stops; new finding F-51-1 (cause not established, failed-step code not captured), STOP-01 to STOP-04 not met, F-41-1 carried
+- Legacy kimi cause (Phase 52): NOT-ESTABLISHED narrowed — `realm mcp` exonerated by source, recorder indicted by code [INFERENCE]; GAP-43-03 stays open, deciding rerun human-blocked
+- Concurrent binding design (Phase 53): `53-DESIGN.md` frozen (D-53-H1…H6, tuple identity, bounded FIFO wait, nested roots refused); CBIND-01..02 open pending HITL owner ratification
+- Snapshots design (Phase 54): `54-DESIGN.md` frozen (snapshot = retained RES-04 checkpoint, D-54-H1…H5); SNAP-01..02 met on the frozen design
+
+**Carried, not closed by v8.0:** STOP-01 to STOP-04 + F-41-1 (never reproduced) and new F-51-1; KIMV-02 + GAP-43-03 (open, narrowed); HTIER-01 + GAP-40-01/GAP-48-01 (accepted-residual); CBIND-01..02 (design-frozen, ratification pending); GAP-48-02/04; FS-02, UI-01, Anda items, DEBT-03 ship-flow `--enforce` (unchanged). Reasons and owners: `.planning/v8.0-MILESTONE-AUDIT.md`.
+
+The owner decisions of 2026-11-19 are recorded in `.planning/milestones/v8.0-MILESTONE-CONTEXT.md`; the v7.0 context is archived at `.planning/milestones/v7.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPV, STOP, KIMV, HTIER, CBIND, SNAP) are in `.planning/REQUIREMENTS.md` and the phases (49 to 54) in `.planning/ROADMAP.md`. The ship-flow `--enforce` confirmation of DEBT-03 is not in this milestone (owner-side configuration; carried).
+
+## Previous Milestone: v6.0 Responsiveness, exec kill proof, host ids and evidence debt (shipped 2026-11-19)
+
+
+**Result:** v6.0 shipped on 2026-11-19 (release line 0.6.x, phases 38 to 44, 17 of 19 requirements ticked Complete; audit `milestones/v6.0-MILESTONE-AUDIT.md`, passed with accepted limitations). OMPR-01 is carried (not met) and OMPR-06 is partial. The next milestone, v7.0, started the same day by a pull request that set the next minor in `release/milestone.json`.
+
+**What shipped:**
+
+- Omp responsiveness (Phases 38 and 44): the quiet-host window ended VOID (six attempts, one valid run), so OMPR-01 stays not met and OI-11 stays `Carried (no quiet slot)`. By the owner's decision of 2026-11-19 on the loaded evidence, the harness reads the verdict from Omp's ready frame, the daemon launch moved out of the CLI (the extension's value imports 98 to 43) and the attach starts one turn later, fail closed kept; the paired loaded A/B window ended VOID (3 valid pairs of 5), so no effect is claimed (OMPR-06 partial). `src/omp/plugin.ts` is at the 1000-line module ceiling
+- Timed-out exec kill proof (Phase 39): a real defect (F-3), a timed-out exec's process tree kept running because the sandbox denies a group kill; every dispatcher exec is now wrapped by an in-sandbox bash `/proc`-sweep watchdog, shown live (tree dead about 3 s after the `TOOL_TIMEOUT` reply)
+- Host ids (Phase 40): Muse Code, Prime Agent and Grok Build have host ids and recipes (22 host ids) and attach under the enforce default; GAP-34-01 closed; validator tier only, no production tier, and a Grok Build session that loads the shared Claude files stays attributed `claude` (GAP-40-01)
+- Daemon teardown (Phase 41): the slow stop explained (stage bounds summed past the 30 s bound) and bounded, 10 live stops; finding F-41-1 (a start failure after a rapid stop) carried
+- Evidence debt (Phase 42): the whole suite as uid 5002 (5542 tests, 0 failures), the breaking-change marker guard (46 tests) and its CI workflow (merged on the owner's review of the exact head); the ship-flow enforce run is unconfirmed (DEBT-03 partial)
+- Kimi (Phase 43): Kimi Code 2.6.3 passed all tiers cold; the legacy kimi-cli 1.51.0 production tier failed (cause not established, GAP-43-01 to GAP-43-03)
+
+**v7.0 candidates (taken into v7.0, Phases 45 to 48):** the Omp responsiveness repeat with a harness fix (OMPR-01, OMPR-06, OI-11); F-41-1; the legacy kimi CLI and GAP-43-01; GAP-40-01 and production tiers for Muse Code, Prime Agent and Grok Build. The ship-flow `--enforce` confirmation (DEBT-03) was not ticked and stays carried.
+
+The owner decisions of 2026-11-18 and 2026-11-19 are recorded in `.planning/milestones/v6.0-MILESTONE-CONTEXT.md` and `.planning/milestones/v6.0-MILESTONE-AUDIT.md`; the v5.0 context is archived at `.planning/milestones/v5.0-MILESTONE-CONTEXT.md` and the decisions D1 to D6 of v3.0 (2026-10-29) at `.planning/milestones/v3.0-MILESTONE-CONTEXT.md`. The requirement IDs (OMPR, EXEC, HOSTID, TEAR, DEBT, KIMI) are archived in `.planning/milestones/v6.0-REQUIREMENTS.md` and the phases (38 to 44) in `.planning/milestones/v6.0-ROADMAP.md`.
+
+**Carried, not closed by v6.0** (reasons and owners: `milestones/v2.0-MILESTONE-AUDIT.md`, `milestones/v6.0-MILESTONE-AUDIT.md`): OMPR-01 (the quiet-host Omp cold-attach measurement, Phase 38 VOID) and OMPR-06 (the paired loaded window, Phase 44 VOID), both accepted by the owner on completing v6.0; FS-02 (race-resistant path resolution is an accepted limitation, Phase 27 disposition of 2026-11-17; the property tests of Phase 13 add confidence only), ANDA-01 to ANDA-04 (dropped by owner decision D-27-01, 2026-11-17), PRD-DRV-01 (complete: the owner confirmed its amendment on 2026-11-17) and UI-01 (an accepted limitation; Phase 36 recorded a loaded-host Omp cold-attach run that failed its thresholds, Phase 44 a paired loaded window that ended VOID, and the status stays the owner's call). Owner decisions still open: the product-spec amendment for RT-04, the Podman probe classification, A10 F2 and F3 and the policy file integrity rule (R6), the supply-chain items for the trust channel, install sources and holding the openshell package, the TD-10 repository settings, and the removal of the rollback and builder-cache images. Tech debt outside this milestone: TD-02 (a coordination note in Phase 15) and TD-06.
+
+**Taken into v7.0:** OMPR-01 and OMPR-06 (with OI-11) are taken into Phase 45 (OMPV-01 to OMPV-06); they close only on a valid verdict, never on a VOID outcome or on the hermetic probe alone. F-41-1 is Phase 46 (STOP), GAP-43-01 and GAP-43-03 are Phase 47 (KIMV), and GAP-40-01 is Phase 48 (HTIER).
 
 ## Requirements
 
@@ -74,7 +109,7 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 - [ ] Policy engine (advisory default, fail-closed opt-in), state machine, typed event bus, controller
 - [ ] Filesystem lockdown: root-allowlisted canonical paths, credential-path deny, advisory write locks, atomic writes
 - [ ] Podman rootless, OpenShell and AgentOS runtime adapters with hardening, gated integration tests
-- [ ] Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter
+- Dropped 2026-11-17 (owner decision D-27-01): the Anda Engine TypeScript bridge with version handshake and bounded backoff with jitter; the bridge was removed in Phase 28 (merged 2026-11-17, release 0.4.x)
 - [ ] Orphan reaper, default-deny egress guard, single shared tool dispatcher
 - [ ] Omp plugin: detached autostart under a startup budget, status indicator (realm active / realm disconnected), retry command
 - [ ] MCP server and ACP adapter over one tool contract. Superseded 2026-10-29: TOOL-05 was proven live (REQUIREMENTS.md).
@@ -101,9 +136,9 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 ## Context
 
 - Realm is the fourth component of the USSR Stack. The three siblings are Ultrathink (agent reasoning augmentation), Substrate (unified memory interface for live sessions), and Swarm (subagent chat multithreading for GSD-Core). Realm exposes seams for them but does not implement them.
-- Authoritative product spec: `docs/specs/realm-spec.xml` (read-only source of truth; do not modify). It contains SCOPE, CONSTRAINTS, REALM_SANDBOX, OMP_PLUGIN, HOST_INTEGRATIONS, STATES, SECURITY_AND_VALIDATION, GRACEFUL_DEGRADATION, WORKFLOW, ACCEPTANCE_CRITERIA, OUT_OF_SCOPE, ASSUMPTIONS, AMBIGUITIES, and a graph-of-thought decomposition (nodes n1 to n8).
+- Authoritative product spec: `docs/specs/realm-spec.xml` (source of truth; changed only on an explicit owner instruction: the Anda bridge statements were retired on 2026-11-18, Phase 37). It contains SCOPE, CONSTRAINTS, REALM_SANDBOX, OMP_PLUGIN, HOST_INTEGRATIONS, STATES, SECURITY_AND_VALIDATION, GRACEFUL_DEGRADATION, WORKFLOW, ACCEPTANCE_CRITERIA, OUT_OF_SCOPE, ASSUMPTIONS, AMBIGUITIES, and a graph-of-thought decomposition (nodes n1 to n8).
 - Prior art (behavioral reference only, no code copied unless supplied in-session): a C# implementation for OmpOS, and a variant in production in the Grok Bot application for Omega Prime.
-- External dependencies, each to be read from official docs and recorded under `docs/integration/` with URL and read date before integration code is written: Rivet (AgentOS), Podman, NVIDIA OpenShell, Anda, the Omp plugin and status API, the MCP specification, the ACP specification, and the Node or Bun constraints of each host.
+- External dependencies, each to be read from official docs and recorded under `docs/integration/` with URL and read date before integration code is written: Rivet (AgentOS), Podman, NVIDIA OpenShell, the Omp plugin and status API, the MCP specification, the ACP specification, and the Node or Bun constraints of each host. Anda was a listed dependency until its bridge was removed in v4.0 (D-27-01); Anda may still consume Realm as an MCP client over stdio.
 - Local environment observed at initialization: Podman 4.9.3 is installed; OpenShell documentation requires Podman 5.x, so Podman-dependent integration tests are gated and skip with a clear reason until 5.x is present. No packages are installed or upgraded by this project's planning.
 - Repository state at initialization: git initialized on branch `main`, remote `origin` set to the Realm GitHub repository. Nothing is pushed or fetched by planning work.
 - Ambiguities carried from the spec (see REQUIREMENTS.md and STATE.md for handling): the "ultrathink orchestrate workflowz" prefix is treated as framing only; the unexpanded skill argument is treated as no argument; AgentOS identity (Rivet actor service versus separate product) is resolved by reading Rivet docs; Anda consumption is resolved by the Anda documentation spike.
@@ -148,4 +183,4 @@ The v1 requirement set lives in `.planning/REQUIREMENTS.md` (REQ-IDs grouped by 
 | Owner sign-off for changes under `.github/workflows`, `release` and `scripts/release` needed by v3.0 | Owner decision D6 (2026-10-29): `AGENTS.md` requires human review for those paths | Signed off 2026-10-29; each such pull request cites D6; repository settings (TD-10) stay the owner's |
 
 ---
-*Last updated: 2026-10-29 after starting milestone v3.0*
+*Last updated: 2026-11-20 after starting milestone v9.0*

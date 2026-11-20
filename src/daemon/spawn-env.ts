@@ -1,5 +1,5 @@
 // The environment a detached daemon may inherit (ONB-07, D-1505). Both start paths (the CLI spawn and
-// startDetachedDaemon) pass this and nothing else. A name that is not on the allowlist, including a stale
+// startDetachedDaemon, both in src/daemon/launch.ts) pass this and nothing else. A name that is not on the allowlist, including a stale
 // REALM_DRIVER_*_ROOT variable, does not reach the child. The allowlist holds paths, digests and the log
 // level, never a credential. No daemon-side code reads the gateway endpoint or its CA: the doctor's gateway
 // item runs `openshell status`, and the driver reads its endpoint from its own unit. REALM_LOG_LEVEL is kept

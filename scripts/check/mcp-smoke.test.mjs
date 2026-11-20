@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus } from "./mcp-smoke.mjs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { EXPECTED_ANNOTATIONS, LEGACY_VERSION, MODERN_VERSION, checkEras, compareStatus, describeFailedStatus, describeMarker, readMarker, waitForMarker } from "./mcp-smoke.mjs";
 
 // The smoke gate decides whether the built server speaks both protocol eras in the shapes the revisions name. These
 // tests feed it the replies a conforming server gives, and then one broken reply at a time, so a gate that stops
@@ -12,10 +15,16 @@ const STATUS_OUTCOME = {
   tool: "status",
   value: {
     snapshot: { state: "active", reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
-    display: { label: "realm active", degraded: false, reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
+    display: { label: "realm active", reason: "ready", lastTransitionAt: "2026-10-29T00:00:00.000Z" },
   },
 };
-const TOOLS = ["exec", "read", "write", "list", "status", "retry"].map((name) => ({ name, description: name, inputSchema: { type: "object" } }));
+const TOOLS = Object.entries(EXPECTED_ANNOTATIONS).map(([name, annotations]) => ({
+  name,
+  title: annotations.title,
+  description: name,
+  inputSchema: { type: "object" },
+  annotations: { ...annotations },
+}));
 
 function toolResult(outcome, extra = {}) {
   return { content: [{ type: "text", text: JSON.stringify(outcome) }], structuredContent: outcome, isError: false, ...extra };
@@ -95,6 +104,102 @@ test("checkEras reports a missing reply by id", () => {
   assert.throws(() => checkEras(conformingReplies().filter((reply) => reply.id !== 5), VERSION), /no reply for id 5/);
 });
 
+test("checkEras accepts the conforming session and both fixture lists carry annotations", () => {
+  const replies = conformingReplies();
+  checkEras(replies, VERSION);
+  for (const id of [2, 5]) {
+    const tools = replies.find((reply) => reply.id === id).result.tools;
+    assert.equal(tools.length, 6);
+    for (const tool of tools) {
+      assert.equal(typeof tool.annotations, "object");
+      assert.equal(tool.annotations.title, tool.title);
+    }
+  }
+});
+
+// Every seeded fault of the annotation check: per era (legacy reply 2, modern reply 5) and per tool, a flipped hint (4),
+// a deleted annotations object, an extra key and a changed title; plus each tool dropped from both lists.
+function annotationMutants() {
+  const mutants = [];
+  const eras = [["legacy", 2], ["modern", 5]];
+  for (const [era, id] of eras) {
+    for (const name of Object.keys(EXPECTED_ANNOTATIONS)) {
+      const edit = (label, change) => {
+        mutants.push({
+          label: `${era} ${name}: ${label}`,
+          name,
+          replies: withReply(id, (reply) => {
+            change(reply.result.tools.find((tool) => tool.name === name));
+            return reply;
+          }),
+        });
+      };
+      for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+        edit(`flip ${hint}`, (tool) => {
+          tool.annotations[hint] = !tool.annotations[hint];
+        });
+      }
+      edit("delete annotations", (tool) => {
+        delete tool.annotations;
+      });
+      edit("extra key", (tool) => {
+        tool.annotations.trustedByHost = true;
+      });
+      edit("change title", (tool) => {
+        tool.title = `${tool.title} (changed)`;
+      });
+    }
+  }
+  for (const name of Object.keys(EXPECTED_ANNOTATIONS)) {
+    mutants.push({
+      label: `both eras: drop ${name}`,
+      name,
+      replies: conformingReplies().map((reply) =>
+        reply.id === 2 || reply.id === 5
+          ? { ...reply, result: { ...reply.result, tools: reply.result.tools.filter((tool) => tool.name !== name) } }
+          : reply,
+      ),
+    });
+  }
+  return mutants;
+}
+
+test("checkEras rejects each seeded annotation fault in each era", () => {
+  const mutants = annotationMutants();
+  assert.equal(mutants.length, 90, "the generator must make exactly 90 mutants");
+  for (const mutant of mutants) {
+    let message;
+    try {
+      checkEras(mutant.replies, VERSION);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assert.notEqual(message, undefined, `${mutant.label}: checkEras must throw`);
+    assert.match(message, new RegExp(`(tool |include )${mutant.name}\\b`), `${mutant.label}: the message must name the tool, got ${String(message)}`);
+  }
+});
+
+test("checkEras rejects an era that differs from the other", () => {
+  const swapped = withReply(5, (reply) => {
+    const tools = reply.result.tools;
+    [tools[0], tools[1]] = [tools[1], tools[0]];
+    return reply;
+  });
+  assert.throws(() => checkEras(swapped, VERSION), /both eras must list identical tool objects/);
+});
+
+test("EXPECTED_ANNOTATIONS names exactly the six tools with the five keys each and no tool is both read-only and destructive", () => {
+  assert.deepEqual(Object.keys(EXPECTED_ANNOTATIONS), ["exec", "read", "write", "list", "status", "retry"]);
+  for (const [name, row] of Object.entries(EXPECTED_ANNOTATIONS)) {
+    assert.deepEqual(Object.keys(row).sort(), ["destructiveHint", "idempotentHint", "openWorldHint", "readOnlyHint", "title"], name);
+    for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+      assert.equal(typeof row[hint], "boolean", `${name} ${hint}`);
+    }
+    assert.equal(typeof row.title, "string", name);
+    assert.ok(!(row.readOnlyHint && row.destructiveHint), `${name} is both read-only and destructive`);
+  }
+});
+
 test("compareStatus passes when the MCP outcome carries the CLI's snapshot and display", () => {
   const cli = JSON.stringify(STATUS_OUTCOME.value);
   assert.deepEqual(compareStatus(cli, toolResult(STATUS_OUTCOME)), { ok: true, mode: "active" });
@@ -114,4 +219,63 @@ test("compareStatus accepts a disconnected CLI only against a REALM_NOT_ACTIVE t
   const thrown = { isError: true, content: [{ type: "text", text: "REALM_NOT_ACTIVE: x" }], structuredContent: { code: "REALM_NOT_ACTIVE", message: "x", retryable: false } };
   assert.deepEqual(compareStatus("disconnected", thrown), { ok: true, mode: "disconnected" });
   assert.equal(compareStatus("disconnected", toolResult(STATUS_OUTCOME)).ok, false);
+});
+
+// The presence marker the smoke reads from a real `realm mcp --host claude` (src/host/presence.ts writes it).
+const MARKER = { schemaVersion: 1, pid: 4242, startedAt: "2026-11-17T10:00:00.000Z", sessionId: "p0123456789ab", attach: "attached", code: null };
+
+test("describeMarker accepts an attached marker and a failed marker with a catalogue code, and names why it refuses the rest", () => {
+  assert.equal(describeMarker(MARKER, 4242), null);
+  assert.equal(describeMarker({ ...MARKER, attach: "failed", code: "PODMAN_MISSING" }, 4242), null);
+  assert.match(describeMarker(null, 4242), /no marker/);
+  assert.match(describeMarker({ ...MARKER, extra: 1 }, 4242), /six keys/);
+  const short = Object.fromEntries(Object.entries(MARKER).filter(([key]) => key !== "sessionId"));
+  assert.match(describeMarker(short, 4242), /six keys/);
+  assert.match(describeMarker(MARKER, 4243), /child pid/);
+  assert.match(describeMarker({ ...MARKER, schemaVersion: 2 }, 4242), /schemaVersion 1/);
+  assert.match(describeMarker({ ...MARKER, attach: "done" }, 4242), /attach/);
+  assert.match(describeMarker({ ...MARKER, attach: "failed", code: "not a code" }, 4242), /code/);
+  assert.match(describeMarker({ unreadable: true }, 4242), /six keys/);
+});
+
+test("readMarker reads <state>/hosts/<host>-active/<pid>.json, null when absent, and flags a file that is not an object", () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "realm-smoke-marker-"));
+  try {
+    assert.equal(readMarker(stateDir, "claude", 4242), null);
+    const dir = join(stateDir, "hosts", "claude-active");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "4242.json"), `${JSON.stringify(MARKER)}\n`);
+    assert.deepEqual(readMarker(stateDir, "claude", 4242), MARKER);
+    assert.equal(readMarker(stateDir, "codex", 4242), null, "another host's directory is not read");
+    writeFileSync(join(dir, "4243.json"), "[1]\n");
+    assert.deepEqual(readMarker(stateDir, "claude", 4243), { unreadable: true });
+    writeFileSync(join(dir, "4244.json"), "not json");
+    assert.deepEqual(readMarker(stateDir, "claude", 4244), { unreadable: true });
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// ---- The waits and the failed branch of the cold-attach session (Phase 33) ---------------------------------------------------
+
+test("waitForMarker resolves with a marker that appears late and with null when it never does or the child ends first", async () => {
+  let reads = 0;
+  const late = await waitForMarker(() => {
+    reads += 1;
+    return reads >= 3 ? { attach: "attached" } : null;
+  }, { isEnded: () => false, timeoutMs: 5000, intervalMs: 1 });
+  assert.deepEqual(late, { attach: "attached" });
+  assert.equal(reads, 3, "it polled until the marker appeared");
+  assert.equal(await waitForMarker(() => null, { isEnded: () => false, timeoutMs: 30, intervalMs: 1 }), null, "a marker that never appears");
+  assert.equal(await waitForMarker(() => null, { isEnded: () => true, timeoutMs: 5000, intervalMs: 1 }), null, "a child that ended first");
+  assert.deepEqual(await waitForMarker(() => ({ attach: "failed" }), { isEnded: () => true, timeoutMs: 1, intervalMs: 1 }), { attach: "failed" }, "a marker already there wins");
+});
+
+test("describeFailedStatus accepts a refused tool result with the failure code or REALM_NOT_ACTIVE and rejects anything else", () => {
+  const refused = (code, extra = {}) => ({ isError: true, structuredContent: { outcome: "refused", tool: "status", code, retryable: true }, ...extra });
+  assert.equal(describeFailedStatus(refused("DAEMON_START_TIMEOUT"), "DAEMON_START_TIMEOUT"), null);
+  assert.equal(describeFailedStatus(refused("REALM_NOT_ACTIVE"), "DAEMON_START_TIMEOUT"), null);
+  assert.match(describeFailedStatus(refused("POLICY_DENIED"), "DAEMON_START_TIMEOUT"), /must be refused with DAEMON_START_TIMEOUT/);
+  assert.match(describeFailedStatus(refused("DAEMON_START_TIMEOUT", { isError: false }), "DAEMON_START_TIMEOUT"), /error result/);
+  assert.match(describeFailedStatus({ isError: true, structuredContent: STATUS_OUTCOME }, "DAEMON_START_TIMEOUT"), /must be refused/);
 });

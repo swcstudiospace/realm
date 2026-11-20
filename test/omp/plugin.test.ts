@@ -18,13 +18,11 @@ import { gateMutation } from "../../src/lifecycle/mutation-gate.js";
 import { ToolDispatcher, type ToolOutcome } from "../../src/tools/dispatch.js";
 import type { HostToolDefinition } from "../../src/omp/tools.js";
 import {
-  GUARD_STATUS_BUDGET_MS,
   GUARDED_HOST_TOOLS,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
-  STARTUP_BUDGET_MS,
-  STATUS_POLL_MS,
   guardHostToolCall,
+  createRealmPlugin,
   registerRealmPlugin,
   renderRealmStatus,
   type DaemonAttach,
@@ -35,19 +33,28 @@ import {
   type OmpSessionContext,
   type OmpStatusUi,
   type RealmPluginOptions,
+  type PluginAttachOutcome,
+  type RealmPluginView,
   type RealmRetryCommand,
 } from "../../src/omp/plugin.js";
 import {
+  BOOT_BOUNDS,
   equalJitterDelayMs,
-  LINK_LOST_CODES,
-  REATTACH_BASE_DELAY_MS,
-  REATTACH_DELAY_CAP_MS,
-  REATTACH_RETRY_CAP,
   reattachTransitionAllowed,
-  RETRYABLE_ATTACH_CODES,
-  type ReattachState,
-} from "../../src/omp/reattach.js";
+  type BootLink,
+  type ResolvedBoot,
+} from "../../src/host/boot.js";
 import { hostToolSetOf, type HostToolSet } from "../../src/omp/host-tools.js";
+
+const STARTUP_BUDGET_MS = BOOT_BOUNDS.startupBudgetMs;
+const GUARD_STATUS_BUDGET_MS = BOOT_BOUNDS.guardStatusBudgetMs;
+const STATUS_POLL_MS = BOOT_BOUNDS.statusPollMs;
+const REATTACH_RETRY_CAP = BOOT_BOUNDS.reattach.retryCap;
+const REATTACH_BASE_DELAY_MS = BOOT_BOUNDS.reattach.baseDelayMs;
+const REATTACH_DELAY_CAP_MS = BOOT_BOUNDS.reattach.capDelayMs;
+const LINK_LOST_CODES: readonly string[] = BOOT_BOUNDS.linkLostCodes;
+const RETRYABLE_ATTACH_CODES: readonly string[] = BOOT_BOUNDS.retryableAttachCodes;
+type ReattachState = BootLink;
 
 // OMP-01 to OMP-05 plugin proof (P5-D4 to P5-D6, P5-D8, P5-D14). Every test runs the real plugin
 // wiring against a FakeDaemon injected through attachDaemon. The doubles are the FakePi host
@@ -59,7 +66,6 @@ const ACTIVE: StateSnapshot = { state: "active", reason: "container running", la
 const CONNECTING: StateSnapshot = { state: "connecting", reason: "connecting", lastTransitionAt: CLOCK_ISO };
 const UNBOUND: StateSnapshot = { state: "unbound", reason: "no workspace", lastTransitionAt: CLOCK_ISO };
 const ACTIVE_LABEL = `● ${STATUS_LABELS.active}`;
-const DEGRADED_LABEL = `● ${STATUS_LABELS.active} [degraded]`;
 const DISCONNECTED_LABEL = `○ ${STATUS_LABELS.disconnected}`;
 const WORKSPACE = "/ws";
 const SEPARATOR = " · ";
@@ -362,6 +368,8 @@ interface FixtureOptions {
   readonly attach?: (daemon: FakeDaemon) => Promise<DaemonAttach>;
   // Bounded re-attach (O4). Omitted means the attach-once behaviour the existing tests pin.
   readonly reattach?: { readonly enabled: boolean; readonly random: () => number };
+  // Bounds and callbacks the Phase 22 plugin options add. Omitted means the defaults the existing tests pin.
+  readonly extra?: Pick<RealmPluginOptions, "bounds" | "onAttach" | "onSessionEnd">;
 }
 
 interface Fixture {
@@ -371,6 +379,7 @@ interface Fixture {
   readonly tools: HostToolSet;
   readonly daemon: FakeDaemon;
   readonly attachCalls: string[];
+  readonly view: () => RealmPluginView;
 }
 
 function makeFixture(options: FixtureOptions = {}): Fixture {
@@ -393,9 +402,10 @@ function makeFixture(options: FixtureOptions = {}): Fixture {
       return Promise.resolve({ client: daemon, refusal: null });
     },
     ...(options.reattach === undefined ? {} : { reattach: options.reattach }),
+    ...(options.extra ?? {}),
   };
-  const tools = registerRealmPlugin(pi, pluginOptions);
-  return { ui, ctx, pi, daemon, attachCalls, tools };
+  const plugin = createRealmPlugin(pi, pluginOptions);
+  return { ui, ctx, pi, daemon, attachCalls, tools: plugin.tools, view: plugin.view };
 }
 
 // The host calls a session_switch handler with the event first and the context of the session switched to second. The
@@ -548,12 +558,12 @@ void test("CRASH-04: an attach whose status carries no notice never calls ui.not
 });
 
 void test("OMP-01 (a): an attach failure settles disconnected with the catalogue code as the reason (P5-D8)", async () => {
-  const fixture = makeFixture({ attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ attachErrors: ["AGENTOS_CRASH_LOOP"] });
   startHandlerOf(fixture.pi)(fixture.ctx);
 
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
-  assert.match(lastDetail(fixture.ui) ?? "", /^ANDA_UNREACHABLE · /);
+  assert.match(lastDetail(fixture.ui) ?? "", /^AGENTOS_CRASH_LOOP · /);
   // No daemon was attached, so the guard has no client and refuses a guarded edit.
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "REALM_NOT_ACTIVE" });
 });
@@ -651,7 +661,7 @@ void test("OMP-01 (b): session shutdown closes the client, never calls down, and
   assert.equal(fixture.daemon.count("call"), 0, "shutdown dispatches no tool");
 
   const paintsAtShutdown = fixture.ui.calls.length;
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   assert.deepEqual(await toolCallOf(fixture.pi)({ toolName: "edit" }), { block: true, reason: "realm not started" });
   assert.equal(fixture.ui.calls.length, paintsAtShutdown, "no paint after shutdown");
   assert.equal(fixture.daemon.count("status"), 1, "a refused call after shutdown reads no status");
@@ -663,26 +673,24 @@ void test("OMP-02: every status read paints one shared label across every transi
   await waitForDetail(fixture.ui, "container running");
   const toolCall = toolCallOf(fixture.pi);
 
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   await toolCall({ toolName: "edit" });
   fixture.daemon.snapshot = ACTIVE;
   await toolCall({ toolName: "edit" });
-  fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
-  await toolCall({ toolName: "edit" });
 
-  // Pinned table: the only labels are the shared mapping plus the text degraded flag.
-  const allowed = new Set([ACTIVE_LABEL, DEGRADED_LABEL, DISCONNECTED_LABEL]);
+  // Pinned table: the only labels are the two shared mapping labels.
+  const allowed = new Set([ACTIVE_LABEL, DISCONNECTED_LABEL]);
   const labels = labelsOf(fixture.ui);
   for (const label of labels) {
     assert.ok(allowed.has(label), `label comes from the shared mapping: ${label}`);
   }
   assert.ok(labels.includes(DISCONNECTED_LABEL), "disconnected renders");
   assert.ok(labels.includes(ACTIVE_LABEL), "active renders");
-  assert.equal(labels.at(-1), DEGRADED_LABEL, "degraded keeps the active label with its flag");
+  assert.equal(labels.at(-1), ACTIVE_LABEL, "the last transition leaves the active label");
   // One status item carries the label, the reason, and the time: no second key competes with it.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
   assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
-  assert.equal(statusTexts(fixture.ui).at(-1), `${DEGRADED_LABEL} · ANDA_VERSION_MISMATCH · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
+  assert.equal(statusTexts(fixture.ui).at(-1), `${ACTIVE_LABEL} · container running · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
 });
 
 void test("OMP-03: the reason and last-transition time follow the label in the one status item on every transition (P5-D5)", async () => {
@@ -695,16 +703,11 @@ void test("OMP-03: the reason and last-transition time follow the label in the o
   // text of the one status item on every transition.
   const transitions: Array<{ readonly snapshot: StateSnapshot; readonly label: string; readonly detail: string }> = [
     {
-      snapshot: { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO },
+      snapshot: { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO },
       label: DISCONNECTED_LABEL,
-      detail: `ANDA_UNREACHABLE · ${CLOCK_ISO}`,
+      detail: `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`,
     },
     { snapshot: ACTIVE, label: ACTIVE_LABEL, detail: `container running · ${CLOCK_ISO}` },
-    {
-      snapshot: { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO },
-      label: DEGRADED_LABEL,
-      detail: `ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`,
-    },
   ];
   for (const transition of transitions) {
     fixture.daemon.snapshot = transition.snapshot;
@@ -719,15 +722,15 @@ void test("OMP-02: a daemon transition reaches the indicator on the poll, with n
   startHandlerOf(fixture.pi)(fixture.ctx);
   await waitForDetail(fixture.ui, "container running");
 
-  fixture.daemon.snapshot = { state: "error", reason: "ANDA_UNREACHABLE", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = { state: "error", reason: "AGENTOS_CRASH_LOOP", lastTransitionAt: CLOCK_ISO };
   pollOf(fixture.ctx).callback();
   await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
-  assert.equal(lastDetail(fixture.ui), `ANDA_UNREACHABLE · ${CLOCK_ISO}`);
+  assert.equal(lastDetail(fixture.ui), `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`);
 
-  fixture.daemon.snapshot = { state: "degraded", reason: "ANDA_VERSION_MISMATCH", lastTransitionAt: CLOCK_ISO };
+  fixture.daemon.snapshot = ACTIVE;
   pollOf(fixture.ctx).callback();
-  await waitUntil(() => lastLabel(fixture.ui) === DEGRADED_LABEL);
-  assert.equal(lastDetail(fixture.ui), `ANDA_VERSION_MISMATCH · ${CLOCK_ISO}`);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
   assert.equal(fixture.daemon.count("call"), 0, "the repaint dispatches no tool");
 });
 
@@ -794,11 +797,11 @@ void test("OMP-02: a poll tick that fires after shutdown reads no status and pai
 });
 
 void test("OMP-04: the retry command re-runs the attach path and moves error to connecting then active (P5-D14)", async () => {
-  const fixture = makeFixture({ attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ attachErrors: ["AGENTOS_CRASH_LOOP"] });
   const command = retryCommandOf(fixture.pi);
   assert.ok(command.description.length > 0, "retry command carries a description");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
   assert.equal(lastLabel(fixture.ui), DISCONNECTED_LABEL);
 
   const detailsBefore = detailsOf(fixture.ui).length;
@@ -934,6 +937,8 @@ void test("timers: session shutdown clears the attach budget and the poll, and a
     },
   });
   startHandlerOf(fixture.pi)(fixture.ctx);
+  // The attach's start is a microtask that skips an ended session, so one turn lets the attach begin before the shutdown.
+  await yieldTurn();
   const budgetHandle = armedTimer(fixture.ctx, STARTUP_BUDGET_MS).handle;
   const pollHandle = pollOf(fixture.ctx).handle;
 
@@ -1186,9 +1191,9 @@ void test("B1 / T1: advisory with the realm not active forwards the Realm write 
 });
 
 void test("B2 / T2: with no daemon attached the Realm write is refused with REALM_NOT_ACTIVE, no daemon is called, and the write stays active", async () => {
-  const fixture = makeFixture({ mode: "advisory", attachErrors: ["ANDA_UNREACHABLE"] });
+  const fixture = makeFixture({ mode: "advisory", attachErrors: ["AGENTOS_CRASH_LOOP"] });
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "ANDA_UNREACHABLE");
+  await waitForDetail(fixture.ui, "AGENTOS_CRASH_LOOP");
 
   assert.equal(await toolCallOf(fixture.pi)({ toolName: "write" }), undefined, "the guard passes the Realm write to the tool");
   const result = await toolOf(fixture.pi, "write").execute("call-1", { path: "notes.txt", content: "hello" });
@@ -1276,7 +1281,7 @@ function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
   const stateDir = join(base, "state");
   const parsed = validate("policy", { mode, workspaceRoots: [workspace] });
   assert.ok(parsed.ok);
-  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "degraded", reason: "bridge unavailable", lastTransitionAt: CLOCK_ISO } });
+  const fixture = makeFixture({ cwd: workspace, mode, snapshot: { state: "error", reason: "runner unavailable", lastTransitionAt: CLOCK_ISO } });
   const dispatcher = new ToolDispatcher({
     sessionId: "sess-omp-registered",
     boundRoot: bindRoot(workspace),
@@ -1298,7 +1303,7 @@ function makeRegisteredWorkspace(t: TestContext, mode: PolicyMode): {
 void test("HARN-02 C1: registered advisory write warns on every inactive invocation and writes exact host bytes", async (t) => {
   const { fixture, workspace, stateDir } = makeRegisteredWorkspace(t, "advisory");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   const write = toolOf(fixture.pi, "write");
   for (const [index, content] of ["first π\n", "second 🙂\n"].entries()) {
     const invocationId: string = index === 0 ? "advisory-0" : "advisory-1";
@@ -1306,7 +1311,7 @@ void test("HARN-02 C1: registered advisory write warns on every inactive invocat
     assert.equal(result.isError, false);
     assert.deepEqual(readFileSync(join(workspace, "c1.txt")), Buffer.from(content));
     assert.equal(fixture.ui.notifications.length, index + 1, "the same notice is never deduplicated");
-    assert.equal(fixture.ui.notifications[index], "realm is degraded; the write proceeds under advisory policy");
+    assert.equal(fixture.ui.notifications[index], "realm is error; the write proceeds under advisory policy");
   }
   const read = await toolOf(fixture.pi, "read").execute("consumer-read", { path: "c1.txt", maxBytes: 100 });
   assert.equal(read.content[0]?.text, "second 🙂\n");
@@ -1319,7 +1324,7 @@ void test("HARN-02 C1: registered advisory write warns on every inactive invocat
 void test("HARN-02 C2: registered inactive fail-closed write refuses REALM_NOT_ACTIVE without a host file", async (t) => {
   const { fixture, workspace } = makeRegisteredWorkspace(t, "fail-closed");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   const result = await toolOf(fixture.pi, "write").execute("inactive", { path: "c2.txt", content: "denied" });
   assert.deepEqual(result.details, { outcome: "refused", tool: "write", code: "REALM_NOT_ACTIVE", retryable: true });
   assert.ok(!existsSync(join(workspace, "c2.txt")));
@@ -1332,7 +1337,7 @@ for (const mode of ["advisory", "fail-closed"] as const) {
   void test(`HARN-02: registered ${mode} write refuses an unreachable daemon without host fallback`, async (t) => {
     const { fixture, workspace } = makeRegisteredWorkspace(t, mode);
     startHandlerOf(fixture.pi)(fixture.ctx);
-    await waitForDetail(fixture.ui, "bridge unavailable");
+    await waitForDetail(fixture.ui, "runner unavailable");
     fixture.daemon.failStatus = "REALM_NOT_ACTIVE";
     // The dispatch replaces the real dispatcher route, so the refusal is set on the dispatch itself.
     fixture.daemon.call = () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE"));
@@ -1348,7 +1353,7 @@ for (const mode of ["advisory", "fail-closed"] as const) {
 void test("HARN-02 C1: registered advisory writes propagate validation, path and conditional-write failures", async (t) => {
   const { fixture, workspace } = makeRegisteredWorkspace(t, "advisory");
   startHandlerOf(fixture.pi)(fixture.ctx);
-  await waitForDetail(fixture.ui, "bridge unavailable");
+  await waitForDetail(fixture.ui, "runner unavailable");
   writeFileSync(join(workspace, "existing.txt"), "original");
   symlinkSync(join(workspace, "existing.txt"), join(workspace, "link.txt"));
   const write = toolOf(fixture.pi, "write");
@@ -2384,4 +2389,250 @@ void test("reconnect error is disclosed without changing the shared connecting r
   assert.equal(statusTexts(ui).at(-1), `${DISCONNECTED_LABEL} · connecting (REALM_NOT_ACTIVE) · ${CLOCK_ISO} · ${LAST_ADVISORY_STATUS}`);
   renderRealmStatus(ui, connecting, "advisory", false, "REALM_NOT_ACTIVE");
   assert.equal(statusTexts(ui).length, 2, "unchanged full reconnect status stays deduplicated");
+});
+
+// ---- Phase 22: the plugin consumes src/host/boot.ts -----------------------------------------------------------------
+
+// A resolved boot block with the named bounds changed. Re-attach stays as the base has it unless the test says so.
+function boundsWith(change: Partial<ResolvedBoot>): ResolvedBoot {
+  return { ...BOOT_BOUNDS, ...change };
+}
+
+void test("bounds: the startup budget is armed at bounds.startupBudgetMs and expires the attach with STARTUP_BUDGET_EXCEEDED", async () => {
+  const fixture = makeFixture({
+    attach: () => new Promise<DaemonAttach>(() => undefined),
+    extra: { bounds: boundsWith({ startupBudgetMs: 50 }) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  assert.ok(fixture.ctx.timeouts.includes(50), "the attach runs under the overridden budget");
+  assert.equal(fixture.ctx.timeouts.includes(STARTUP_BUDGET_MS), false, "the default budget is not armed");
+  expireTimer(fixture.ctx, 50);
+  await waitForDetail(fixture.ui, "STARTUP_BUDGET_EXCEEDED");
+  assert.deepEqual(fixture.view(), { state: "error", mode: null, link: "off", code: "STARTUP_BUDGET_EXCEEDED" });
+});
+
+void test("bounds: the guarded status read and the repaint poll use bounds.guardStatusBudgetMs and bounds.statusPollMs", async () => {
+  const fixture = makeFixture({ extra: { bounds: boundsWith({ guardStatusBudgetMs: 70, statusPollMs: 30 }) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "container running");
+  assert.ok(fixture.ctx.intervals.some((interval) => interval.ms === 30), "the repaint poll runs at the overridden interval");
+  assert.equal(fixture.ctx.intervals.some((interval) => interval.ms === STATUS_POLL_MS), false);
+  fixture.daemon.hangStatus = true;
+  const verdict = toolCallOf(fixture.pi)({ toolName: "edit" });
+  assert.ok(fixture.ctx.timeouts.includes(70), "the guarded read is bounded by the overridden budget");
+  expireTimer(fixture.ctx, 70);
+  assert.deepEqual(await verdict, { block: true, reason: "TOOL_TIMEOUT" });
+});
+
+void test("bounds: bounds.reattach.retryCap and the delay window bound the re-attach streak", async () => {
+  const fixture = makeFixture({
+    attach: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")),
+    reattach: { enabled: true, random: seededRandom(5) },
+    extra: { bounds: boundsWith({ reattach: { enabled: true, retryCap: 2, baseDelayMs: 10, capDelayMs: 20 } }) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitArmed(fixture);
+  const first = soleWait(fixture.ctx).ms;
+  assert.ok(first >= 5 && first <= 10, `the first wait is ${String(first)}, within [5, 10]`);
+  fireWait(fixture.ctx);
+  await waitUntil(() => fixture.attachCalls.length === 2);
+  await waitUntil(() => pendingWaits(fixture.ctx).length === 1 && fixture.ui.notifications.some((text) => text.includes("attempt 2 of 2")));
+  const second = soleWait(fixture.ctx).ms;
+  assert.ok(second >= 10 && second <= 20, `the second wait is ${String(second)}, within [10, 20]`);
+  assert.ok(fixture.ui.notifications.some((text) => text.includes("attempt 1 of 2")), "the notice names the overridden cap");
+  fireWait(fixture.ctx);
+  await waitUntil(() => fixture.ui.notifications.some((text) => text.includes(`/${REALM_RETRY_COMMAND}`)));
+  assert.equal(fixture.attachCalls.length, 3, "one attach at start and two waits");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "no wait remains after the cap");
+  assert.equal(fixture.view().link, "failed");
+  assert.equal(fixture.view().state, "error");
+});
+
+void test("view: unbound before any session, and after shutdown", async () => {
+  const fixture = makeFixture();
+  const unbound = { state: "unbound", mode: null, link: "off" };
+  assert.deepEqual(fixture.view(), unbound);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  shutdownHandlerOf(fixture.pi)();
+  assert.deepEqual(fixture.view(), unbound);
+});
+
+void test("view: an attached session reports active, its mode, and link off without re-attach", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  assert.deepEqual(fixture.view(), { state: "active", mode: "fail-closed", link: "off" });
+});
+
+void test("view: an attached session reports link linked with re-attach on", async () => {
+  const fixture = makeFixture({ reattach: { enabled: true, random: seededRandom(6) } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.view().link === "linked");
+  assert.deepEqual(fixture.view(), { state: "active", mode: "fail-closed", link: "linked" });
+});
+
+void test("view: a refused up shows the error state and its code, and the next paint without a code clears it", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("PODMAN_UNSUPPORTED_VERSION") }),
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "PODMAN_UNSUPPORTED_VERSION");
+  assert.deepEqual(fixture.view(), { state: "error", mode: "fail-closed", link: "off", code: "PODMAN_UNSUPPORTED_VERSION" });
+  fixture.daemon.snapshot = ACTIVE;
+  pollOf(fixture.ctx).callback();
+  await waitUntil(() => fixture.view().state === "active");
+  const cleared = fixture.view();
+  assert.deepEqual(cleared, { state: "active", mode: "fail-closed", link: "off" });
+  assert.equal("code" in cleared, false, "the code is cleared by a paint that carries none");
+});
+
+void test("view: a failed attach reports its catalogue code", async () => {
+  const fixture = makeFixture({ attachErrors: ["POLICY_DENIED"] });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitForDetail(fixture.ui, "POLICY_DENIED");
+  assert.deepEqual(fixture.view(), { state: "error", mode: null, link: "off", code: "POLICY_DENIED" });
+});
+
+void test("view: reading it never calls the daemon and arms no timer", async () => {
+  const fixture = makeFixture();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  const calls = fixture.daemon.calls.length;
+  const timeouts = fixture.ctx.timeouts.length;
+  const intervals = fixture.ctx.intervals.length;
+  for (let read = 0; read < 3; read += 1) {
+    fixture.view();
+  }
+  assert.equal(fixture.daemon.calls.length, calls);
+  assert.equal(fixture.ctx.timeouts.length, timeouts);
+  assert.equal(fixture.ctx.intervals.length, intervals);
+});
+
+void test("onAttach: fires once for the first attach and once more for /realm-retry", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const fixture = makeFixture({ extra: { onAttach: (outcome) => { events.push(outcome); } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(events, [{ outcome: "attached", state: "active" }]);
+  assert.equal(lastLabel(fixture.ui), ACTIVE_LABEL, "the callback runs after the outcome is painted");
+  await retryCommandOf(fixture.pi).handler();
+  assert.deepEqual(events, [
+    { outcome: "attached", state: "active" },
+    { outcome: "attached", state: "active" },
+  ]);
+});
+
+void test("onAttach: a failed attach reports the catalogue code only", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const fixture = makeFixture({ attachErrors: ["POLICY_DENIED"], extra: { onAttach: (outcome) => { events.push(outcome); } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(events, [{ outcome: "failed", code: "POLICY_DENIED" }]);
+});
+
+void test("onAttach: a superseded attempt reports nothing", async () => {
+  const events: PluginAttachOutcome[] = [];
+  const ends: string[] = [];
+  const gate = makeGate();
+  let calls = 0;
+  const fixture = makeFixture({
+    attach: async (daemon) => {
+      calls += 1;
+      if (calls === 1) {
+        await gate.promise;
+      }
+      return { client: daemon, refusal: null };
+    },
+    extra: { onAttach: (outcome) => { events.push(outcome); }, onSessionEnd: () => { ends.push("end"); } },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  // The first attempt's start is a microtask that skips a superseded attempt, so one turn lets it begin and hold before the second start.
+  await yieldTurn();
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => events.length === 1);
+  assert.deepEqual(ends, ["end"], "the replaced session ended once");
+  gate.resolve();
+  for (let turn = 0; turn < 10; turn += 1) {
+    await yieldTurn();
+  }
+  assert.equal(events.length, 1, "the superseded first attempt reports nothing");
+});
+
+void test("onAttach: a throwing callback changes neither the outcome nor the status text", async () => {
+  const plain = makeFixture();
+  startHandlerOf(plain.pi)(plain.ctx);
+  await waitUntil(() => lastLabel(plain.ui) === ACTIVE_LABEL);
+  const retryPlain = await retryCommandOf(plain.pi).handler();
+
+  const throwing = makeFixture({
+    extra: {
+      onAttach: () => {
+        throw new Error("callback broke");
+      },
+    },
+  });
+  startHandlerOf(throwing.pi)(throwing.ctx);
+  await waitUntil(() => lastLabel(throwing.ui) === ACTIVE_LABEL);
+  await waitUntil(() => throwing.ui.notifications.includes("realm status update failed: unexpected error"));
+  assert.equal(await retryCommandOf(throwing.pi).handler(), retryPlain, "the retry outcome is unchanged");
+  assert.equal(statusTexts(throwing.ui).at(-1), statusTexts(plain.ui).at(-1));
+  assert.deepEqual(throwing.view(), { state: "active", mode: "fail-closed", link: "off" });
+});
+
+void test("onSessionEnd: fires once on shutdown, never when no session is live", async () => {
+  let ends = 0;
+  const fixture = makeFixture({ extra: { onSessionEnd: () => { ends += 1; } } });
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 0, "no session was live");
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 1);
+  assert.equal(fixture.daemon.count("close"), 1, "the client was closed before the callback");
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(ends, 1, "a second shutdown has no session to end");
+});
+
+void test("onSessionEnd: fires once when a second session_start replaces the first", async () => {
+  let ends = 0;
+  const fixture = makeFixture({ extra: { onSessionEnd: () => { ends += 1; } } });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  assert.equal(ends, 1);
+});
+
+void test("onSessionEnd: a throwing callback still lets the shutdown release the client and clear every timer", async () => {
+  const fixture = makeFixture({
+    extra: {
+      onSessionEnd: () => {
+        throw new Error("callback broke");
+      },
+    },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
+  const poll = pollOf(fixture.ctx);
+  shutdownHandlerOf(fixture.pi)();
+  assert.equal(fixture.daemon.count("close"), 1);
+  assert.ok(fixture.ctx.cleared.includes(poll.handle), "the poll was cleared");
+  assert.ok(fixture.ui.notifications.includes("realm status update failed: unexpected error"));
+});
+
+void test("the callbacks register no host event beyond the four the plugin always registers", () => {
+  const fixture = makeFixture({ extra: { onAttach: () => undefined, onSessionEnd: () => undefined } });
+  assert.equal(fixture.pi.startHandlers.length, 1);
+  assert.equal(fixture.pi.switchHandlers.length, 1);
+  assert.equal(fixture.pi.shutdownHandlers.length, 1);
+  assert.equal(fixture.pi.toolCallHandlers.length, 1);
+});
+
+void test("registerRealmPlugin still returns the host tool set", () => {
+  const pi = new FakePi();
+  const tools = registerRealmPlugin(pi, { attachDaemon: () => Promise.reject(makeRealmError("REALM_NOT_ACTIVE")) });
+  assert.deepEqual(tools.removed, []);
+  assert.equal(tools.inFlight, 0);
+  assert.ok(tools.queue instanceof Promise);
 });

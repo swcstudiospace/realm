@@ -15,9 +15,11 @@
 //   6. A rootless Podman API socket under XDG_RUNTIME_DIR.
 //   7. The openshell CLI on PATH.
 //   8. The built CLI at dist/src/cli/main.js, next to the compiled tests (npm run build).
-// A default npm test therefore skips every scenario below (fourteen in all: default policy, immediate cycle, egress allowlist, wrong
+// A default npm test therefore skips every scenario below (seventeen in all: default policy, immediate cycle, egress allowlist, wrong
 // image digest, crash recovery, MCP exec, the MCP exec timeout, the AgentOS runner exit, the daemon-side startup budget, a stopped gateway,
-// two projects, a verifier-failed stand-in, a scratch file and a snapshot round trip) and reports each as skipped.
+// two projects, a verifier-failed stand-in, a scratch file, the scratch volume's identity, a snapshot round trip, a driver restart and a
+// stopped checkpoint round trip) and reports each as skipped. The driver restart also needs REALM_LIVE_DRIVER_UNIT, the systemd user unit
+// of the running compute driver; without it that one scenario skips and names the variable.
 //
 // Preconditions the suite cannot check and the operator must provide:
 //   - The gateway and the compute driver run under the realm account with the same image and roots the variables above name.
@@ -35,12 +37,13 @@
 // command is the current node binary and the compiled daemon entry, owned by the current uid, SIGKILLed only when exactly one
 // such process exists. The runner-exit scenario signals only the AgentOS runner inside its own sandbox, through the sandbox exec.
 // The MCP scenarios start one `realm mcp` child each with the same explicit environment, and kill it in cleanup if it is still
-// running.
+// running. The driver-restart scenario restarts only the systemd user unit that REALM_LIVE_DRIVER_UNIT names, and starts that unit
+// again on every path out of its body. Nothing else signals a process.
 //
 // Nothing here prints a secret. Failure messages carry exit codes, error codes, names and clipped probe output.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { tmpdir } from "node:os";
@@ -48,8 +51,8 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { DEFAULT_AGENTOS_PROBE_PATH } from "../../src/runtime/agentos-driver.js";
 import { OPENSHELL_MANAGED_LABEL_KEY, OPENSHELL_MANAGED_LABEL_VALUE, OPENSHELL_SANDBOX_NAME_LABEL_KEY, SANDBOX_WORKSPACE_PATH } from "../../src/runtime/openshell.js";
-import { HARDENING_PROFILE, scratchVolumeNameOf } from "../../src/runtime/hardening.js";
-import { recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
+import { HARDENING_PROFILE, scratchVolumeLabelsOf, scratchVolumeNameOf } from "../../src/runtime/hardening.js";
+import { checkpointDirOf, recordFileName, sandboxNameOfSession, sessionIdOfWorkspace, sessionsDirOf } from "../../src/session/paths.js";
 import { workspaceRegistryDirOf } from "../../src/session/workspace-registry.js";
 import {
   KILL_RUNNER_ARGV,
@@ -101,6 +104,7 @@ import {
   toolErrorOf,
   unparsedLinesOf,
   waitForActive,
+  waitUntilServed,
   waitForNoContainers,
   waitForNoResidue,
   RESIDUE_TIMEOUT_MS,
@@ -198,6 +202,32 @@ const EPERM = "1";
 interface Scenario {
   readonly inputs: LiveInputs;
   readonly environment: ScenarioEnvironment;
+  // Resolves once the previous scenario's host supervisors are gone (settleBeforeScenario). assertActive waits for it before the
+  // first realm up. Absent for a scenario that builds its own Scenario.
+  readonly settled?: Promise<void>;
+}
+
+// A scenario's teardown can outlive its residue check: the driver stops a deleted sandbox's host supervisor some seconds after the
+// sandbox, its container and its secret entries are gone. The next scenario reuses the same sandbox name, so it starts once the driver
+// runs no host supervisor, and no late teardown of the previous scenario can reach it. A host with no driver unit configured has no
+// supervisor to observe, so it settles at once.
+async function settleBeforeScenario(liveInputs: LiveInputs): Promise<void> {
+  const unit = process.env[DRIVER_UNIT_VARIABLE];
+  if (unit === undefined || unit === "") {
+    return;
+  }
+  const settled = await pollUntil(
+    async () => {
+      const pid = await unitMainPid(liveInputs, unit);
+      if (pid <= 0) {
+        return { done: true };
+      }
+      const children = await childPidsOf(liveInputs, pid);
+      return children.length === 0 ? { done: true } : { done: false, detail: `the driver still runs ${String(children.length)} host supervisor(s)` };
+    },
+    { timeoutMs: RESIDUE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+  );
+  assert.ok(settled.ok, `the previous scenario's teardown must finish before the next scenario starts: ${settled.detail}`);
 }
 
 // Builds the scenario's isolated configuration and registers its cleanup on the test: realm down, then the residue wait. The
@@ -215,7 +245,10 @@ function startScenario(t: TestContext, spec: ScenarioSpec, workspaceFiles: reado
     const outcome = await cleanupScenario(liveInputs, environment, workspaceFiles);
     assert.ok(outcome.ok, `residue after the scenario's cleanup: ${outcome.detail}`);
   });
-  return { inputs: liveInputs, environment };
+  const settled = settleBeforeScenario(liveInputs);
+  // A scenario that never calls assertActive must not leave a rejection unhandled; assertActive still awaits the original promise.
+  settled.catch(() => undefined);
+  return { inputs: liveInputs, environment, settled };
 }
 
 function up(scenario: Scenario): Promise<CommandResult> {
@@ -242,6 +275,7 @@ function sandboxOf(scenario: Scenario): string {
 
 // realm up exits 0 and realm status reports active.
 async function assertActive(scenario: Scenario): Promise<void> {
+  await scenario.settled;
   const started = await up(scenario);
   assert.equal(started.exitCode, 0, `realm up: ${describeResult(started)}`);
   const status = await statusCli(scenario);
@@ -602,6 +636,7 @@ void test("production live 5: after the daemon is killed, the next realm up keep
   const primed = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(primed);
+    await waitUntilServed(primed);
     await callTool(primed, "status", {});
   } finally {
     primed.closeInput();
@@ -697,6 +732,80 @@ void test("production live 5: after the daemon is killed, the next realm up keep
   await assertDownAndClean(scenario, [RESTART_MARKER_FILE]);
 });
 
+// ---- Scenario 5c: the scratch volume's identity across a daemon kill ----------------------------------------------------------
+
+// The one non-bind mount of a sandbox container, as podman inspect reports it. The sandbox has exactly one, the scratch volume
+// (src/runtime/hardening.ts), so any other shape fails with the inspect output named.
+async function scratchMountOf(inputs: LiveInputs, containerId: string): Promise<Readonly<Record<string, unknown>>> {
+  const inspected = await podmanCli(inputs, ["inspect", "--format", "json", containerId]);
+  assertExit(inspected, 0, `podman inspect ${containerId}`);
+  const [container] = JSON.parse(inspected.stdout) as readonly { readonly Mounts?: readonly Readonly<Record<string, unknown>>[] }[];
+  const mounts = (container?.Mounts ?? []).filter((mount) => mount["Type"] !== "bind");
+  assert.equal(mounts.length, 1, `the sandbox must have exactly one non-bind mount, its scratch volume: ${inspected.stdout.slice(0, 2000)}`);
+  const [scratch] = mounts;
+  assert.ok(scratch !== undefined, "the scratch mount");
+  return scratch;
+}
+
+// The scratch volume is the one mount that is not a bind. Its mount names the session's exact volume at the scratch destination,
+// read-write, with the noexec, nosuid and nodev options, and the volume carries the realm and session labels. The same mount must
+// hold across a daemon kill, the bytes written before the kill must survive it, and down must remove the volume.
+const SCRATCH_5C_TEXT = "scratch identity survives the crash";
+void test("production live 5c: the scratch volume is the exact named volume at /scratch with its options and labels, its bytes survive a daemon kill, and down removes it", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image });
+  await assertActive(scenario);
+  const sessionId = sessionIdFor(scenario.inputs.workspaceRoot);
+  const volume = scratchVolumeNameOf(sessionId);
+  const sandbox = sandboxOf(scenario);
+  const scratchFile = `${HARDENING_PROFILE.scratchDestination}/identity.txt`;
+
+  const containers = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the kill`);
+  assert.equal(containers.length, 1, `exactly one ${sandbox} container must exist before the kill; found ${String(containers.length)}`);
+  const [containerId] = containers;
+  assert.ok(containerId !== undefined && containerId !== "", "the sandbox container's id");
+
+  const mountBefore = await scratchMountOf(scenario.inputs, containerId);
+  assert.equal(mountBefore["Type"], "volume", "the scratch mount must be a named volume");
+  assert.equal(mountBefore["Name"], volume, "the scratch mount must name the session's exact volume");
+  assert.equal(mountBefore["Destination"], HARDENING_PROFILE.scratchDestination, "the scratch volume must be mounted at the scratch destination");
+  assert.equal(mountBefore["RW"], true, "the scratch volume must be mounted read-write");
+  const options: unknown = mountBefore["Options"];
+  assert.ok(Array.isArray(options), "the scratch mount must report its options");
+  for (const required of ["noexec", "nosuid", "nodev"]) {
+    assert.ok(options.includes(required), `the scratch mount must carry ${required}: ${JSON.stringify(options)}`);
+  }
+
+  const inspectedVolume = await podmanCli(scenario.inputs, ["volume", "inspect", "--format", "json", volume]);
+  assertExit(inspectedVolume, 0, `podman volume inspect ${volume}`);
+  const [namedVolume] = JSON.parse(inspectedVolume.stdout) as readonly { readonly Name?: string; readonly Labels?: Readonly<Record<string, string>> }[];
+  assert.equal(namedVolume?.Name, volume, "the inspected volume must carry the exact name");
+  for (const [key, value] of Object.entries(scratchVolumeLabelsOf(sessionId))) {
+    assert.equal(namedVolume.Labels?.[key], value, `the scratch volume must carry the label ${key}=${value}`);
+  }
+
+  assertExit(await exec(scenario, ["sh", "-c", `printf '%s' '${SCRATCH_5C_TEXT}' > ${scratchFile}`]), 0, "writing the scratch marker");
+
+  try {
+    await crashDaemon(scenario);
+    assertExit(await up(scenario), 0, "realm up after the daemon crash");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the restart: ${active.detail}`);
+
+    const containersAfter = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers after the restart`);
+    assert.deepEqual(containersAfter, [containerId], "the restart must keep the same sandbox container");
+    assert.deepEqual(await scratchMountOf(scenario.inputs, containerId), mountBefore, "the scratch mount must be unchanged by the daemon restart");
+    const read = await exec(scenario, ["cat", scratchFile]);
+    assertExit(read, 0, "reading the scratch marker after the restart");
+    assert.equal(read.stdout, SCRATCH_5C_TEXT, "the scratch bytes must survive the daemon restart");
+  } catch (error) {
+    await up(scenario);
+    throw error;
+  }
+
+  await assertDownAndClean(scenario);
+  assert.equal(await volumeExists(scenario.inputs, volume), false, `down must remove the scratch volume ${volume}`);
+});
+
 // ---- Scenario 6: MCP exec -----------------------------------------------------------------------------------------------
 
 // The two revisions one realm mcp process serves (src/mcp/protocol.ts): the session below handshakes with a legacy revision the
@@ -728,11 +837,21 @@ async function runMcpSession(scenario: Scenario, session: McpSession): Promise<v
   for (const tool of tools) {
     assert.equal(typeof field(tool, "description"), "string", `a tool descriptor needs a description: ${describeValue(tool)}`);
     assert.equal(typeof field(tool, "inputSchema"), "object", `a tool descriptor needs an inputSchema: ${describeValue(tool)}`);
+    // The annotations are hints; the exact values are pinned by the unit and smoke layers, so the live artifact check only requires the shape.
+    const annotations = field(tool, "annotations");
+    assert.equal(typeof annotations, "object", `a tool descriptor needs annotations: ${describeValue(tool)}`);
+    for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) {
+      assert.equal(typeof field(annotations, hint), "boolean", `annotations.${hint} must be a boolean: ${describeValue(tool)}`);
+    }
+    assert.equal(typeof field(tool, "title"), "string", `a tool descriptor needs a title: ${describeValue(tool)}`);
+    assert.equal(field(annotations, "title"), field(tool, "title"), `annotations.title must equal title: ${describeValue(tool)}`);
   }
 
   // 3. The attach must be active before the first call.
   const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
   assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
+  // The handshake is answered at once and tool calls are refused REALM_NOT_ACTIVE until the daemon adopts the client: wait until served.
+  await waitUntilServed(session);
 
   // 4. exec in argv form: the marker comes back on stdout, which the daemon's exec runner captures.
   const marker = `realm-live-${randomBytes(6).toString("hex")}`;
@@ -848,6 +967,7 @@ void test("production live 7: an exec that outlives the per-call bound fails wit
   const session = startMcpSession(scenario.inputs, scenario.environment);
   try {
     await initializeMcp(session);
+    await waitUntilServed(session);
     const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
     assert.ok(active.ok, `the realm mcp attach must reach active: ${active.detail}; realm mcp stderr ${session.stderr()}`);
 
@@ -1264,7 +1384,12 @@ const SNAPSHOT_EXTRA = "snapshot-extra.txt";
 void test("production live 13: a checkpoint restores the workspace byte for byte after its files change", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
   const scenario = startScenario(t, { image: inputs().image }, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
   const workspace = scenario.inputs.workspaceRoot;
+  // The checkpoint lives in the shared host state root. It is removed whatever happens here, so the next run can take the same id.
+  t.after(() => {
+    rmSync(join(scenario.environment.stateDir, "checkpoints", sessionIdFor(workspace), SNAPSHOT_ID), { recursive: true, force: true });
+  });
   await assertActive(scenario);
+  const rootBefore = statSync(workspace);
   writeFileSync(join(workspace, SNAPSHOT_KEEP), "before the snapshot");
   writeFileSync(join(workspace, SNAPSHOT_DELETE), "deleted after the snapshot");
 
@@ -1283,6 +1408,11 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
   assert.equal(readFileSync(join(workspace, SNAPSHOT_KEEP), "utf8"), "before the snapshot", "the overwritten file must be restored");
   assert.equal(readFileSync(join(workspace, SNAPSHOT_DELETE), "utf8"), "deleted after the snapshot", "the removed file must be restored");
   assert.equal(existsSync(join(workspace, SNAPSHOT_EXTRA)), false, "the file added after the snapshot must be removed");
+  // The restore keeps the workspace root's device and inode, and the restored file lives on that device.
+  const rootAfter = statSync(workspace);
+  assert.equal(rootAfter.dev, rootBefore.dev, "the workspace root must stay on its device");
+  assert.equal(rootAfter.ino, rootBefore.ino, "the workspace root must keep its inode");
+  assert.equal(statSync(join(workspace, SNAPSHOT_KEEP)).dev, rootBefore.dev, "the restored file must be on the root's device");
 
   // The restored workspace is what the sandbox sees when it starts again.
   await assertActive(scenario);
@@ -1290,4 +1420,206 @@ void test("production live 13: a checkpoint restores the workspace byte for byte
   assertExit(seen, 0, "reading the restored file from the sandbox");
   assert.equal(seen.stdout, "before the snapshot", "the sandbox must see the restored file");
   await assertDownAndClean(scenario, [SNAPSHOT_KEEP, SNAPSHOT_DELETE, SNAPSHOT_EXTRA]);
+});
+
+// ---- Scenario 19a: the compute driver restarts while the daemon keeps running ----------------------------------------------------
+
+// The systemd user unit of the running compute driver. The operator names it in REALM_LIVE_DRIVER_UNIT when the live window
+// authorizes this restart; without it the scenario skips and names the variable. The scenario restarts only this unit, and it
+// starts the unit again on every path out of the body.
+const DRIVER_UNIT_VARIABLE = "REALM_LIVE_DRIVER_UNIT";
+const DRIVER_CALL_TIMEOUT_MS = 60_000;
+const DRIVER_RESTART_TIMEOUT_MS = 120_000;
+
+function driverRestartSkipReason(): string | false {
+  if (gate !== false) {
+    return gate;
+  }
+  if ((process.env[DRIVER_UNIT_VARIABLE] ?? "") === "") {
+    return `${DRIVER_UNIT_VARIABLE} is not set; name the compute driver's systemd user unit to authorize its restart`;
+  }
+  return false;
+}
+
+const driverRestartSkip = driverRestartSkipReason();
+
+function driverUnitOf(): string {
+  const unit = process.env[DRIVER_UNIT_VARIABLE];
+  if (unit === undefined || unit === "") {
+    throw new Error(`${DRIVER_UNIT_VARIABLE} must be set`);
+  }
+  return unit;
+}
+
+// The main pid of a systemd user unit, or 0 when the unit has none.
+async function unitMainPid(inputs: LiveInputs, unit: string): Promise<number> {
+  const shown = await runCommand("systemctl", ["--user", "show", "--property=MainPID", "--value", unit], {
+    env: inputs.hostEnvironment,
+    timeoutMs: DRIVER_CALL_TIMEOUT_MS,
+    cwd: tmpdir(),
+  });
+  assertExit(shown, 0, `systemctl --user show ${unit}`);
+  const pid = Number.parseInt(shown.stdout.trim(), 10);
+  return Number.isInteger(pid) ? pid : 0;
+}
+
+// The pids whose parent is pid. The driver runs each sandbox supervisor as its child (src/runtime/driver/supervisor.ts), and ps
+// exits 1 when no process matches, which is an empty answer, not a failure.
+async function childPidsOf(inputs: LiveInputs, pid: number): Promise<readonly number[]> {
+  const listed = await runCommand("ps", ["--ppid", String(pid), "-o", "pid="], {
+    env: inputs.hostEnvironment,
+    timeoutMs: DRIVER_CALL_TIMEOUT_MS,
+    cwd: tmpdir(),
+  });
+  assert.ok(listed.exitCode === 0 || listed.exitCode === 1, `listing the children of ${String(pid)}: ${describeResult(listed)}`);
+  return listed.stdout
+    .split("\n")
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((value) => Number.isInteger(value));
+}
+
+const DRIVER_MARKER_FILE = "driver-marker.txt";
+const DRIVER_MARKER_TEXT = "kept across the driver restart";
+void test("production live 19 driver-restart", { skip: driverRestartSkip, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const unit = driverUnitOf();
+  const scenario = startScenario(t, { image: inputs().image }, [DRIVER_MARKER_FILE]);
+  await assertActive(scenario);
+  const sandbox = sandboxOf(scenario);
+  const volume = scratchVolumeNameOf(sessionIdFor(scenario.inputs.workspaceRoot));
+  writeFileSync(join(scenario.inputs.workspaceRoot, DRIVER_MARKER_FILE), DRIVER_MARKER_TEXT);
+
+  // Before: one daemon, the driver and its supervisor, one sandbox container and its scratch volume.
+  const daemonBefore = await daemonPids(scenario);
+  assert.equal(daemonBefore.length, 1, `exactly one daemon must run before the driver restart; found ${String(daemonBefore.length)}`);
+  const containersBefore = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers before the driver restart`);
+  assert.equal(containersBefore.length, 1, `exactly one ${sandbox} container must exist before the driver restart; found ${String(containersBefore.length)}`);
+  const driverBefore = await unitMainPid(scenario.inputs, unit);
+  assert.ok(driverBefore > 0, `${unit} must have a main process before the restart`);
+  const supervisorsBefore = await childPidsOf(scenario.inputs, driverBefore);
+  assert.ok(supervisorsBefore.length >= 1, `the driver must run a sandbox supervisor before the restart: ${JSON.stringify(supervisorsBefore)}`);
+  assert.equal(await volumeExists(scenario.inputs, volume), true, `the scratch volume ${volume} must exist before the restart`);
+
+  try {
+    assertExit(await runCommand("systemctl", ["--user", "restart", unit], { env: scenario.inputs.hostEnvironment, timeoutMs: DRIVER_RESTART_TIMEOUT_MS, cwd: tmpdir() }), 0, `systemctl --user restart ${unit}`);
+    const replaced = await pollUntil(
+      async () => {
+        const pid = await unitMainPid(scenario.inputs, unit);
+        return pid > 0 && pid !== driverBefore
+          ? { done: true }
+          : { done: false, detail: `${unit} main pid is ${String(pid)}; a new process must replace ${String(driverBefore)}` };
+      },
+      { timeoutMs: ACTIVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(replaced.ok, `the driver must be replaced by a new process: ${replaced.detail}`);
+    const driverAfter = await unitMainPid(scenario.inputs, unit);
+
+    // The restarted driver rebuilds its supervisor for the kept sandbox, so it runs one again.
+    const respawned = await pollUntil(
+      async () => {
+        const children = await childPidsOf(scenario.inputs, driverAfter);
+        return children.length >= 1 ? { done: true } : { done: false, detail: `pid ${String(driverAfter)} has no sandbox supervisor yet` };
+      },
+      { timeoutMs: ACTIVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(respawned.ok, `the restarted driver must respawn its sandbox supervisor: ${respawned.detail}`);
+
+    // The daemon was not touched: same process, same container, same scratch volume, and the workload still answers. The gateway shows
+    // the sandbox as not ready until the new supervisor attaches, so the workload read is polled to the active bound, and the status
+    // is read after it: the daemon's health re-attach runs the runner again once its probe has seen the restart.
+    let marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${DRIVER_MARKER_FILE}`]);
+    const answered = await pollUntil(
+      async () => {
+        marker = await exec(scenario, ["cat", `${SANDBOX_WORKSPACE_PATH}/${DRIVER_MARKER_FILE}`]);
+        return marker.exitCode === 0 ? { done: true } : { done: false, detail: `exit ${String(marker.exitCode)}; stderr ${marker.stderr.slice(0, 200)}` };
+      },
+      { timeoutMs: ACTIVE_TIMEOUT_MS, intervalMs: CRASH_OBSERVE_INTERVAL_MS },
+    );
+    assert.ok(answered.ok, `the workload must answer after the driver restart: ${answered.detail}`);
+    assert.equal(marker.stdout, DRIVER_MARKER_TEXT, "the workload must answer with the marker unchanged after the driver restart");
+    const active = await waitForActive(scenario.inputs, scenario.environment, ACTIVE_TIMEOUT_MS);
+    assert.ok(active.ok, `realm status must reach active after the driver restart: ${active.detail}`);
+    const daemonAfter = await daemonPids(scenario);
+    assert.deepEqual(daemonAfter, daemonBefore, "the daemon must be the same process after the driver restart");
+    const containersAfter = await itemsOf(listSandboxContainers(scenario.inputs, sandbox), `the ${sandbox} containers after the driver restart`);
+    assert.deepEqual(containersAfter, containersBefore, "the driver restart must keep the same container, with no duplicate");
+    assert.equal(await volumeExists(scenario.inputs, volume), true, `the scratch volume ${volume} must survive the driver restart`);
+  } catch (error) {
+    await up(scenario);
+    throw error;
+  } finally {
+    // The original service is restored on every path: starting an active unit is a no-op.
+    assertExit(await runCommand("systemctl", ["--user", "start", unit], { env: scenario.inputs.hostEnvironment, timeoutMs: DRIVER_RESTART_TIMEOUT_MS, cwd: tmpdir() }), 0, `restoring ${unit}`);
+  }
+
+  await assertDownAndClean(scenario, [DRIVER_MARKER_FILE]);
+  assert.equal(await volumeExists(scenario.inputs, volume), false, `down must remove the scratch volume ${volume}`);
+});
+
+// ---- Scenario 19b: a stopped project checkpoints and restores with no registration ----------------------------------------------
+
+const ROUNDTRIP_ID = "roundtrip-one";
+const ROUNDTRIP_BINARY = "roundtrip-binary.bin";
+const ROUNDTRIP_NESTED_DIR = "roundtrip-nested";
+const ROUNDTRIP_NESTED_FILE = `${ROUNDTRIP_NESTED_DIR}/inner.txt`;
+const ROUNDTRIP_DELETE = "roundtrip-delete.txt";
+const ROUNDTRIP_EXTRA = "roundtrip-extra.txt";
+const ROUNDTRIP_BINARY_MODE = 0o751;
+
+void test("production live 19 checkpoint-roundtrip", { skip: gate, timeout: SCENARIO_TIMEOUT_MS }, async (t) => {
+  const scenario = startScenario(t, { image: inputs().image }, [ROUNDTRIP_BINARY, ROUNDTRIP_DELETE, ROUNDTRIP_EXTRA]);
+  const workspace = scenario.inputs.workspaceRoot;
+  const sessionId = sessionIdFor(workspace);
+  const registryEntry = join(workspaceRegistryDirOf(scenario.environment.stateDir), `${sessionId}.json`);
+  // The checkpoint lives in the shared host state root, so it is removed here whatever happens, and the next run can take the same id.
+  t.after(() => {
+    rmSync(checkpointDirOf(scenario.environment.stateDir, sessionId, ROUNDTRIP_ID), { recursive: true, force: true });
+  });
+  const binary = Buffer.from(Array.from({ length: 1024 }, (_, index) => (index * 7) % 256));
+
+  // The project is up first, so a registry entry exists; down must remove it, and the checkpoint then runs with none.
+  await assertActive(scenario);
+  assert.equal(existsSync(registryEntry), true, "realm up must hold a registry entry for the project");
+  writeFileSync(join(workspace, ROUNDTRIP_BINARY), binary);
+  chmodSync(join(workspace, ROUNDTRIP_BINARY), ROUNDTRIP_BINARY_MODE);
+  mkdirSync(join(workspace, ROUNDTRIP_NESTED_DIR));
+  writeFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "nested before the checkpoint");
+  writeFileSync(join(workspace, ROUNDTRIP_DELETE), "deleted after the checkpoint");
+  const rootBefore = statSync(workspace);
+
+  try {
+    assertExit(await down(scenario), 0, "realm down before the checkpoint");
+    assert.equal(existsSync(registryEntry), false, "a stopped project must hold no registry entry");
+
+    const created = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "create", "--workspace", workspace, "--id", ROUNDTRIP_ID], STATUS_TIMEOUT_MS);
+    assertExit(created, 0, "realm checkpoint create on the stopped project");
+    assert.equal(existsSync(registryEntry), false, "the checkpoint must register nothing");
+
+    // Changes after the checkpoint: the binary is rewritten with a new mode, the nested file changes, one file is deleted and one added.
+    writeFileSync(join(workspace, ROUNDTRIP_BINARY), "changed after the checkpoint");
+    chmodSync(join(workspace, ROUNDTRIP_BINARY), 0o600);
+    writeFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "nested changed after the checkpoint");
+    rmSync(join(workspace, ROUNDTRIP_DELETE), { force: true });
+    writeFileSync(join(workspace, ROUNDTRIP_EXTRA), "added after the checkpoint");
+
+    const restored = await realmCli(scenario.inputs, scenario.environment, ["checkpoint", "restore", "--workspace", workspace, "--id", ROUNDTRIP_ID], STATUS_TIMEOUT_MS);
+    assertExit(restored, 0, "realm checkpoint restore on the stopped project");
+    assert.deepEqual(readFileSync(join(workspace, ROUNDTRIP_BINARY)), binary, "the binary must return byte for byte");
+    assert.equal((statSync(join(workspace, ROUNDTRIP_BINARY)).mode & 0o7777).toString(8), ROUNDTRIP_BINARY_MODE.toString(8), "the binary's mode must return");
+    assert.equal(readFileSync(join(workspace, ROUNDTRIP_NESTED_FILE), "utf8"), "nested before the checkpoint", "the nested file must return");
+    assert.equal(readFileSync(join(workspace, ROUNDTRIP_DELETE), "utf8"), "deleted after the checkpoint", "the deleted file must return");
+    assert.equal(existsSync(join(workspace, ROUNDTRIP_EXTRA)), false, "the file added after the checkpoint must be removed");
+    // The restore keeps the workspace root's device and inode, and the restored file lives on that device.
+    const rootAfter = statSync(workspace);
+    assert.equal(rootAfter.dev, rootBefore.dev, "the workspace root must stay on its device");
+    assert.equal(rootAfter.ino, rootBefore.ino, "the workspace root must keep its inode");
+    assert.equal(statSync(join(workspace, ROUNDTRIP_NESTED_FILE)).dev, rootBefore.dev, "the restored nested file must be on the root's device");
+    assert.equal(existsSync(registryEntry), false, "the restore must register nothing");
+  } finally {
+    for (const name of [ROUNDTRIP_BINARY, ROUNDTRIP_DELETE, ROUNDTRIP_EXTRA]) {
+      rmSync(join(workspace, name), { force: true });
+    }
+    rmSync(join(workspace, ROUNDTRIP_NESTED_DIR), { recursive: true, force: true });
+  }
+  const outcome = await waitForNoResidue(scenario.inputs, [sandboxOf(scenario)]);
+  assert.ok(outcome.ok, `residue after the stopped checkpoint round trip: ${outcome.detail}`);
 });

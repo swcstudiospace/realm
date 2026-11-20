@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Script } from "node:vm";
@@ -23,6 +23,8 @@ import {
   describeValue,
   findRpcReply,
   isBenchmarkAddress,
+  LIVE_MCP_HOST,
+  mcpArgvOf,
   parseDaemonPids,
   parseListeningSockets,
   parseNodeProbe,
@@ -35,10 +37,17 @@ import {
   statusFieldsOf,
   toolErrorOf,
   unparsedLinesOf,
+  mcpSessionArgv,
+  removeSharedStateCreatedBy,
+  restoreSharedPolicy,
+  waitUntilServed,
+  SERVED_POLL_INTERVAL_MS,
   type LiveInputs,
+  type McpSession,
   type PollCheck,
   type PollClock,
   type ProductionGateInputs,
+  type ScenarioEnvironment,
 } from "../support/production-live.js";
 
 // ---- parseProbeFields -----------------------------------------------------------------------------------------------------
@@ -102,7 +111,7 @@ void test("stateOfStatus reads snapshot.state from the status JSON and nothing e
 });
 
 void test("statusFieldsOf reads snapshot.state, snapshot.reason and display.label from the status JSON", () => {
-  const printed = '{"snapshot":{"state":"error","reason":"AGENTOS_CRASH_LOOP","lastTransitionAt":"t"},"display":{"label":"realm disconnected","degraded":false,"reason":"AGENTOS_CRASH_LOOP"},"mode":"advisory"}\n';
+  const printed = '{"snapshot":{"state":"error","reason":"AGENTOS_CRASH_LOOP","lastTransitionAt":"t"},"display":{"label":"realm disconnected","reason":"AGENTOS_CRASH_LOOP"},"mode":"advisory"}\n';
   assert.deepEqual(statusFieldsOf(printed), { state: "error", reason: "AGENTOS_CRASH_LOOP", label: "realm disconnected" });
 });
 
@@ -719,4 +728,165 @@ void test("removedCausesOf reads each removal as its container id and cause, and
   );
   assert.ok(startup !== undefined, "the record parses");
   assert.deepEqual(removedCausesOf(startup), [{ containerId: "0a1b", cause: "pids-limit" }]);
+});
+
+// ---- waitUntilServed ------------------------------------------------------------------------------------------------------
+
+const NOT_ACTIVE_REFUSAL = { isError: true, structuredContent: { code: "REALM_NOT_ACTIVE", retryable: true } };
+const SERVED_RESULT = { isError: false, structuredContent: { outcome: "done", tool: "status", value: {} } };
+
+// A session whose tools/call answers come from a script, one per call; the last answer repeats. The calls are recorded.
+function scriptedSession(answers: readonly unknown[]): { readonly session: Pick<McpSession, "request" | "stderr">; readonly calls: { readonly method: string; readonly params: unknown }[] } {
+  const calls: { readonly method: string; readonly params: unknown }[] = [];
+  return {
+    calls,
+    session: {
+      request: (method, params) => {
+        calls.push({ method, params });
+        const answer = answers[Math.min(calls.length, answers.length) - 1];
+        return Promise.resolve(answer);
+      },
+      stderr: () => "child stderr text",
+    },
+  };
+}
+
+void test("waitUntilServed polls status through the refusals and returns on the first call that is not refused", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([NOT_ACTIVE_REFUSAL, NOT_ACTIVE_REFUSAL, SERVED_RESULT]);
+  await waitUntilServed(session, { clock: fake.clock });
+  assert.equal(calls.length, 3, "two refusals, then the served call");
+  for (const call of calls) {
+    assert.equal(call.method, "tools/call");
+    assert.deepEqual(call.params, { name: "status", arguments: {} });
+  }
+  assert.deepEqual(fake.sleeps, [SERVED_POLL_INTERVAL_MS, SERVED_POLL_INTERVAL_MS], "a 2 s interval between the calls");
+});
+
+void test("waitUntilServed makes one call and no sleep when the session is already served", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([SERVED_RESULT]);
+  await waitUntilServed(session, { clock: fake.clock });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(fake.sleeps, []);
+});
+
+void test("waitUntilServed fails after its bound with the last refusal and the child's stderr", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([NOT_ACTIVE_REFUSAL]);
+  await assert.rejects(
+    waitUntilServed(session, { clock: fake.clock, timeoutMs: 10_000 }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /within 10 s of the handshake/);
+      assert.match(error.message, /the last: REALM_NOT_ACTIVE retryable true/);
+      assert.match(error.message, /child stderr text/);
+      return true;
+    },
+  );
+  assert.ok(calls.length > 1, "it kept polling until the bound");
+});
+
+void test("waitUntilServed fails at once on a tool error other than REALM_NOT_ACTIVE, naming it", async () => {
+  const fake = fakeClock();
+  const { session, calls } = scriptedSession([{ isError: true, structuredContent: { code: "POLICY_DENIED", retryable: false } }]);
+  await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /not REALM_NOT_ACTIVE.*POLICY_DENIED/s);
+  assert.equal(calls.length, 1);
+});
+
+void test("waitUntilServed lets a request failure through, such as a child that ended", async () => {
+  const fake = fakeClock();
+  const session: Pick<McpSession, "request" | "stderr"> = {
+    request: () => Promise.reject(new Error("MCP tools/call: realm mcp ended before it answered")),
+    stderr: () => "",
+  };
+  await assert.rejects(waitUntilServed(session, { clock: fake.clock }), /realm mcp ended before it answered/);
+});
+
+// ---- startMcpSession arguments and the shared-state cleanup of the capability keyring ----------------------------------------
+
+const ARGV_INPUTS: LiveInputs = {
+  image: "localhost/realm-agentos@sha256:0",
+  stateRoot: "/driver/state",
+  secretRoot: "/driver/secret",
+  workspaceRoot: "/driver/workspace",
+  cliPath: "/driver/cli.js",
+  hostEnvironment: {},
+};
+
+void test("mcpSessionArgv defaults to the labelled form of mcpArgvOf, takes a host and a workspace, and null host is the unlabelled form", () => {
+  const labelled = ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace"];
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS), labelled);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, {}), labelled);
+  assert.deepEqual(mcpArgvOf(ARGV_INPUTS), labelled);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: "codex" }), ["/driver/cli.js", "mcp", "--host", "codex", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { host: null }), ["/driver/cli.js", "mcp", "--workspace", "/driver/workspace"]);
+  assert.deepEqual(mcpSessionArgv(ARGV_INPUTS, { workspace: "/driver/workspace/p" }), ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace/p"]);
+});
+
+// A driver state directory that already holds an operator policy, and the scenario built over it.
+function sharedScenario(existing: (stateDir: string) => void): { readonly stateDir: string; readonly scenario: ScenarioEnvironment; readonly clean: () => void } {
+  const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "rls-")));
+  writeFileSync(join(stateDir, "policy.json"), '{"operator":"policy"}\n');
+  existing(stateDir);
+  const inputs: LiveInputs = { ...ARGV_INPUTS, driverStateDir: stateDir };
+  const scenario = createScenarioEnvironment(inputs, { image: inputs.image });
+  return {
+    stateDir,
+    scenario,
+    clean: () => {
+      rmSync(scenario.root, { recursive: true, force: true });
+      rmSync(stateDir, { recursive: true, force: true });
+    },
+  };
+}
+
+void test("the shared-state cleanup removes a keyring the run created and restores the operator policy byte for byte", () => {
+  const world = sharedScenario(() => undefined);
+  try {
+    assert.notEqual(readFileSync(join(world.stateDir, "policy.json"), "utf8"), '{"operator":"policy"}\n', "the scenario replaced the policy");
+    mkdirSync(join(world.stateDir, "capability"), { mode: 0o700 });
+    writeFileSync(join(world.stateDir, "capability", "keys.json"), "keyring bytes", { mode: 0o600 });
+    mkdirSync(join(world.stateDir, "audit"));
+    writeFileSync(join(world.stateDir, "audit", "s.jsonl"), "{}\n");
+    restoreSharedPolicy(world.scenario);
+    removeSharedStateCreatedBy(world.scenario);
+    assert.equal(existsSync(join(world.stateDir, "capability")), false, "the keyring directory the run created is removed");
+    assert.equal(existsSync(join(world.stateDir, "audit")), false);
+    assert.equal(readFileSync(join(world.stateDir, "policy.json"), "utf8"), '{"operator":"policy"}\n');
+  } finally {
+    world.clean();
+  }
+});
+
+void test("the shared-state cleanup leaves a keyring that existed before the run untouched, with the same bytes", () => {
+  const keyring = '{"version":1,"active":"k1","keys":[]}\n';
+  const world = sharedScenario((stateDir) => {
+    mkdirSync(join(stateDir, "capability"), { mode: 0o700 });
+    writeFileSync(join(stateDir, "capability", "keys.json"), keyring, { mode: 0o600 });
+  });
+  try {
+    writeFileSync(join(world.stateDir, "capability", "scratch"), "made by the run");
+    restoreSharedPolicy(world.scenario);
+    removeSharedStateCreatedBy(world.scenario);
+    assert.equal(readFileSync(join(world.stateDir, "capability", "keys.json"), "utf8"), keyring, "the pre-existing keyring is byte-identical");
+    assert.equal(existsSync(join(world.stateDir, "capability", "scratch")), false, "what the run added beside it is removed");
+  } finally {
+    world.clean();
+  }
+});
+
+// ---- mcpArgvOf -----------------------------------------------------------------------------------------------------------------
+
+void test("a live realm mcp session is labelled with a host id, so enforced capability tokens apply to it and it is not refused unlabelled", () => {
+  const inputs: LiveInputs = {
+    image: "localhost/realm-agentos@sha256:0",
+    stateRoot: "/driver/state",
+    secretRoot: "/driver/secret",
+    workspaceRoot: "/driver/workspace",
+    cliPath: "/driver/cli.js",
+    hostEnvironment: {},
+  };
+  assert.deepEqual(mcpArgvOf(inputs), ["/driver/cli.js", "mcp", "--host", LIVE_MCP_HOST, "--workspace", "/driver/workspace"]);
+  assert.equal(LIVE_MCP_HOST, "claude");
 });

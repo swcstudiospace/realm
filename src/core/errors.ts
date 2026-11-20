@@ -1,4 +1,4 @@
-// Typed error catalogue (D-10, spec n6). Exactly these 31 codes; no others.
+// Typed error catalogue (D-10, spec n6). Exactly these 29 codes; no others.
 // The 20 spec n6 codes plus PODMAN_UNSUPPORTED_VERSION (plan 01-06, explicit override), AUDIT_WRITE_FAILED,
 // and three codes from the 2026-10-22 closure: AGENTOS_NOT_CONFIGURED, AGENTOS_STOP_FAILED, OPENSHELL_LABEL_AMBIGUOUS.
 // MCP_INPUT_FAILED and CLEANUP_FAILED are catalogued after the closure codes, then DAEMON_START_TIMEOUT and SANDBOX_NAME_IN_USE,
@@ -22,8 +22,6 @@ export const ERROR_CODES = Object.freeze([
   "AGENTOS_CRASH_LOOP",
   "AGENTOS_NOT_CONFIGURED",
   "AGENTOS_STOP_FAILED",
-  "ANDA_UNREACHABLE",
-  "ANDA_VERSION_MISMATCH",
   "POLICY_DENIED",
   "PATH_ESCAPE",
   "CREDENTIAL_PATH_DENIED",
@@ -127,16 +125,8 @@ export const ERROR_CATALOGUE: Readonly<Record<ErrorCode, CatalogueEntry>> =
         "AgentOS did not stop cleanly: its sandbox delete may still be pending, so no success was reported. Its sandbox container is stopped regardless, and the stop can be retried.",
       retryable: true,
     },
-    ANDA_UNREACHABLE: {
-      reason: "The Anda engine could not be reached.",
-      retryable: true,
-    },
-    ANDA_VERSION_MISMATCH: {
-      reason: "The Anda engine version is not one that Realm supports.",
-      retryable: false,
-    },
     POLICY_DENIED: {
-      reason: "The active policy denies this operation.",
+      reason: "The active policy denies this operation, or the caller holds no valid capability token (capability tokens are enforced by default; run realm doctor).",
       retryable: false,
     },
     PATH_ESCAPE: {

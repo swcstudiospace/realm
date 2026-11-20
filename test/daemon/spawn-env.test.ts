@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RealmError } from "../../src/core/errors.js";
 import { daemonSpawnEnv } from "../../src/daemon/spawn-env.js";
-import { launchFilteredDaemon, runCli, startDetachedDaemon, type ConnectDaemon } from "../../src/cli/main.js";
+import { runCli, type ConnectDaemon } from "../../src/cli/main.js";
+import { launchFilteredDaemon, startDetachedDaemon } from "../../src/daemon/launch.js";
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
 
