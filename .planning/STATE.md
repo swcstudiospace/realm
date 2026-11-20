@@ -246,6 +246,7 @@ Detail, by phase: Phase 3 covers RT-01, RT-02, RT-03, RT-09, and the live parts 
 Last session: 2026-11-08T16:41:15.821Z
 Stopped at: Phase 44 complete — all phases complete
 Resume file: None
+Branch note (2026-11-20, gsd/phase-15-complete merged with origin/main v0.9.0): this branch ran a swarm pass recorded here for continuity — A01 DONE 8, A10 remediated, Linear SPE-35321..35355, PR #249. The merge keeps main's current milestone/phase position as truth. v3.0 phases are NOT marked complete by this note: HARN-03 remains owner-blocked and the CRASH-04 live gap remains open.
 
 Recorded commits (closure run): 72817e9 (private flag restored, engines >=22.13.0); 390f511 (causeCode and catalogue codes, host paths, lifecycle bound, root identity, exec margin); b6bc892 (daemon entry, AgentOS fail-closed, catalogue refusals, per-method control bounds); 8088159 (daemon owns sessions; tool method; daemon client; Omp and MCP attach); 4b1d4ab (smoke fixes: CLI probe, up and down exits, state-dir 0700); c55056a (traceability: requirements by evidence, spike facts, runtime config, Omp attach contract); a999c17 (audit gap closure: realm acp, refusal code mapping, one state-dir resolver, Omp status, pinned-root rebind, catch-site fixes, daemon server-failure stop); dd02034 (re-audit, planning, and docs); 54bc236 (MCP tool-call diagnostic); plus the decisions commit (see git log).
 

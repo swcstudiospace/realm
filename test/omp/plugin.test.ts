@@ -1306,7 +1306,8 @@ void test("HARN-02 C1: registered advisory write warns on every inactive invocat
   await waitForDetail(fixture.ui, "runner unavailable");
   const write = toolOf(fixture.pi, "write");
   for (const [index, content] of ["first π\n", "second 🙂\n"].entries()) {
-    const result = await write.execute(`advisory-${String(index)}`, { path: "c1.txt", content });
+    const invocationId: string = index === 0 ? "advisory-0" : "advisory-1";
+    const result = await write.execute(invocationId, { path: "c1.txt", content });
     assert.equal(result.isError, false);
     assert.deepEqual(readFileSync(join(workspace, "c1.txt")), Buffer.from(content));
     assert.equal(fixture.ui.notifications.length, index + 1, "the same notice is never deduplicated");
