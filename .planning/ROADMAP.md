@@ -12,6 +12,7 @@ Milestone v6.0, Responsiveness, exec kill proof, host ids and evidence debt, tri
 
 Milestone v7.0, Carried findings closure, closes the findings v6.0 carried, on release line 0.7.x. It gives the Omp cold-attach responsiveness a measurement that can yield a valid verdict on a shared host (a scoped-contention gate in place of the host load average, a deterministic in-process stall probe, alternating order, a frozen baseline validity bound) and resolves OMPR-01, OMPR-06 and OI-11 from its outcome (Phase 45), reproduces and fixes the failure of `realm up` right after a rapid stop, F-41-1 (Phase 46), root-causes the legacy kimi-cli production-tier failure and its environment forwarding, GAP-43-01 (Phase 47), and closes the Grok Build attribution, GAP-40-01, with production tiers for Muse Code, Prime Agent and Grok Build (Phase 48). It has four phases, 45 to 48, which are independent in code and queue for the shared live window.
 Milestone v8.0, Shared sandboxes and durable recovery, retests the eight requirements v7.0 carried and sketches the shared-sandbox steps, on release line 0.8.x. It recalibrates the Omp measurement after the bracket-arithmetic fix so a bound can be frozen (Phase 49), fixes the Grok harness defect GAP-48-03 and reruns the live Grok attach and production tier (Phase 50), reruns the stop-then-up windows for F-41-1 to the iteration bar (Phase 51), establishes or narrows the legacy kimi GAP-43-03 cause (Phase 52), and, as owner-approved (HITL) scope, freezes designs for concurrent sandbox binding (Phase 53) and durable workspace snapshots (Phase 54). It has six phases, 49 to 54; the four retest phases are independent in code and queue for the shared live window, and the two design phases produce frozen designs only.
+Milestone v9.0, Doctor health and concurrent binding, adds the Omp plugin health check to `realm doctor` with its runbook (Phase 55), establishes and bounds the F-51-1 dirty-stop cause (Phase 56), retests the two host-evidence items v8.0 carried (HTIER-01 attribution, Phase 57; KIMV-02 recorder fix and rerun, Phase 58), and implements concurrent binding on the frozen Phase 53 design once the owner ratifies it (Phase 59), on release line 0.9.x. It has five phases, 55 to 59; Phases 56, 57 and 58 queue for the shared live window, Phase 55 is hermetic-first, and Phase 59 is gated on the Phase 53 ratification.
 
 Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 requirements (HOST-01..03, OMP-LIVE-01..04, UI-01), mapped to phases 8 to 10. The production isolation build adds 31 PRD requirements, mapped to phases 9.1 to 9.6. v3.0 adds 52 requirements (HARN, QR, CRASH, ONB, DEF, OMPX, OBS, MULTI, RES, REL) mapped to phases 12 to 20.
 
@@ -24,7 +25,8 @@ Coverage: 46/46 v1 requirements mapped, each to exactly one phase. v2.0 adds 8 r
 - 🗄 **v5.0 Cold attach, enforced capability tokens and evidence** — Phases 33 to 37 (shipped 2026-11-18, release line 0.5.x; archived in `milestones/v5.0-ROADMAP.md`)
 - 🗄 **v6.0 Responsiveness, exec kill proof, host ids and evidence debt** — Phases 38 to 44 (shipped 2026-11-19, release line 0.6.x; archived in `milestones/v6.0-ROADMAP.md`)
 - ✅ **v7.0 Carried findings closure** — Phases 45 to 48 (shipped 2026-11-19, release line 0.7.x; audit `.planning/v7.0-MILESTONE-AUDIT.md`, passed with accepted limitations)
-- 🚧 **v8.0 Shared sandboxes and durable recovery** — Phases 49 to 54 (in progress, release line 0.8.x; retests for OMPV-04, STOP-01..04, KIMV-02, HTIER-01, HTIER-04 plus owner-approved design phases CBIND and SNAP)
+- ✅ **v8.0 Shared sandboxes and durable recovery** — Phases 49 to 54 (shipped 2026-11-19, release line 0.8.x; audit `.planning/v8.0-MILESTONE-AUDIT.md`, passed with accepted limitations)
+- 🚧 **v9.0 Doctor health and concurrent binding** — Phases 55 to 59 (in progress, release line 0.9.x; Omp plugin health check, F-51-1 cause, HTIER-01 and KIMV-02 retests, concurrent binding implementation)
 
 ## Phases
 
@@ -632,6 +634,7 @@ Milestone v3.0 phases (12 to 20) run in three parallel lanes that share no mutab
 
 Milestone v7.0 phases (45 to 48) are independent in code and each depends on Phase 44 only. Each needs a live window on the shared realm stack, which queue on the live lock and run one at a time; the documentation edits of Phases 47 and 48 (registry rows, support matrix, gap rows) land in that order.
 Milestone v8.0 phases (49 to 54) are independent in code and each depends on Phase 48 only. Phases 49 to 52 each need a live window on the shared realm stack, which queue on the live lock and run one at a time; Phases 53 and 54 are design-only (frozen designs, no live window, no code) and their HITL owner decisions are settled before any dependent implementation phase is planned.
+Milestone v9.0 phases (55 to 59) are independent in code and each depends on Phase 54 only, except Phase 59 which additionally depends on the owner ratification of the Phase 53 design before any code. Phases 56, 57 and 58 each need a live window on the shared realm stack, which queue on the live lock and run one at a time; Phase 55 is hermetic-first (doctor checks on injected fakes) and needs no live window for its core.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -690,12 +693,17 @@ Milestone v8.0 phases (49 to 54) are independent in code and each depends on Pha
 | 46. Rapid stop then up (F-41-1) | 4/4 | Complete | 2026-11-19 |
 | 47. Legacy kimi production tier and environment forwarding | 3/4 with summaries (47-03 skipped by branch rule) | Complete | 2026-11-19 |
 | 48. Grok Build attribution and production tiers for Muse Code, Prime Agent and Grok Build | 4/4 | Complete | 2026-11-19 |
-| 49. Omp calibration repeat | 0/0 | Planned | - |
-| 50. Grok harness fix and production re-run | 0/0 | Planned | - |
-| 51. Rapid stop then up repeat (F-41-1) | 0/0 | Planned | - |
-| 52. Legacy kimi cause (GAP-43-03) | 0/0 | Planned | - |
-| 53. Concurrent binding design (HITL, owner-approved scope) | 0/0 | Planned | - |
-| 54. Snapshots design (HITL, owner-approved scope) | 0/0 | Planned | - |
+| 49. Omp calibration repeat | 1/1 | Complete | 2026-11-19 |
+| 50. Grok harness fix and production re-run | 1/1 | Complete | 2026-11-19 |
+| 51. Rapid stop then up repeat (F-41-1) | 1/1 | Complete | 2026-11-19 |
+| 52. Legacy kimi cause (GAP-43-03) | 1/1 | Complete | 2026-11-19 |
+| 53. Concurrent binding design (HITL, owner-approved scope) | 1/1 | Complete | 2026-11-19 |
+| 54. Snapshots design (HITL, owner-approved scope) | 1/1 | Complete | 2026-11-19 |
+| 55. Omp plugin health check | 0/0 | Planned | - |
+| 56. F-51-1 cause | 0/0 | Planned | - |
+| 57. HTIER-01 attribution retest | 0/0 | Planned | - |
+| 58. KIMV-02 recorder fix and rerun | 0/0 | Planned | - |
+| 59. Concurrent binding implementation | 0/0 | Planned | - |
 
 ### Phase 21: Host plugin contract and installer
 
@@ -1187,4 +1195,59 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A dated design record states the snapshot contents, the durability guarantee (what survives a daemon restart and a crash), and the restore semantics (byte-for-byte return to prior content), each with the owner decision that settled it; the HITL owner decisions are listed as owner-approved scope.
   2. The design states how it composes with RES-04 checkpoint create/restore, the scratch volume and the no-orphan guarantee, and the code surfaces and contract changes it would need; no compatibility shims are left in the design.
+**Plans**: TBD
+
+### Phase 55: Omp plugin health check
+
+**Goal:** `realm doctor` reports the Omp plugin install and health state with its fix text, and the Omp lifecycle runbook documents the failing cases and their remedy, so an operator can diagnose a missing or broken plugin without reading source.
+**Depends on:** Phase 54
+**Requirements**: HEALTH-01, HEALTH-02
+**Success Criteria** (what must be TRUE):
+  1. A doctor check (pinned by an enumerating hermetic test over injected fakes) reports pass when the Omp plugin is installed and healthy, and warn or fail with a fix text naming the remedy for each failing case (not installed, wrong version, not loaded); the check is read-only and never installs or removes anything except through `doctor --fix`.
+  2. The check is bounded like every other doctor probe (a timeout on every read), carries no host-local absolute path, and the enumerating tests and doctor docs list the new check in the same pull request.
+  3. The Omp lifecycle runbook gains a section that maps each failing doctor outcome to its remedy steps, with the live evidence or dated receipt cited, and no step that signals a process the operator did not start.
+**Plans**: TBD
+
+### Phase 56: F-51-1 cause
+
+**Goal:** The F-51-1 dirty variant-c stop cause is established from a captured failed-step cause code and recorded in `runtime-decision.md`, and the cause is fixed or bounded with a clean 20-iteration run.
+**Depends on:** Phase 54
+**Requirements**: STOP-05, STOP-06
+**Success Criteria** (what must be TRUE):
+  1. A live window captures the failed step and its cause code for every dirty stop (the Phase 51 gap: AGENTOS_STOP_FAILED with no failed-step code), with the timeline of daemon, gateway, driver, supervisor and Podman kept outside the repository.
+  2. STOP-05 is met with the cause established and recorded in `docs/integration/runtime-decision.md` (which step fails and why), or carried with a stated, tested reason; F-51-1 is not folded into F-41-1.
+  3. The cause is fixed or bounded with every wait bounded, and a live run does at least 20 consecutive variant-c stop-then-up iterations with `failedTeardowns` 0; a fix never weakens teardown bounds or the no-orphan guarantee.
+**Plans**: TBD
+
+### Phase 57: HTIER-01 attribution retest
+
+**Goal:** The Grok Build both-files audit line is retested live with the Phase 50 harness fix in place: a Grok session beside the shared Claude files is attributed `grok-build` in the audit log, or GAP-40-01 stays accepted-residual with the missing host feature named.
+**Depends on:** Phase 54
+**Requirements**: HTIER-01
+**Success Criteria** (what must be TRUE):
+  1. A live Grok Build session on the production stack writes an audit line attributed `grok-build` with the host launching `realm mcp --host grok-build`, the handshake, `tools/list` and the six tools on the wire; the warm variant runs if the cold mandatory audit is the blocker, and the outcome is recorded either way.
+  2. HTIER-01 is met on that live line or carried with GAP-40-01 accepted-residual, the missing host feature named and the verified workaround documented; GAP-48-01 stays accepted-residual unless the line proves otherwise.
+  3. The registry row, support matrix, gap rows and host pages agree with the result; `test/integration/enforce-default.test.ts` still passes unedited.
+**Plans**: TBD
+
+### Phase 58: KIMV-02 recorder fix and rerun
+
+**Goal:** The wire recorder logs before forwarding (fixing the indicted instrument), and the deciding live rerun closes GAP-43-03: the response the log-after-forward recorder missed is shown, or the client's close-after-response race is established as the narrowed cause.
+**Depends on:** Phase 54
+**Requirements**: KIMV-02
+**Success Criteria** (what must be TRUE):
+  1. A hermetic test shows the recorder log-before-forward change red-first (a response visible after the fix that the old code dropped) and the fixed recorder in use by every live harness that asserts the wire summary.
+  2. A live rerun with the fixed recorder keeps the wire log and the full `kimi mcp test realm` output: if the response appears, the recorder was the cause; otherwise the client's close-after-response race is recorded; version and date recorded.
+  3. KIMV-02 is met with the cause established and recorded in the phase and the gap rows, or carried with a stated, tested reason; GAP-43-03 is not relabelled and the recorder inference is no longer inference once the rerun runs.
+**Plans**: TBD
+
+### Phase 59: Concurrent binding implementation
+
+**Goal:** The concurrent binding lock from the frozen `53-DESIGN.md` is implemented on its §4 surfaces only after the owner ratifies the design: one live binder per workspace, bounded FIFO wait with existing codes, stale-binder takeover, nested roots refused.
+**Depends on:** Phase 54, and the owner ratification of `53-DESIGN.md` (gates all code, D-v9-6)
+**Requirements**: CBIND-01, CBIND-02, CBIND-03
+**Success Criteria** (what must be TRUE):
+  1. CBIND-01..02 close on the recorded HITL owner ratification of `53-DESIGN.md` (§5 gate); no code lands before it, and the ratification is cited by date in the phase record.
+  2. The implementation follows §4 exactly: new `src/session/workspace-binding.ts` modeled on `checkpoint-lock.ts`, `bindingsDirOf`/`bindingLockPathOf` in `src/session/paths.ts`, acquire before create and release on destroy in `src/lifecycle/controller.ts`, `src/fs/locks.ts` untouched, no new catalogue code, no contract change, no shims.
+  3. Hermetic tests prove the binding semantics (alias contention, stale takeover capped at 3, live-owner refusal `LOCK_CONFLICT`, expired wait `TOOL_TIMEOUT`, nested roots `POLICY_DENIED`, grant-then-swap refused) red-first where new behaviour is added, and the single-daemon precondition (D-87) still holds.
 **Plans**: TBD

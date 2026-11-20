@@ -1,37 +1,37 @@
 ---
 gsd_state_version: "1.0"
-milestone: v8.0
-milestone_name: Shared sandboxes and durable recovery (Phases complete)
-status: PhasesComplete
-stopped_at: Milestone v8.0 phases 49 to 54 verified, 4 of 12 requirements complete
-last_updated: "2026-11-19T09:00:00.000Z"
-last_activity: 2026-11-19
-last_activity_desc: Milestone v8.0 phases 49 to 54 verified (audit .planning/v8.0-MILESTONE-AUDIT.md)
+milestone: v9.0
+milestone_name: Doctor health and concurrent binding (Starting)
+status: Starting
+stopped_at: Milestone v9.0 started, phases 55 to 59 planned
+last_updated: "2026-11-20T09:00:00.000Z"
+last_activity: 2026-11-20
+last_activity_desc: Milestone v9.0 started
 state_head: 63bbc7e
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
-current_phase: —
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
+current_phase: 55
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-19)
+See: .planning/PROJECT.md (updated 2026-11-20)
 
 **Core value:** Every file mutation by an agent either lands inside the realm under policy or fails closed, and the user can always see whether the realm is active or disconnected.
-**Current focus:** Milestone v8.0, Shared sandboxes and durable recovery (phases 49 to 54, release line 0.8.x) — phases complete, audit `.planning/v8.0-MILESTONE-AUDIT.md` (passed with accepted limitations): OMPV-04 met and OMPR-01/06 + OI-11 closed on the FINDING (Phase 49); HTIER-04 met, GAP-48-03 closed, HTIER-01 still carried (Phase 50); STOP not met, F-51-1 new, F-41-1 carried (Phase 51); KIMV-02 NOT-ESTABLISHED narrowed, GAP-43-03 open (Phase 52); CBIND-01..02 design-frozen pending HITL owner ratification (Phase 53); SNAP-01..02 met on the frozen design (Phase 54). 4 of 12 v8.0 requirements ticked Complete; carried items stay carried. Scope and owner decisions of 2026-11-19: `.planning/MILESTONE-CONTEXT.md`; the v7.0 close-out is `.planning/v7.0-MILESTONE-AUDIT.md`.
+**Current focus:** Milestone v9.0, Doctor health and concurrent binding (phases 55 to 59, release line 0.9.x). New work: Omp plugin health check in `realm doctor` plus runbook (HEALTH), F-51-1 cause and fix (STOP-05, STOP-06), and concurrent binding implementation on the frozen Phase 53 design (CBIND-03, gated on owner ratification). Retests for the requirements v8.0 carried: HTIER-01 attribution (Phase 57) and KIMV-02 recorder fix plus rerun (Phase 58). Scope and owner decisions of 2026-11-20: `.planning/MILESTONE-CONTEXT.md`; the v8.0 close-out is `.planning/v8.0-MILESTONE-AUDIT.md`.
 
 ## Current Position
 
-Phase: — (all phases 49 to 54 complete)
+Phase: 55 (Omp plugin health check), not started
 Plan: —
-Status: Phases complete (audit passed with accepted limitations); milestone ship decision is the owner's
-Last activity: 2026-11-19 — Milestone v8.0 phases verified
+Status: Starting milestone v9.0 (phases 55 to 59, release line 0.9.x)
+Last activity: 2026-11-20 — Milestone v9.0 started
 
 ## Current Recovery Boundaries
 
