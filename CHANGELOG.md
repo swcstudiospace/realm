@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-20
+
+### Documentation
+- docs(milestone): start v9.0 Doctor health and concurrent binding (phases 55-59) (07ad4d7)
+
 ## [0.8.3] - 2026-11-19
 
 ### Documentation
