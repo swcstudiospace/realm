@@ -303,7 +303,14 @@ node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor --fix --dry-run
 node "$REALM_CHECKOUT/dist/src/cli/main.js" doctor --fix
 ```
 
-`--dry-run` without `--fix` is a usage error. Fix mode needs a valid config,
+`--dry-run` without `--fix` is a usage error. The last item is `omp-plugin` (HEALTH-01, Phase 55): it reads the shim
+receipt, the recorder status of the files it names, and the presence markers (read-only, like every item), and
+reports pass when the extension is installed, current and loaded; warn with a fix when it is not installed, not the
+current build (drift, or a missing or unreadable entry), or not loaded (no live marker); and fail with a catalogue
+code when the state cannot be read. It covers the shim route only: a plugin-link install writes no receipt and
+reads as not installed here. Each outcome's remedy, including the dangling-link case, is in
+`docs/integration/omp-lifecycle-runbook.md` ("Doctor `omp-plugin` item: remedy for each outcome").
+Fix mode needs a valid config,
 works locally even when the daemon answers, and never starts a daemon.
 It only creates or tightens `STATE_DIR`, `STATE_DIR/run` and
 `STATE_DIR/sessions` to 0700; the parent directory must exist. It refuses

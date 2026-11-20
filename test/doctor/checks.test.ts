@@ -20,6 +20,7 @@ const REGISTERED_IDS: readonly CheckId[] = [
   "runtime-roots",
   "host-plugins",
   "capability-tokens",
+  "omp-plugin",
 ];
 
 // The explicit host environment each doctor run receives in these tests. The doctor reads no process environment. PATH names an
@@ -358,6 +359,6 @@ void test("the driver roots add no check id: a config adds only driver-socket an
   const { workspace, stateDir, policyPath } = layout(t);
   const results = await runChecks({ policyPath, stateDir, env: DOCTOR_ENV, runtimeConfig: rootConfig(stateDir, workspace) });
   const ids = results.map((result) => result.id);
-  assert.deepEqual(ids, [...REGISTERED_IDS.slice(0, -2), "driver-socket", "gateway", "host-plugins", "capability-tokens"]);
+  assert.deepEqual(ids, [...REGISTERED_IDS.slice(0, -3), "driver-socket", "gateway", "host-plugins", "capability-tokens", "omp-plugin"]);
   assert.equal(new Set(ids).size, ids.length, "no check id appears twice");
 });

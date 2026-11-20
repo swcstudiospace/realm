@@ -134,6 +134,91 @@ Evidence names are `built-realm-cold.*` and `built-realm-warm.*`: Omp version, r
 
 This is real Omp plus the built extension, but its daemon uses `FakeExecutionService`: it is a **guard/network proof, not production containment or production audit acceptance**. Separate parent evidence established generated-config `init` (fail-closed), `up`/`status` (active), `down` (unbound), and existing production crash/reap/reattach and MCP exec/write/read cases with the temporary rebuilt driver. That does not prove a released installer provisions the production stack, nor does any earlier production pass prove this new measured warm case or OMPX-05's paired production audit requirements.
 
+## Doctor `omp-plugin` item: remedy for each outcome (HEALTH-01, HEALTH-02)
+
+`realm doctor` ends with an `omp-plugin` item (Phase 55, 2026-11-20). It is read-only and bounded like every other
+doctor probe: it reads the shim receipt under `<stateDir>/hosts/omp.receipt.json`, the recorder status of the files
+that receipt names, and the presence markers under `<stateDir>/hosts/omp-active/`, and it writes, removes and
+repairs nothing. `doctor --fix` behaviour is unchanged. A detail names states and counts only, never a path. The
+item covers the shim route (`realm host install omp`); a plugin link (`omp plugin install <checkout>`) writes no
+receipt, so the item reports `not installed` for a link-only install and the link remedy below verifies that route
+with Omp's own commands instead. Map each outcome to its remedy:
+
+| Doctor outcome | What it means | Remedy |
+|---|---|---|
+| pass: installed and loaded | the shim is current and at least one live marker names a session that loaded it | nothing |
+| warn: not installed | no receipt: the shim route is not installed (a link-only install reads the same way) | fresh install or link, below |
+| warn: not the current build | the owned shim no longer matches what the install wrote, or the entry it imports is missing or unreadable | rebuild and reinstall, below |
+| warn: not loaded | installed and current, but no live marker: no session has loaded it yet | start a session, below |
+| warn: unreadable presence marker(s) | a marker cannot be read or parsed safely; it is counted, never trusted | inspect the hosts directory, below |
+| fail: state cannot be read (code) | a receipt, marker or listing failed or timed out | inspect and restore, below |
+
+Never signal a process the operator did not start, and never run these steps inside the agent session being
+diagnosed.
+
+### Fresh install (not installed)
+
+1. Build the checkout (`npm run build`) and confirm `<repo>/dist/src/omp/extension.js` exists; install refuses with
+   `extension-unbuilt` otherwise.
+2. Plan, then apply: `realm host install omp --dry-run`, review the plan, then `realm host install omp`.
+3. Confirm: `realm host status omp` reports installed with the target present, and `realm doctor` shows `omp-plugin`
+   warn `not loaded` (installed, no session yet) rather than `not installed`.
+
+Evidence receipt (2026-11-20): `test/doctor/omp-checks.test.ts` pins not-installed, not-loaded and pass over
+injected fakes and over a fixture host installed by the real installer engine; the live shim rehearsal is recorded in
+`docs/integration/omp.md` ("Live rehearsal, 2026-11-17", Omp 18.22.0).
+
+### Dangling plugin link
+
+A link install (`omp plugin install <checkout>`) links the checkout under `<home>/.omp/plugins/node_modules/agent-realm`.
+If the checkout is later moved or deleted, the link dangles: `omp plugin list --json` still lists `agent-realm` with
+`enabled: true`, but its `path` names nothing, and `omp plugin doctor` reports the plugin unhealthy. The doctor
+`omp-plugin` item cannot see this route (no receipt); the shim route is unaffected. Remedy:
+
+1. Confirm, in the same `HOME` and `PI_CODING_AGENT_DIR` the session uses: `omp plugin list --json` lists one npm
+   entry `agent-realm`, and the directory its `path` names exists. `omp plugin doctor` prints the per-plugin lines.
+2. Decide which route to keep. To re-link: rebuild the checkout and run `omp plugin install <checkout>` again from
+   the existing checkout, then re-run `omp plugin list --json` and `omp plugin doctor`. To switch to the shim
+   route: remove the link (Omp owns that path) and run the fresh-install steps above. Do not keep both: the shim
+   install refuses with `already-loaded` while the link exists, because the two would load the extension twice.
+3. Confirm the chosen route only: for the link, `omp plugin doctor` shows no error for `plugin:agent-realm` and a
+   headless session paints the `realm` status item; for the shim, `realm doctor` leaves `not installed`.
+
+Evidence receipt (2026-11-20): the link route itself is recorded in `docs/hosts/snippets/omp.md` ("Current install
+record (ONB-05)", 2026-11-13, Omp 18.20.0: `omp plugin list --json` entry, `omp plugin doctor` output, status item
+frames). The dangling-link remedy is the operator procedure defined here; no live dangling-link run is recorded in
+this phase, so no such claim is made.
+
+### Not the current build (drift, or a missing or unreadable entry)
+
+Rebuild (`npm run build`), then repair with `realm host install omp`, or remove with `realm host uninstall omp` and
+install again. Confirm with `realm host status omp` and `realm doctor`. An edited or moved shim is drift, reported
+by both. If the entry the shim imports is gone, the build step comes first: install refuses before anything is
+written while the entry is unbuilt.
+
+Evidence receipt (2026-11-20): `test/doctor/omp-checks.test.ts` (gone entry reads as not the current build) and the
+`host-plugins` drift cases in `test/doctor/host-checks.test.ts`.
+
+### Not loaded (installed, no live marker)
+
+Start an Omp session with the extension loaded (the installed shim loads on its own; for one session,
+`omp --no-extensions -e <repo>/dist/src/omp/extension.js`). A marker appears after the attach settles; rerun
+`realm doctor`. A live marker means a process loaded the plugin and its last attach settled; it does not prove the
+sandbox is healthy (`realm status` does) and is not containment.
+
+Evidence receipt (2026-11-20): `test/doctor/omp-checks.test.ts` (idle fixture host reads as not loaded) and the
+marker semantics in `docs/integration/omp.md` ("What 'active' means").
+
+### Unreadable markers or an unreadable state (fail: state cannot be read, warn: unreadable presence marker(s))
+
+Inspect the hosts directory and the receipt the detail names without following symlinks. A symlink, an oversize or
+malformed file, or a receipt that cannot be parsed is repaired by hand or restored from a known-good copy, then
+rerun doctor. An unreadable marker is only a count in the detail; a reinstall or uninstall refuses until the file
+it owns can be read or parsed safely.
+
+Evidence receipt (2026-11-20): `test/doctor/omp-checks.test.ts` (timeout and catalogue-error probes fail without
+throwing; unreadable markers warn naming only a count) and the inspect fix shared with `host-plugins`.
+
 ## Cleanup
 
 Run `realm down`, stop the provider and Omp, remove the files you wrote from `<workspace>` and the check directory, and confirm that `realm status` prints `disconnected` and the container list is empty.

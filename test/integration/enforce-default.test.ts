@@ -406,9 +406,9 @@ void test("E4: the commands that use the control socket without a token still wo
   assert.equal(doctor.exitCode, 0, doctor.stderr);
   const checks: unknown = JSON.parse(doctor.stdout);
   assert.ok(Array.isArray(checks), "the daemon's doctor reply is the list of checks");
-  const last: unknown = checks[checks.length - 1];
+  const last: unknown = checks[checks.length - 2];
   assert.ok(typeof last === "object" && last !== null && "id" in last && "status" in last);
-  assert.equal(last.id, "capability-tokens", "the item stays last");
+  assert.equal(last.id, "capability-tokens", "the item sits before omp-plugin, the last item");
   assert.equal(last.status, "pass", "a daemon with its keyring passes the capability-tokens item");
 
   // The status call that realm checkpoint and the liveness probe make: a client built without a host, no token.
@@ -543,7 +543,7 @@ void test("E9: with no policy file at all the daemon enforces: its keyring exist
   assert.equal(doctor.error, undefined);
   const checks: unknown = doctor.result;
   assert.ok(Array.isArray(checks));
-  const last: unknown = checks[checks.length - 1];
+  const last: unknown = checks[checks.length - 2];
   assert.ok(typeof last === "object" && last !== null && "id" in last && "status" in last);
   assert.equal(last.id, "capability-tokens");
   assert.equal(last.status, "pass");

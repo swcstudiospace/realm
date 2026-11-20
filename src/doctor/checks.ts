@@ -7,8 +7,8 @@
 // control channel have no item in Phase 3, because nothing there can inspect them (D-69).
 // Phase 6 appends control-channel and agentos to REGISTERED deliberately (CLI-03; P6-D6,
 // P6-D14); the list is a costly change under D-44. Phase 9.7 appends host-binaries and
-// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins, and Phase 32 appends
-// capability-tokens after it.
+// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins, Phase 32 appends
+// capability-tokens after it, and Phase 55 appends omp-plugin last.
 //
 // Details and fixes name paths, rules, and schema pointers. They never carry a value read
 // from the policy file (the privacy rule in src/contract/validate.ts).
@@ -35,6 +35,7 @@ import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../sessi
 import type { RuntimeConfig } from "../runtime/config.js";
 import { capabilityTokensCheck } from "./capability-checks.js";
 import { hostPluginsCheck } from "./host-checks.js";
+import { ompPluginCheck, type OmpPluginProbe } from "./omp-checks.js";
 import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 import {
   defaultReadPtraceScope,
@@ -45,6 +46,7 @@ import {
   type HostBinaryPins,
 } from "./checks-host.js";
 export type { ConnectSocket } from "../runtime/podman-probe.js";
+export type { OmpPluginProbe, OmpPluginReading } from "./omp-checks.js";
 
 export type CheckId =
   | "policy-file"
@@ -61,7 +63,8 @@ export type CheckId =
   | "driver-socket"
   | "gateway"
   | "host-plugins"
-  | "capability-tokens";
+  | "capability-tokens"
+  | "omp-plugin";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -103,6 +106,9 @@ export interface DoctorOptions {
   readonly runtimeConfig?: RuntimeConfig;
   readonly statPath?: RuntimeCheckOptions["stat"];
   readonly connectGateway?: RuntimeCheckOptions["connectGateway"];
+  // Omp plugin seam (HEALTH-01). Absent, the check reads the shim receipt, the recorder status and the presence
+  // markers under stateDir. Tests inject a fake so that no file is read.
+  readonly ompPlugin?: OmpPluginProbe;
 }
 
 // What the daemon reports about AgentOS (CLI-03; P6-D14). bound false: no driver is bound, so realm up is
@@ -177,7 +183,12 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.policyPath === undefined ? {} : { policyPath: options.policyPath }),
     ...(options.runtimeConfig === undefined ? {} : { runtimeConfig: options.runtimeConfig }),
   });
-  return [...registered, ...runtime, hostPlugins, capabilityTokens];
+  const ompPlugin = await ompPluginCheck({
+    stateDir: options.stateDir,
+    probeTimeoutMs: probeTimeoutOf(options),
+    ...(options.ompPlugin === undefined ? {} : { probe: options.ompPlugin }),
+  });
+  return [...registered, ...runtime, hostPlugins, capabilityTokens, ompPlugin];
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.
