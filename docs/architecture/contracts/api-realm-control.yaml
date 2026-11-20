@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: Realm Control Socket
+  version: 1.0.0
+  description: >
+    Control-socket contract for realm lifecycle, tool writes, audit verification,
+    metrics over the control socket, and checkpoint restore.
+    Fail-closed default (D4): while the realm is not active, host edit and
+    Realm write refuse with REALM_NOT_ACTIVE. Advisory is explicit opt-in.
+servers:
+  - url: unix:///state/control.sock
+    description: User-only socket (directory 0700, socket 0600). No network listeners.
+paths:
+  /status:
+    get:
+      summary: Realm status with color-independent text label
+      operationId: realmStatus
+      responses:
+        '200':
+          description: Exactly 1 of 2 text labels with a color-independent cue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+      x-nfr-bindings:
+        - NFR-A1
+        - NFR-S1
+  /up:
+    post:
+      summary: Bring the sandbox to active
+      operationId: realmUp
+      responses:
+        '200':
+          description: Realm active within the startup budget
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '409':
+          description: POLICY_DENIED for outside-root workspace (MULTI-06)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+      x-nfr-bindings:
+        - NFR-P1
+  /down:
+    post:
+      summary: Tear down one session's sandbox
+      operationId: realmDown
+      responses:
+        '200':
+          description: Realm disconnected for this session; other sessions remain active (MULTI-05)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+  /audit/verify:
+    post:
+      summary: Verify seq/prev hash chain
+      operationId: auditVerify
+      responses:
+        '200':
+          description: Chain valid; head recovered from the last line
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerifyResponse'
+        '422':
+          description: First broken line named (edit, removal or reorder)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+      x-nfr-bindings:
+        - NFR-C1
+  /control/metrics:
+    get:
+      summary: Counters and timings over the control socket
+      operationId: realmMetrics
+      responses:
+        '200':
+          description: Tool-call, transition and attach counts; 0 network listeners on the daemon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+  /checkpoint/restore:
+    post:
+      summary: Restore workspace byte-for-byte from snapshot
+      operationId: checkpointRestore
+      responses:
+        '200':
+          description: Every file returns to its prior bytes; deletions restored, extras removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '409':
+          description: Unsafe paths refused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+  /tools/write:
+    post:
+      summary: Registered write through the realm (5 Realm tools: exec, read, write, list, status)
+      operationId: toolWrite
+      responses:
+        '200':
+          description: Bytes land in /workspace and the host root with audit admission + result sharing 1 correlation id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+        '409':
+          description: Fail-closed refusal (REALM_NOT_ACTIVE) with 0 host files
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolResult'
+      x-nfr-bindings:
+        - NFR-S1
+        - NFR-I1
+components:
+  schemas:
+    StatusResponse:
+      type: object
+      required: [label, code, correlationId]
+      properties:
+        label:
+          type: string
+          enum: [realm active, realm disconnected]
+          description: NFR-A1 — exactly 1 of 2 labels, distinguishable without color
+        code:
+          type: string
+          enum: [REALM_NOT_ACTIVE, OPENSHELL_GATEWAY_LOST, AGENTOS_CRASH_LOOP]
+          description: Gateway/driver-loss code is distinct from AGENTOS_CRASH_LOOP (OBS-04)
+        correlationId:
+          type: string
+    ToolResult:
+      type: object
+      required: [code, retryable, correlationId]
+      properties:
+        code:
+          type: string
+          description: Frozen catalogue code from src/core/errors.ts (NFR-I1)
+        retryable:
+          type: boolean
+          description: Retryable flag from the catalogue
+        correlationId:
+          type: string
+    AuditVerifyResponse:
+      type: object
+      required: [valid, headSeq, correlationId]
+      properties:
+        valid:
+          type: boolean
+        headSeq:
+          type: integer
+        correlationId:
+          type: string
+    MetricsResponse:
+      type: object
+      required: [counters, correlationId]
+      properties:
+        counters:
+          type: object
+          additionalProperties:
+            type: number
+        correlationId:
+          type: string
+    AuditLine:
+      type: object
+      description: JSONL audit line; redaction sentinel present, 0 PII fields (NFR-C1)
+      required: [seq, prev, code, correlationId]
+      properties:
+        seq:
+          type: integer
+        prev:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string

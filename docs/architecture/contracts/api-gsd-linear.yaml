@@ -1,0 +1,118 @@
+openapi: 3.1.0
+info:
+  title: GSD Pipeline and Linear Tracking
+  version: 1.0.0
+  description: >
+    Phase lifecycle and Linear linkage contract for v3.0 phases 12, 13, 14,
+    16, 17, 18, 19, 20. Eight phase issues plus 33 sub-issues (1 per plan),
+    deduplicated against SPE-* before creation.
+servers:
+  - url: internal://gsd-linear
+    description: GSD pipeline to Linear tracker
+paths:
+  /gsd/phases:
+    get:
+      summary: List phase lifecycle state
+      operationId: listPhases
+      responses:
+        '200':
+          description: Phase DAG state (3 lanes, strict order inside a lane)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Phase'
+  /linear/issues:
+    get:
+      summary: Dedup scan for SPE-* issues
+      operationId: dedupScan
+      responses:
+        '200':
+          description: 0 duplicates per phase when run before creation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DedupReport'
+  /linear/issues/phase:
+    post:
+      summary: Create 1 phase issue with 1 collapsible Agent notes section
+      operationId: createPhaseIssue
+      responses:
+        '201':
+          description: 1 phase issue created per phase (8 total)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinearIssue'
+  /linear/issues/sub:
+    post:
+      summary: Create 1 sub-issue per plan (33 total)
+      operationId: createSubIssue
+      responses:
+        '201':
+          description: Sub-issue linked to 1 phase id, 1+ plan ids, 1+ requirement ids
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinearIssue'
+  /ship/records:
+    get:
+      summary: Per-phase ship record (gates, CI, Greptile, merge)
+      operationId: listShipRecords
+      responses:
+        '200':
+          description: 8 gates exit 0, CI green, Greptile 5/5, squash merge, 0 version/CHANGELOG edits
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShipRecord'
+components:
+  schemas:
+    Phase:
+      type: object
+      required: [phaseId, state, correlationId]
+      properties:
+        phaseId:
+          type: string
+          enum: ['12', '13', '14', '16', '17', '18', '19', '20']
+        state:
+          type: string
+          enum: [brief drafted, discussed, planned, executed, verified, audited, completed, cleaned up]
+        correlationId:
+          type: string
+    DedupReport:
+      type: object
+      required: [duplicates, correlationId]
+      properties:
+        duplicates:
+          type: integer
+          minimum: 0
+        correlationId:
+          type: string
+    LinearIssue:
+      type: object
+      required: [title, phaseId, correlationId]
+      properties:
+        title:
+          type: string
+          description: 1 short line naming the phase, e.g. Phase 12: scripted harness and spike
+        phaseId:
+          type: string
+        correlationId:
+          type: string
+    ShipRecord:
+      type: object
+      required: [phaseId, gatesExit0, greptile, correlationId]
+      properties:
+        phaseId:
+          type: string
+        gatesExit0:
+          type: boolean
+        greptile:
+          type: string
+          enum: ['5/5']
+        correlationId:
+          type: string

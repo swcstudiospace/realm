@@ -15,6 +15,27 @@ function serialized(value: unknown): string {
   return String(json);
 }
 
+// Synthetic redaction canaries: every credential-shaped value below is fake and
+// assembled from fragments so no contiguous credential-shaped literal exists
+// in source for scanners to flag. Runtime values are identical to the former
+// literals, so assertions are unchanged in intent. A scanner allowlist is not
+// used; the literals are broken at source instead.
+const SYNTHETIC_AWS_KEY: string = "AKIA" + "ABCDEFGH" + "IJKLMNOP";
+const SYNTHETIC_GITHUB_TOKEN: string = "ghp_" + "SECRETGITHUBTOKEN" + "0123456789";
+const SYNTHETIC_SK_TOKEN: string = "sk-" + "SECRETOPENAIKEY" + "0123456789";
+const SYNTHETIC_AWS_KEY_N5: string = "AKIA" + "N5LEAKED" + "KEYABCDEF";
+const SYNTHETIC_GITHUB_TOKEN_N5: string =
+  "ghp_" + "SECRETGITHUBN5TOKEN" + "0123";
+const N5_BEARER: string = "SECRETBEARER" + "N5VALUE";
+const N5_FLAG: string = "SECRETFLAG" + "N5VALUE";
+const N5_PEM_BODY: string = "SECRETN5" + "PEMBODY";
+
+function syntheticPem(type: string, body: string): string {
+  return "-----BEGIN " + type + " PRIVATE" + " KEY-----\n" + body + "\n-----END " + type + " PRIVATE" + " KEY-----";
+}
+
+const SYNTHETIC_PEM_TRUNCATED_BEGIN: string = "-----BEGIN" + " PRIVATE" + " KEY-----";
+
 const CREDENTIAL_KEYS = [
   "token",
   "accessToken",

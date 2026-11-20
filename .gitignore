@@ -26,3 +26,6 @@ coverage/
 /site/content/adapters/
 /site/.sync-manifest.json
 *.tgz
+
+# Local agent worktrees (untracked fixture copies must never enter a PR/scanner scope)
+.claude/
