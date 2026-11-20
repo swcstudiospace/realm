@@ -81,28 +81,28 @@ void test("value layer: a Bearer token is replaced (AUD-01)", () => {
 
 void test("value layer: a PEM private key block is replaced (AUD-01)", () => {
   const SECRET = "SECRETPEMBODYLINE";
-  const text = `-----BEGIN RSA PRIVATE KEY-----\n${SECRET}\n-----END RSA PRIVATE KEY-----`;
+  const text = syntheticPem("RSA", SECRET);
   assert.equal(redactString(text).includes(SECRET), false);
 });
 
 void test("value layer: a PEM private key truncated before its end marker is still replaced (fail closed)", () => {
   const SECRET = "SECRETPEMTRUNCATEDLINE";
-  const text = `-----BEGIN PRIVATE KEY-----\n${SECRET}`;
+  const text = `${SYNTHETIC_PEM_TRUNCATED_BEGIN}\n${SECRET}`;
   assert.equal(redactString(text).includes(SECRET), false);
 });
 
 void test("value layer: an AWS access key id (AKIA + 16) is replaced (AUD-01)", () => {
-  const key = "AKIAABCDEFGHIJKLMNOP";
+  const key = SYNTHETIC_AWS_KEY;
   assert.equal(redactString(`key=${key}`).includes(key), false);
 });
 
 void test("value layer: a GitHub token (gh[pousr]_ with 20 or more characters) is replaced (AUD-01)", () => {
-  const token = "ghp_SECRETGITHUBTOKEN0123456789";
+  const token = SYNTHETIC_GITHUB_TOKEN;
   assert.equal(redactString(`git push with ${token}`).includes(token), false);
 });
 
 void test("value layer: an sk- token with 20 or more characters is replaced (AUD-01)", () => {
-  const token = "sk-SECRETOPENAIKEY0123456789";
+  const token = SYNTHETIC_SK_TOKEN;
   assert.equal(redactString(`model key ${token}`).includes(token), false);
 });
 
@@ -189,20 +189,20 @@ void test("spec n5 credential leakage: no host secret shape survives a nested to
     argv: [
       "curl",
       "-H",
-      "Authorization: Bearer SECRETBEARERN5VALUE",
-      "--token=SECRETFLAGN5VALUE",
+      `Authorization: Bearer ${N5_BEARER}`,
+      `--token=${N5_FLAG}`,
     ],
-    env: { GITHUB_TOKEN: "ghp_SECRETGITHUBN5TOKEN0123", PLAIN: "ok" },
-    key: "AKIAN5LEAKEDKEYABCDEF",
-    pem: "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETN5PEMBODY\n-----END OPENSSH PRIVATE KEY-----",
+    env: { GITHUB_TOKEN: SYNTHETIC_GITHUB_TOKEN_N5, PLAIN: "ok" },
+    key: SYNTHETIC_AWS_KEY_N5,
+    pem: syntheticPem("OPENSSH", N5_PEM_BODY),
   };
   const text = serialized(input);
   for (const secret of [
-    "SECRETBEARERN5VALUE",
-    "SECRETFLAGN5VALUE",
-    "ghp_SECRETGITHUBN5TOKEN0123",
-    "AKIAN5LEAKEDKEYABCDEF",
-    "SECRETN5PEMBODY",
+    N5_BEARER,
+    N5_FLAG,
+    SYNTHETIC_GITHUB_TOKEN_N5,
+    SYNTHETIC_AWS_KEY_N5,
+    N5_PEM_BODY,
   ]) {
     assert.equal(text.includes(secret), false, `secret survived: ${secret}`);
   }
