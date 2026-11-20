@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-20
+
+### Added
+- feat(v3): swarm orchestration, security remediation, Linear programming and phase plans (#249) (d97bb40)
+
 ## [0.9.0] - 2026-11-20
 
 ### Documentation
