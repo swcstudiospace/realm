@@ -4,11 +4,11 @@ milestone: v3.0
 milestone_name: Containment by Default
 current_phase: 12
 current_phase_name: Scripted-provider harness and Omp enforcement spike
-status: verifying
-stopped_at: Phase 15 complete, ready to verify Phase 12
-last_updated: "2026-11-14T08:46:18.959Z"
-last_activity: 2026-11-14
-last_activity_desc: Phase 15 complete, transitioned to Phase 12
+status: in_progress
+stopped_at: Swarm run 2026-11-20 - A01 DONE 8, A10 remediated, Linear SPE-35321..35355, gates green pending full test
+last_updated: "2026-11-20T22:30:00.000Z"
+last_activity: 2026-11-20
+last_activity_desc: Swarm orchestration + security remediation + Linear programming; HARN-03 owner-blocked, CRASH-04 live gap open
 state_head: 724f4876945de994d26089bab7c78e4383f06bc9
 progress:
   total_phases: 9
