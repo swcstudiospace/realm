@@ -311,8 +311,9 @@ export interface WireRecorderOptions {
 
 // The text of the tee: spawns `target + received arguments` with stdin and stdout piped and stderr inherited (or piped, when `stderrFile`
 // names a copy), forwards the host's stdin to the child and the child's stdout to the host byte for byte (`pipe`), and reads a
-// line-buffered COPY of each direction to write the log. Every log line carries `t`, an integer millisecond mark from the tee's start
-// (monotonic, non-decreasing in file order). A wire line holds the direction, the kind, the method name, the request id and, on the
+// line-buffered COPY of each direction to write the log. The tap is registered before the pipe in each direction, so each line is
+// appended to the log synchronously before the forward write of that chunk: a host that SIGKILLs the tee the moment a response
+// arrives cannot take the response line with it. Every log line carries `t`, an integer millisecond mark from the tee's start
 // response to `tools/list`, the tool names; on a response the `error` flag and the numeric `errorCode` of a JSON-RPC error (never its
 // message); on a request the `meta` flag (a `_meta` member was present, never its content); on a host line that is not a JSON-RPC 2.0
 // message object the `invalid` flag. Lifecycle lines (`kind` "lifecycle") mark the child starting (`child-start`), the host closing its
@@ -428,10 +429,10 @@ function teeSource(prefixLength: number, restore: boolean, force: boolean, stder
     'child.stdin.on("error", () => {});',
     'process.stdout.on("error", () => {});',
     'process.stdin.on("end", () => { record({ kind: "lifecycle", event: "host-stdin-end" }); });',
-    "process.stdin.pipe(child.stdin);",
     'process.stdin.on("data", tap("host-to-realm"));',
-    "child.stdout.pipe(process.stdout);",
+    "process.stdin.pipe(child.stdin);",
     'child.stdout.on("data", tap("realm-to-host"));',
+    "child.stdout.pipe(process.stdout);",
     'for (const signal of ["SIGTERM", "SIGINT"]) { process.on(signal, () => { record({ kind: "lifecycle", event: "host-signal", signal }); child.kill(signal); }); }',
     'child.on("close", (code, signal) => {',
     "  process.exitCode = code !== null ? code : 128 + (signal === null ? 0 : (constants.signals[signal] ?? 0));",

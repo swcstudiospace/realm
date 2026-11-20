@@ -266,6 +266,66 @@ void test("a tools/list error response logs no tool names and the summary is not
   assert.deepEqual([...summary.toolNames], []);
   assert.deepEqual([...summary.hostMethods], ["initialize", "notifications/initialized", "tools/list"]);
 });
+void test("the generated tee registers the log tap before the forwarding pipe in both directions, so a response is on file before the host can be killed for it", (t) => {
+  const rig = recorderRig(t);
+  const tee = readFileSync(join(rig.dir, "bin", "wire-tee.mjs"), "utf8");
+  const hostTap = tee.indexOf('process.stdin.on("data", tap("host-to-realm"))');
+  const hostPipe = tee.indexOf("process.stdin.pipe(child.stdin)");
+  const realmTap = tee.indexOf('child.stdout.on("data", tap("realm-to-host"))');
+  const realmPipe = tee.indexOf("child.stdout.pipe(process.stdout)");
+  for (const [name, at] of [
+    ["host tap", hostTap],
+    ["host pipe", hostPipe],
+    ["realm tap", realmTap],
+    ["realm pipe", realmPipe],
+  ] as const) {
+    assert.ok(at >= 0, `the tee registers the ${name}`);
+  }
+  assert.ok(hostTap < hostPipe, "the host-to-realm line is logged before it is forwarded");
+  assert.ok(realmTap < realmPipe, "the realm-to-host response is logged before it is forwarded");
+});
+
+void test("a host that SIGKILLs the recorder the moment the tools/list response arrives still leaves the response in the log", async (t) => {
+  const rig = recorderRig(t);
+  const child = spawn(rig.shim, [], { stdio: ["pipe", "pipe", "ignore"] });
+  t.after(() => {
+    child.kill("SIGKILL");
+  });
+  child.stdin.on("error", () => {
+    // The recorder is about to be signalled; its stdin may close under us.
+  });
+  let received = "";
+  let sent = false;
+  const arrived = new Promise<void>((resolve) => {
+    child.stdout.on("data", (chunk: Buffer) => {
+      received += chunk.toString("utf8");
+      const lines = received.split("\n").filter((line) => line !== "");
+      if (lines.length >= 2 && !sent) {
+        // The host acts on the forwarded response at once, as the legacy kimi does a few milliseconds after it: SIGKILL the shim,
+        // which cannot be caught, blocked or forwarded. The response must already be on file for this log to hold it.
+        sent = true;
+        child.kill("SIGKILL");
+        resolve();
+      }
+    });
+  });
+  const closed = new Promise<number | null>((resolve) => {
+    child.once("close", (code) => {
+      resolve(code);
+    });
+  });
+  child.stdin.end(HOST_INPUT);
+  await boundedWait(arrived, "the host receiving the response", 30_000);
+  const code = await boundedWait(closed, "the recorder after SIGKILL", 30_000);
+  assert.equal(code, null, "SIGKILL ends the recorder without an exit code");
+  const events = readWireLog(rig.wireLog);
+  const listed = events.find((event) => event.dir === "realm-to-host" && event.id === 2);
+  assert.ok(listed !== undefined, "the killed recorder still logged the tools/list response");
+  assert.equal(listed.kind, "response");
+  assert.deepEqual(listed.toolNames, [...REALM_TOOL_NAMES]);
+  assert.equal(wireSummary(events).answered, true);
+});
+
 
 void test("readWireLog and readFakeServerLog skip malformed lines and read a missing file as empty", (t) => {
   const dir = tempDir(t);
