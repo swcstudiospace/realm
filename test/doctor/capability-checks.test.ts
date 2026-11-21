@@ -288,7 +288,7 @@ void test("CAPT-08: a policy that cannot be loaded is a warn that names the poli
   assert.equal(check(s).status, "warn", "a schema failure is a warn too");
 });
 
-void test("CAPT-08: runChecks appends the item last, after host-plugins, with every earlier position unchanged", async (t) => {
+void test("CAPT-08: runChecks appends the item after host-plugins, with omp-plugin last and every earlier position unchanged", async (t) => {
   const s = enforcing(t);
   const emptyPath = join(s.base, "empty-path");
   mkdirSync(emptyPath);
@@ -299,9 +299,10 @@ void test("CAPT-08: runChecks appends the item last, after host-plugins, with ev
     runCommand: () => Promise.reject(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" })),
     connectSocket: () => Promise.reject(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })),
   });
-  assert.equal(results.at(-1)?.id, "capability-tokens");
-  assert.equal(results.at(-2)?.id, "host-plugins");
-  const last = results.at(-1);
+  assert.equal(results.at(-1)?.id, "omp-plugin");
+  assert.equal(results.at(-2)?.id, "capability-tokens");
+  assert.equal(results.at(-3)?.id, "host-plugins");
+  const last = results.at(-2);
   assert.equal(last?.status, "warn", "enforce with no keyring yet is a warn through runChecks");
   produced.push(last);
 });

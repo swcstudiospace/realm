@@ -36,6 +36,7 @@ const EXPECTED_IDS: readonly CheckId[] = [
   "runtime-roots",
   "host-plugins",
   "capability-tokens",
+  "omp-plugin",
 ];
 
 interface Layout {

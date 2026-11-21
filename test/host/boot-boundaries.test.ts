@@ -45,8 +45,8 @@ function importersOf(name: string): string[] {
   return found.sort();
 }
 
-void test("only the observer, the doctor host check and realm host import the presence module", () => {
-  assert.deepEqual(importersOf("presence"), ["src/cli/host.ts", "src/doctor/host-checks.ts", "src/host/boot-observer.ts"]);
+void test("only the observer, the doctor host checks and realm host import the presence module", () => {
+  assert.deepEqual(importersOf("presence"), ["src/cli/host.ts", "src/doctor/checks-host.ts", "src/doctor/host-checks.ts", "src/host/boot-observer.ts"]);
 });
 
 void test("only the daemon recorder, the metrics registry and the observer import the boot report vocabulary", () => {

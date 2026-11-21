@@ -407,9 +407,12 @@ void test("E4: the commands that use the control socket without a token still wo
   const checks: unknown = JSON.parse(doctor.stdout);
   assert.ok(Array.isArray(checks), "the daemon's doctor reply is the list of checks");
   const last: unknown = checks[checks.length - 1];
+  const secondLast: unknown = checks[checks.length - 2];
   assert.ok(typeof last === "object" && last !== null && "id" in last && "status" in last);
-  assert.equal(last.id, "capability-tokens", "the item stays last");
-  assert.equal(last.status, "pass", "a daemon with its keyring passes the capability-tokens item");
+  assert.ok(typeof secondLast === "object" && secondLast !== null && "id" in secondLast && "status" in secondLast);
+  assert.equal(last.id, "omp-plugin", "omp-plugin is the last item");
+  assert.equal(secondLast.id, "capability-tokens", "capability-tokens stays directly before omp-plugin");
+  assert.equal(secondLast.status, "pass", "a daemon with its keyring passes the capability-tokens item");
 
   // The status call that realm checkpoint and the liveness probe make: a client built without a host, no token.
   const probe = connectDaemon(world.fixture.socketPath, world.fixture.selectionFor(project));
@@ -544,8 +547,11 @@ void test("E9: with no policy file at all the daemon enforces: its keyring exist
   const checks: unknown = doctor.result;
   assert.ok(Array.isArray(checks));
   const last: unknown = checks[checks.length - 1];
+  const secondLast: unknown = checks[checks.length - 2];
   assert.ok(typeof last === "object" && last !== null && "id" in last && "status" in last);
-  assert.equal(last.id, "capability-tokens");
-  assert.equal(last.status, "pass");
+  assert.ok(typeof secondLast === "object" && secondLast !== null && "id" in secondLast && "status" in secondLast);
+  assert.equal(last.id, "omp-plugin");
+  assert.equal(secondLast.id, "capability-tokens");
+  assert.equal(secondLast.status, "pass");
   assert.equal(attachLinesOf(auditLinesOf(world, project)).length, 0, "no attach was needed to create the keyring");
 });

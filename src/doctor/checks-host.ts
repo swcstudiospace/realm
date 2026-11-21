@@ -9,6 +9,7 @@ import { isAbsolute, join } from "node:path";
 import { withTimeout } from "../core/timeout.js";
 import type { RunCommand } from "../runtime/podman-probe.js";
 import type { EnvironmentLike } from "../session/paths.js";
+import { readPresence } from "../host/presence.js";
 
 type HostBinaryName = "supervisor" | "openshell" | "openshell-gateway" | "podman";
 
@@ -275,4 +276,17 @@ export function kernelHardeningCheck(read: () => string): HostCheckResult {
 
 export function defaultReadPtraceScope(): string {
   return readFileSync("/proc/sys/kernel/yama/ptrace_scope", "utf8");
+}
+
+// The omp presence counts the omp-plugin doctor item reads (Phase 55, HEALTH-01). This helper
+// owns the readPresence import so only this host-check module, the observer, the host-plugins
+// check and realm host import the presence module (BOOT-05). It writes nothing.
+export interface OmpPresenceCounts {
+  readonly live: number;
+  readonly unreadable: number;
+}
+
+export async function readOmpPresence(stateDir: string, timeoutMs: number): Promise<OmpPresenceCounts> {
+  const presence = await readPresence(stateDir, "omp", { readTimeoutMs: timeoutMs });
+  return { live: presence.live, unreadable: presence.unreadable };
 }

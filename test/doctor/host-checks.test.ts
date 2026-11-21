@@ -190,7 +190,7 @@ function scratch(t: TestContext): string {
   return dir;
 }
 
-void test("HOST-08: runChecks ends with host-plugins then capability-tokens, and host-plugins ignores HOME entirely: a HOME holding a .claude directory gives the same pass", async (t) => {
+void test("HOST-08: runChecks ends with host-plugins, capability-tokens then omp-plugin, and host-plugins ignores HOME entirely: a HOME holding a .claude directory gives the same pass", async (t) => {
   const dir = scratch(t);
   const stateDir = join(dir, "state");
   mkdirSync(stateDir, { mode: 0o700 });
@@ -206,9 +206,9 @@ void test("HOST-08: runChecks ends with host-plugins then capability-tokens, and
   };
   const plain = await runChecks({ ...options, env: { PATH: emptyPath, HOME: join(dir, "no-such-home") } });
   const withHome = await runChecks({ ...options, env: { PATH: emptyPath, HOME: homeWithClaude } });
-  const last = plain.at(-2);
+  const last = plain.at(-3);
   assert.deepEqual(last, { id: "host-plugins", status: "pass", detail: "no host plugin installed", fix: null });
-  assert.deepEqual(withHome.at(-2), last);
+  assert.deepEqual(withHome.at(-3), last);
   assert.equal(plain.filter((item) => item.id === "host-plugins").length, 1);
 });
 

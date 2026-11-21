@@ -134,6 +134,24 @@ Evidence names are `built-realm-cold.*` and `built-realm-warm.*`: Omp version, r
 
 This is real Omp plus the built extension, but its daemon uses `FakeExecutionService`: it is a **guard/network proof, not production containment or production audit acceptance**. Separate parent evidence established generated-config `init` (fail-closed), `up`/`status` (active), `down` (unbound), and existing production crash/reap/reattach and MCP exec/write/read cases with the temporary rebuilt driver. That does not prove a released installer provisions the production stack, nor does any earlier production pass prove this new measured warm case or OMPX-05's paired production audit requirements.
 
+## Omp plugin health check (Phase 55, HEALTH-01, HEALTH-02)
+
+`realm doctor` ends with an `omp-plugin` item that reports whether the Omp plugin is installed, the right version, and loaded. It is read-only: it installs, removes and repairs nothing, `realm doctor --fix` is unchanged, and it never signals a process. A detail names the catalogue code, the version and counts only, never a path or file content. Every read goes through an injected probe bounded by the probe timeout, so a hung probe is a `TOOL_TIMEOUT` fail, never a hung doctor run. Pass means installed, the Omp version is `18.12.6` or later, the extension target is present, and a live presence marker names a loaded session.
+
+| Doctor outcome | What it means | Remedy (operator runs these; doctor never does) |
+|---|---|---|
+| `pass`: omp `<version>` installed and loaded | Plugin installed, right version, loaded | Nothing. |
+| `warn`: omp plugin not installed | No omp receipt under the state directory | Run `realm host install omp`, then rerun `realm doctor`. |
+| `fail`: omp version `<version>` is not `18.12.6` or later | Omp is older than the lowest version the plugin was written for | Upgrade Omp to `18.12.6` or later yourself, then rerun `realm doctor`. Realm does not install or upgrade Omp. |
+| `fail`: omp version could not be read | `omp --version` did not start, exited non-zero, timed out, or printed no version | Put a working `omp` on `PATH` (or upgrade it), then rerun `realm doctor`. |
+| `fail`: omp extension target missing | The installed shim imports a built extension entry that does not exist | Run `npm run build` so the entry exists, then `realm host install omp` and rerun `realm doctor`. |
+| `fail`: omp extension target unreadable | The shim names no single file URL, or names a non-regular file | Inspect the installed shim without following symlinks, repair it by hand, then `realm host install omp` and rerun `realm doctor`. |
+| `warn`: `<n>` unreadable presence marker(s) | A presence marker cannot be read or parsed safely | Inspect the hosts directory and the omp presence markers without following symlinks; restore a known-good marker or remove the unreadable one, then rerun `realm doctor`. |
+| `warn`: omp `<version>` installed but not loaded, no live plugin session | Installed and right version, but no Omp session has loaded the plugin | Start an Omp session yourself and wait for the realm status item to settle, then rerun `realm doctor`. Doctor never signals a process, and no step here signals a process the operator did not start. |
+| `fail`: omp plugin state could not be read (`<code>`) | The probe threw a catalogue code, or did not answer within the probe timeout (`TOOL_TIMEOUT`) | Inspect the omp receipt and presence markers under the state directory without following symlinks, then rerun `realm doctor`. A plain (non-catalogue) probe failure reports `SCHEMA_INVALID`. |
+
+Evidence receipt (2026-11-21): the enumerating hermetic tests in `test/doctor/omp-plugin.test.ts` pin every outcome above over injected fakes, including the read-only proof (no file written, no `omp` process spawned, no socket opened); the check list in `src/doctor/checks.ts` and `test/doctor/checks.test.ts` carries `omp-plugin` in the same change. Step 4 of `.planning/phases/55-omp-plugin-health-check/55-PLAN.md` (live proof) was not run: no live window was taken for this phase, and no live outcome is claimed.
+
 ## Cleanup
 
 Run `realm down`, stop the provider and Omp, remove the files you wrote from `<workspace>` and the check directory, and confirm that `realm status` prints `disconnected` and the container list is empty.
