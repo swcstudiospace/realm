@@ -8,7 +8,7 @@
 // paints occur and the last truthful text is retained (AC-41). This operation lives beside the
 // funnel (not inside src/omp/plugin.ts) because that file is at the 1000-line module ratchet.
 
-const PAINT_STATES = Object.freeze(["active", "disconnected", "error", "connecting"] as const);
+const PAINT_STATES = Object.freeze(["unbound", "connecting", "active", "error"] as const);
 
 export interface PluginStatusPaintResponse {
   readonly target: "additional-ui";

@@ -22,24 +22,25 @@ export const REALM_WIDGET_KEY = REALM_STATUS_KEY;
 
 const lastPainted = new WeakMap<OmpStatusUi, string>();
 
-export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode: PolicyMode | null, confirmed: boolean, reconnectCode?: string): void {
+export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode: PolicyMode | null, confirmed: boolean, reconnectCode?: string): boolean {
   const display = displayStatus(snapshot);
   const marker = display.label === STATUS_LABELS.active ? "●" : "○";
   const modeText = mode === null ? "mode: unknown" : `${confirmed ? "applied mode" : "last successfully applied mode"}: ${mode}${mode === "fail-closed" ? " (Omp host-tool guard; not host process containment)" : ""}`;
   const text = `${marker} ${display.label} · ${display.reason}${reconnectCode === undefined ? "" : ` (${reconnectCode})`} · ${display.lastTransitionAt} · ${modeText}`;
   if (lastPainted.get(ui) === text) {
-    return;
+    return true;
   }
   // A host without the widget region paints nothing (never the under-bar fallback, AC-39): the
   // cache stays stale so the next render retries. Untyped JS hosts that lack setWidget hit this
   // guard at runtime even though the type requires it.
   if (typeof ui.setWidget !== "function") {
-    return;
+    return false;
   }
   // Cached only after the write succeeds: a throw above leaves the cache stale, so the next
   // render repaints instead of skipping it (MED-03).
   ui.setWidget(REALM_WIDGET_KEY, text);
   lastPainted.set(ui, text);
+  return true;
 }
 
 // The state and catalogue code a session last painted, read by view(). Kept beside the session, not on it, so ActiveSession keeps
@@ -56,8 +57,9 @@ export function paint(
   reconnectCode?: string,
   shownCode: string | undefined = reconnectCode,
 ): void {
-  renderRealmStatus(session.ctx.ui, snapshot, mode, confirmed, reconnectCode);
-  shownBySession.set(session, { state: snapshot.state, code: shownCode });
+  if (renderRealmStatus(session.ctx.ui, snapshot, mode, confirmed, reconnectCode)) {
+    shownBySession.set(session, { state: snapshot.state, code: shownCode });
+  }
 }
 
 // Paints an error whose reason is a catalogue code.

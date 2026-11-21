@@ -114,7 +114,7 @@ components:
           type: array
           items:
             type: string
-            enum: [active, disconnected, error, connecting]
+            enum: [unbound, connecting, active, error]
           description: NFR-A2 — painted text matches the daemon snapshot in 4 of 4 states with 1 label per paint
         correlationId:
           type: string
@@ -128,6 +128,10 @@ components:
         missingPath:
           type: string
           description: AC-34 — operator-local diagnostic only; names the 1 missing directory, never audit or log content
+        missingKind:
+          type: string
+          enum: [absent, not-directory, unreadable]
+          description: Code-only (never persisted or logged); absent when the path does not exist, not-directory when it exists but is not a directory, unreadable when the stat fails
         code:
           type: string
           enum: [POLICY_DENIED, SCHEMA_INVALID]

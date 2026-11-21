@@ -21,6 +21,7 @@ import {
   GUARDED_HOST_TOOLS,
   REALM_RETRY_COMMAND,
   REALM_STATUS_KEY,
+  PLUGIN_TOGGLE_WIDGET_KEY,
   guardHostToolCall,
   createRealmPlugin,
   registerRealmPlugin,
@@ -696,9 +697,10 @@ void test("OMP-02: every status read paints one shared label across every transi
   assert.ok(labels.includes(DISCONNECTED_LABEL), "disconnected renders");
   assert.ok(labels.includes(ACTIVE_LABEL), "active renders");
   assert.equal(labels.at(-1), ACTIVE_LABEL, "the last transition leaves the active label");
-  // One status item carries the label, the reason, and the time: no second key competes with it.
+  // One status item carries the label, the reason, and the time: no second status key competes with it.
+  // The toggle line rides its own widget key (PLUGIN_TOGGLE_WIDGET_KEY), painted once at boot.
   const keys = new Set(fixture.ui.calls.map((call) => call.key));
-  assert.deepEqual(keys, new Set([REALM_STATUS_KEY]));
+  assert.deepEqual(keys, new Set([REALM_STATUS_KEY, PLUGIN_TOGGLE_WIDGET_KEY]));
   assert.equal(statusTexts(fixture.ui).at(-1), `${ACTIVE_LABEL} · container running · ${CLOCK_ISO} · ${FAIL_CLOSED_STATUS}`);
 });
 

@@ -175,7 +175,7 @@ void test("GET /plugin/status-paint op: additional-ui target, 0 under-bar paints
   const response = getPluginStatusPaint("corr-paint-1");
   assert.equal(response.target, "additional-ui");
   assert.equal(response.underBarPaints, 0);
-  assert.deepEqual([...response.states], ["active", "disconnected", "error", "connecting"]);
+  assert.deepEqual([...response.states], ["unbound", "connecting", "active", "error"]);
   assert.equal(response.correlationId, "corr-paint-1");
 });
 

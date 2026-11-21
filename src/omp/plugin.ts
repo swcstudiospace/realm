@@ -187,7 +187,12 @@ export const REALM_RETRY_COMMAND = "realm-retry";
 // The Omp plugin toggle text line (SCR-OmpPluginToggle, AC-36/AC-37). State is always a text line,
 // never position or color alone: exactly two states exist. The switch target is 48x28 px (WCAG 2.2
 // SC 2.5.8, a11y sheet); the text line rides the widget/notify surface, the host owns placement.
+// The line is painted once per session under PLUGIN_TOGGLE_WIDGET_KEY (see beginSession): its own
+// key, so the status paints under REALM_WIDGET_KEY keep their dedup and counts untouched. Only the
+// on state can be reached there, because bounds.enabled false returns before any handler exists
+// (AC-37: 0 handlers, 0 paints); the off line stays the contract text for hosts that render it.
 export const PLUGIN_TOGGLE_TARGET = Object.freeze({ widthPx: 48, heightPx: 28 });
+export const PLUGIN_TOGGLE_WIDGET_KEY = "realm-plugin-toggle";
 export function pluginToggleLine(enabled: boolean): string {
   return enabled ? "Realm plugin on — 5 tools registered" : "Realm plugin off — 0 tools registered, status hidden";
 }
@@ -678,6 +683,12 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       },
     };
     live = session;
+    // The toggle text line (SCR-OmpPluginToggle): rendered once per session from the toggle state
+    // read at load, under its own widget key. The same setWidget guard renderRealmStatus uses keeps
+    // a host without the widget region silent.
+    if (typeof ctx.ui.setWidget === "function") {
+      ctx.ui.setWidget(PLUGIN_TOGGLE_WIDGET_KEY, pluginToggleLine(bounds.enabled));
+    }
     session.poll = {
       handle: ctx.setInterval(() => {
         runDetached(session, repaint(session));

@@ -23,12 +23,20 @@ const WORKSPACE_ROOT_REMEDY =
 // config shape.
 export type DiagnoseCode = "POLICY_DENIED" | "SCHEMA_INVALID";
 
-// The `startDiagnose` result (`DiagnoseResponse`, API-RealmOmpPlugin 1.0.0). `missingPath` and
-// `remedy` are present only when the workspaceRoot is missing: never persisted, never audited, never
-// logged; the caller renders them to operator-local stderr or doctor output only.
+// Why the named path is not a usable workspaceRoot, as a code only: never a path, never logged.
+// "absent" when the path does not exist, "not-directory" when it exists but is not a directory,
+// "unreadable" when it cannot be stat-ed for any other reason. The operator line below carries
+// the matching wording; the audit and log lines keep only `code`.
+export type DiagnoseMissingKind = "absent" | "not-directory" | "unreadable";
+
+// The `startDiagnose` result (`DiagnoseResponse`, API-RealmOmpPlugin 1.0.0). `missingPath`,
+// `missingKind` and `remedy` are present only when the workspaceRoot is missing: never persisted,
+// never audited, never logged; the caller renders them to operator-local stderr or doctor output
+// only.
 export interface DiagnoseResponse {
   readonly workspaceRootExists: boolean;
   readonly missingPath?: string;
+  readonly missingKind?: DiagnoseMissingKind;
   readonly code: DiagnoseCode;
   readonly remedy?: string;
   readonly correlationId: string;
@@ -37,7 +45,8 @@ export interface DiagnoseResponse {
 // Diagnoses the one configured workspaceRoot. `workspaceRootExists` is true only when the path is an
 // existing directory, the same truth `bindRoot` enforces at start (`src/fs/root.ts`); a path that
 // cannot be stat-ed (absent, or otherwise unreadable) and a path that is not a directory both refuse
-// the bind with POLICY_DENIED, so both report as the missing directory here. A config shape that
+// the bind with POLICY_DENIED, so both report as the missing directory here, distinguished only by
+// the code-only `missingKind` the operator line words from. A config shape that
 // cannot name a directory (empty, relative) never reaches the bind: `loadRuntimeConfig` refuses it
 // with SCHEMA_INVALID first, so it reports SCHEMA_INVALID with no path named.
 export function startDiagnose(workspaceRoot: string, correlationId: string): DiagnoseResponse {
@@ -45,11 +54,18 @@ export function startDiagnose(workspaceRoot: string, correlationId: string): Dia
     return { workspaceRootExists: false, code: "SCHEMA_INVALID", correlationId };
   }
   let isDirectory = false;
+  let missingKind: DiagnoseMissingKind = "absent";
   try {
     isDirectory = statSync(workspaceRoot).isDirectory();
-  } catch {
+    if (!isDirectory) {
+      missingKind = "not-directory";
+    }
+  } catch (error) {
     // A path that cannot be stat-ed stays false: like bindRoot, any failure to resolve or
-    // stat the root refuses the start, so it reports as the missing directory below.
+    // stat the root refuses the start, so it reports as the missing directory below. Only
+    // ENOENT/ENOTDIR means absent; any other stat failure reads as unreadable.
+    const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined;
+    missingKind = code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unreadable";
   }
   if (isDirectory) {
     // The workspace exists, so neither failure code applies; `code` is only meaningful on failure
@@ -59,15 +75,18 @@ export function startDiagnose(workspaceRoot: string, correlationId: string): Dia
     // is a contract gap; see impl.notes (contract change request to A03).
     return { workspaceRootExists: true, code: "SCHEMA_INVALID", correlationId };
   }
-  return { workspaceRootExists: false, missingPath: workspaceRoot, code: "POLICY_DENIED", remedy: WORKSPACE_ROOT_REMEDY, correlationId };
+  return { workspaceRootExists: false, missingPath: workspaceRoot, missingKind, code: "POLICY_DENIED", remedy: WORKSPACE_ROOT_REMEDY, correlationId };
 }
 
 // The operator-local stderr fragment naming the one missing directory and its one remedy, or null
-// when there is nothing to name. The caller owns the command prefix and the trailing newline; this
-// fragment itself is written to stderr only, never to a file or a log line.
+// when there is nothing to name. The wording follows `missingKind`: an existing path that is not a
+// directory is "is not a directory" (never "does not exist"), an unreadable one "is unreadable",
+// and only a truly absent one "does not exist". The caller owns the command prefix and the trailing
+// newline; this fragment itself is written to stderr only, never to a file or a log line.
 export function formatDiagnoseLine(response: DiagnoseResponse): string | null {
   if (response.workspaceRootExists || response.missingPath === undefined || response.remedy === undefined) {
     return null;
   }
-  return `workspaceRoot ${response.missingPath} does not exist. ${response.remedy}`;
+  const wording = response.missingKind === "not-directory" ? "is not a directory" : response.missingKind === "unreadable" ? "is unreadable" : "does not exist";
+  return `workspaceRoot ${response.missingPath} ${wording}. ${response.remedy}`;
 }

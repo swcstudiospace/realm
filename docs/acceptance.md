@@ -301,7 +301,7 @@ automated: true
 
 AC-40 story: US-113
 Given the daemon snapshot reports 1 of 4 states
-When 4 paints run, one per state among active, disconnected, error and connecting
+When 4 paints run, one per state among unbound, connecting, active and error
 Then painted text matches the snapshot in 4 of 4 cases with 1 label per paint
 check: painted text equality across 4 states
 automated: true

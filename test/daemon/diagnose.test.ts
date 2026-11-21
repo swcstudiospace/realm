@@ -36,12 +36,16 @@ void test("a nonexistent workspaceRoot names 1 path with 1 remedy (AC-34)", () =
     assert.equal(response.workspaceRootExists, false);
     assert.equal(response.code, "POLICY_DENIED");
     assert.equal(response.missingPath, missing);
+    assert.equal(response.missingKind, "absent");
     assert.equal(response.remedy, REMEDY);
     assert.equal(response.correlationId, CORRELATION_ID);
     const line = formatDiagnoseLine(response);
     assert.ok(line !== null, "the missing case renders one stderr fragment");
     assert.ok(line.includes(missing), "the fragment names the one missing directory");
+    assert.ok(line.includes("does not exist"), "an absent path reads as does not exist");
     assert.ok(line.includes(REMEDY), "the fragment carries the one remedy");
+    const unreadable = formatDiagnoseLine({ ...response, missingKind: "unreadable" });
+    assert.ok(unreadable !== null && unreadable.includes("is unreadable"), "an unreadable path reads as is unreadable");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -56,7 +60,11 @@ void test("a regular file is not a directory: denied with the path named, like b
     assert.equal(response.workspaceRootExists, false);
     assert.equal(response.code, "POLICY_DENIED");
     assert.equal(response.missingPath, file);
+    assert.equal(response.missingKind, "not-directory");
     assert.equal(response.remedy, REMEDY);
+    const line = formatDiagnoseLine(response);
+    assert.ok(line !== null && line.includes("is not a directory"), "an existing file reads as is not a directory");
+    assert.ok(line !== null && !line.includes("does not exist"), "an existing file never reads as does not exist");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -78,7 +86,7 @@ void test("the response shape is audit-safe: no field carries anything but the n
   try {
     const missing = join(base, "ompos");
     const response = startDiagnose(missing, CORRELATION_ID);
-    assert.deepEqual(Object.keys(response).sort(), ["code", "correlationId", "missingPath", "remedy", "workspaceRootExists"]);
+    assert.deepEqual(Object.keys(response).sort(), ["code", "correlationId", "missingKind", "missingPath", "remedy", "workspaceRootExists"]);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
