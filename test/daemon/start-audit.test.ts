@@ -34,7 +34,7 @@ void test("AC-35: fresh daemon start has 0 module-load errors and the genesis au
   const auditFile = join(stateDir, "audit", `${sessionId}.jsonl`);
   mkdirSync(join(stateDir, "audit"), { recursive: true });
   writeFileSync(auditFile, "", "utf8");
-  t.after(() => rmSync(base, { recursive: true, force: true }));
+  t.after(() => { rmSync(base, { recursive: true, force: true }); });
 
   // The real start: single-owner bind plus startup maintenance (which reconciles the audit directory).
   // Any module-load error (ERR_MODULE_NOT_FOUND for audit/chain) rejects here and fails the test.

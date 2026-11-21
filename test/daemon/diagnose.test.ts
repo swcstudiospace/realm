@@ -64,7 +64,7 @@ void test("a regular file is not a directory: denied with the path named, like b
     assert.equal(response.remedy, REMEDY);
     const line = formatDiagnoseLine(response);
     assert.ok(line !== null && line.includes("is not a directory"), "an existing file reads as is not a directory");
-    assert.ok(line !== null && !line.includes("does not exist"), "an existing file never reads as does not exist");
+    assert.ok(!line.includes("does not exist"), "an existing file never reads as does not exist");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
