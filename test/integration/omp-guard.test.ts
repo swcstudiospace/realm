@@ -667,7 +667,7 @@ async function tracedRealmWrite(
 }
 
 void test(
-  "built Realm warm registered-write guard/network proof: only the stub and three discovery ports, zero external/DNS/offenders (HARN-03)",
+  "built Realm warm registered-write guard/network proof: only the stub and four discovery ports, zero external/DNS/offenders (HARN-03)",
   { skip: traceSkip, timeout: NETWORK_SCENARIO_TIMEOUT_MS },
   async (t) => {
     t.diagnostic(`omp/${ompVersionText}; built extension ${EXTENSION_PATH}; fake-backed daemon, not production containment`);

@@ -7,8 +7,8 @@
 // control channel have no item in Phase 3, because nothing there can inspect them (D-69).
 // Phase 6 appends control-channel and agentos to REGISTERED deliberately (CLI-03; P6-D6,
 // P6-D14); the list is a costly change under D-44. Phase 9.7 appends host-binaries and
-// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins, and Phase 32 appends
-// capability-tokens after it.
+// kernel-hardening after agentos for the same reason. Phase 21 appends host-plugins, Phase 32 appends
+// capability-tokens after it, and Phase 55 appends omp-plugin after capability-tokens.
 //
 // Details and fixes name paths, rules, and schema pointers. They never carry a value read
 // from the policy file (the privacy rule in src/contract/validate.ts).
@@ -18,8 +18,9 @@ import { accessSync, constants, existsSync, statSync, type Stats } from "node:fs
 import { dirname, join } from "node:path";
 import { SchemaInvalidError } from "../contract/validate.js";
 import { ERROR_CATALOGUE, RealmError } from "../core/errors.js";
+import { packageVersion } from "../core/package-version.js";
 import { loadPolicyFileDetailed, type LoadedPolicy } from "../core/policy.js";
-import { dialWithin } from "../core/timeout.js";
+import { dialWithin, withTimeout } from "../core/timeout.js";
 import { buildCreateArgv, OPENSHELL_BINARY } from "../runtime/openshell.js";
 import {
   probePodman,
@@ -33,9 +34,13 @@ import { selectOpenShellEnvironment } from "../runtime/session-execution.js";
 import { SOCKET_TIMEOUT_MS } from "../daemon/channel.js";
 import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../session/paths.js";
 import type { RuntimeConfig } from "../runtime/config.js";
+import { createHostAdapter } from "../host/adapter.js";
+import { defaultManifestFor } from "../host/manifest.js";
+import { readPresence } from "../host/presence.js";
+import { HOST_RUNTIMES } from "../host/runtimes.js";
+import type { HostEnv } from "../host/types.js";
+import { nullLogger } from "../observe/logger.js";
 import { capabilityTokensCheck } from "./capability-checks.js";
-import { hostPluginsCheck } from "./host-checks.js";
-import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 import {
   defaultReadPtraceScope,
   hostBinariesCheck,
@@ -44,6 +49,8 @@ import {
   type HostBinaryInput,
   type HostBinaryPins,
 } from "./checks-host.js";
+import { hostPluginsCheck } from "./host-checks.js";
+import { runtimeChecks, type RuntimeCheckOptions } from "./runtime-checks.js";
 export type { ConnectSocket } from "../runtime/podman-probe.js";
 
 export type CheckId =
@@ -61,7 +68,8 @@ export type CheckId =
   | "driver-socket"
   | "gateway"
   | "host-plugins"
-  | "capability-tokens";
+  | "capability-tokens"
+  | "omp-plugin";
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface CheckResult {
@@ -103,7 +111,31 @@ export interface DoctorOptions {
   readonly runtimeConfig?: RuntimeConfig;
   readonly statPath?: RuntimeCheckOptions["stat"];
   readonly connectGateway?: RuntimeCheckOptions["connectGateway"];
+  // Omp plugin seam (Phase 55, HEALTH-01). Absent, the check reads the omp receipt, the shim
+  // target and the omp presence markers through the host adapter, and reads the Omp version
+  // through runCommand. Tests inject a fake so no file is read and no process runs.
+  readonly probeOmpPlugin?: OmpPluginProbe;
 }
+
+// What the Omp plugin probe reports (Phase 55, HEALTH-01). installed false: no omp receipt.
+// installed true: version is the parsed Omp version text (null when `omp --version` could not be
+// read or parsed), target is whether the file the installed shim imports exists, liveSessions
+// counts presence markers whose process is alive, and unreadableMarkers counts the rest.
+export type OmpPluginTarget = "present" | "missing" | "unreadable";
+export type OmpPluginReading =
+  | { readonly installed: false }
+  | {
+      readonly installed: true;
+      readonly version: string | null;
+      readonly target: OmpPluginTarget;
+      readonly liveSessions: number;
+      readonly unreadableMarkers: number;
+    };
+export type OmpPluginProbe = () => Promise<OmpPluginReading>;
+
+// The lowest Omp version the plugin was written for (docs/integration/omp-lifecycle-runbook.md
+// prerequisites; D-1206 in test/support/omp-live.ts). Newer versions run and are recorded.
+export const MIN_OMP_VERSION = "18.12.6";
 
 // What the daemon reports about AgentOS (CLI-03; P6-D14). bound false: no driver is bound, so realm up is
 // refused with AGENTOS_NOT_CONFIGURED. bound true: alive says whether the driver's live session answers.
@@ -177,7 +209,8 @@ export async function runChecks(options: DoctorOptions): Promise<readonly CheckR
     ...(options.policyPath === undefined ? {} : { policyPath: options.policyPath }),
     ...(options.runtimeConfig === undefined ? {} : { runtimeConfig: options.runtimeConfig }),
   });
-  return [...registered, ...runtime, hostPlugins, capabilityTokens];
+  const ompPlugin = await ompPluginCheck(options);
+  return [...registered, ...runtime, hostPlugins, capabilityTokens, ompPlugin];
 }
 
 // The text a failed probe reports as its reason. Every probe here throws an Error, so its message is the text.
@@ -631,6 +664,146 @@ async function agentOsCheck(context: CheckContext): Promise<CheckResult> {
     detail: "AGENTOS_CRASH_LOOP: the AgentOS driver reports no live session",
     fix: FIX_AGENTOS_UP,
   };
+}
+
+// ---- Phase 55 item (HEALTH-01). Read-only: the check installs, removes and repairs nothing, and
+// doctor --fix is unchanged. Every read goes through the injected probe, wrapped in withTimeout,
+// so a hung probe is a TOOL_TIMEOUT fail, never a hung doctor run. A detail names the catalogue
+// code, the version and counts only, never a path or file content.
+
+const FIX_OMP_INSTALL = "Run realm host install omp, then rerun doctor. Doctor installs, removes and repairs nothing.";
+const FIX_OMP_UPGRADE = `Upgrade Omp to ${MIN_OMP_VERSION} or later yourself, then rerun doctor. Realm does not install or upgrade Omp.`;
+const FIX_OMP_BUILD = "Run npm run build so the built extension entry exists, then run realm host install omp and rerun doctor.";
+const FIX_OMP_SHIM = "Inspect the installed Omp shim without following symlinks, repair it by hand, then run realm host install omp and rerun doctor.";
+const FIX_OMP_MARKERS = "Inspect the hosts directory and the omp presence markers without following symlinks; restore a known-good marker or remove the unreadable one, then rerun doctor.";
+const FIX_OMP_LOAD = "Start an Omp session yourself and wait for the realm status item to settle, then rerun doctor. Doctor never signals a process.";
+const FIX_OMP_INSPECT = "Inspect the Omp receipt and presence markers under the state directory without following symlinks, then rerun doctor.";
+
+// The first x.y.z in the text (`omp --version` prints `omp/18.12.6`). Undefined when there is none.
+const OMP_VERSION_PATTERN = /(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)/;
+
+function parseOmpVersionText(text: string): readonly [number, number, number] | undefined {
+  const match = OMP_VERSION_PATTERN.exec(text);
+  if (match === null) {
+    return undefined;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+// Negative when a is older than b, zero when equal, positive when newer.
+function compareOmpVersions(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+// omp-plugin (HEALTH-01). Pass only when the plugin is installed, the Omp version is at least
+// MIN_OMP_VERSION, the shim target is present and a live presence marker names a loaded session.
+async function ompPluginCheck(options: DoctorOptions): Promise<CheckResult> {
+  const id: CheckId = "omp-plugin";
+  const probe = options.probeOmpPlugin ?? defaultOmpPluginProbe(options);
+  let reading: OmpPluginReading;
+  try {
+    reading = await withTimeout(probe(), probeTimeoutOf(options), "TOOL_TIMEOUT");
+  } catch (error: unknown) {
+    return { id, status: "fail", detail: `omp plugin state could not be read (${error instanceof RealmError ? error.code : "SCHEMA_INVALID"})`, fix: FIX_OMP_INSPECT };
+  }
+  if (!reading.installed) {
+    return { id, status: "warn", detail: "omp plugin not installed", fix: FIX_OMP_INSTALL };
+  }
+  if (reading.version === null) {
+    return { id, status: "fail", detail: "omp version could not be read", fix: FIX_OMP_UPGRADE };
+  }
+  const version = parseOmpVersionText(reading.version);
+  const minimum = parseOmpVersionText(MIN_OMP_VERSION);
+  if (version === undefined || minimum === undefined || compareOmpVersions(version, minimum) < 0) {
+    return {
+      id,
+      status: "fail",
+      detail: `omp version ${reading.version} is not ${MIN_OMP_VERSION} or later`,
+      fix: FIX_OMP_UPGRADE,
+    };
+  }
+  if (reading.target === "missing") {
+    return { id, status: "fail", detail: "omp extension target missing", fix: FIX_OMP_BUILD };
+  }
+  if (reading.target === "unreadable") {
+    return { id, status: "fail", detail: "omp extension target unreadable", fix: FIX_OMP_SHIM };
+  }
+  if (reading.unreadableMarkers > 0) {
+    return {
+      id,
+      status: "warn",
+      detail: `omp plugin installed (omp ${reading.version}), ${String(reading.unreadableMarkers)} unreadable presence marker(s)`,
+      fix: FIX_OMP_MARKERS,
+    };
+  }
+  if (reading.liveSessions === 0) {
+    return { id, status: "warn", detail: `omp ${reading.version} installed but not loaded, no live plugin session`, fix: FIX_OMP_LOAD };
+  }
+  return {
+    id,
+    status: "pass",
+    detail: `omp ${reading.version} installed and loaded, ${String(reading.liveSessions)} live plugin session(s), extension target present`,
+    fix: null,
+  };
+}
+
+// The default probe reads only through the seams the other doctor items already read: the omp
+// receipt and shim target through the host adapter, the presence markers through readPresence,
+// and the Omp version through runCommand. Each read is bounded by probeTimeoutMs. It writes
+// nothing and starts nothing except the version command.
+function defaultOmpPluginProbe(options: DoctorOptions): OmpPluginProbe {
+  return async (): Promise<OmpPluginReading> => {
+    const timeoutMs = probeTimeoutOf(options);
+    const env: HostEnv = { home: options.stateDir, env: {}, pathDirs: [] };
+    const adapter = createHostAdapter(HOST_RUNTIMES.omp, defaultManifestFor("omp", packageVersion()), {
+      stateDir: options.stateDir,
+      adaptersDir: "",
+      logger: nullLogger,
+      now: () => new Date(),
+      readTimeoutMs: timeoutMs,
+    });
+    const found = await adapter.status(env);
+    if (found.status !== "installed" && found.status !== "drifted") {
+      return { installed: false };
+    }
+    const version = await readOmpVersion(options, timeoutMs);
+    const presence = await readPresence(options.stateDir, "omp", { readTimeoutMs: timeoutMs });
+    return {
+      installed: true,
+      version,
+      target: found.extensionTarget ?? "unreadable",
+      liveSessions: presence.live,
+      unreadableMarkers: presence.unreadable,
+    };
+  };
+}
+
+// `omp --version` under the allowlisted environment names, bounded by timeoutMs. A failure to
+// start, a non-zero exit, a timeout or unparseable output is null: the check then fails, because
+// the right version cannot be proven. The output text never enters a detail.
+async function readOmpVersion(options: DoctorOptions, timeoutMs: number): Promise<string | null> {
+  const env: Record<string, string> = {};
+  for (const name of ["PATH", "HOME", "XDG_RUNTIME_DIR"]) {
+    const value = options.env[name];
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+  let outcome: CommandOutcome;
+  try {
+    outcome = await withTimeout(
+      (options.runCommand ?? defaultRunCommand)("omp", ["--version"], { env, timeoutMs }),
+      timeoutMs,
+      "TOOL_TIMEOUT",
+    );
+  } catch {
+    return null;
+  }
+  if (outcome.exitCode !== 0) {
+    return null;
+  }
+  const version = parseOmpVersionText(outcome.stdout);
+  return version === undefined ? null : `${String(version[0])}.${String(version[1])}.${String(version[2])}`;
 }
 
 // The host-binaries inputs, with every default applied here: the environment pins, the runner and both timeouts. The checks in

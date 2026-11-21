@@ -223,6 +223,21 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/doctor/checks.ts",
+      "name": "MIN_OMP_VERSION",
+      "reason": "D-1306 test-only seam: Phase 55 HEALTH-01 minimum Omp version, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "OmpPluginProbe",
+      "reason": "D-1306 test-only seam: Phase 55 HEALTH-01 injected probe type, referenced only by tests"
+    },
+    {
+      "file": "src/doctor/checks.ts",
+      "name": "OmpPluginReading",
+      "reason": "D-1306 test-only seam: Phase 55 HEALTH-01 probe reading type, referenced only by tests"
+    },
+    {
       "file": "src/doctor/fix.ts",
       "name": "ProtectedLocations",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"

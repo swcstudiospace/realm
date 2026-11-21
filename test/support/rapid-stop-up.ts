@@ -217,6 +217,41 @@ export function classifyStop(records: readonly StopRecord[] | undefined, signalM
   const code = verdict.code === undefined ? undefined : isErrorCode(verdict.code) ? verdict.code : "unlisted";
   return { kind: "dirty", failedTeardowns: verdict.failedTeardowns, code, stoppingSeen };
 }
+// ---- D2. The dirty-stop cause capture (Phase 56, STOP-05) ------------------------------------------------------------
+
+// What one dirty stop's `daemon.stopped` row carries beyond the primary code: the failed step's cause code and, when the
+// product records one, the failed step's name. captured is false when the row carries neither, which is the Phase 51 gap:
+// the stop reported AGENTOS_STOP_FAILED with no failed-step code, so the cause could not be named. A dirty stop with
+// captured false is counted as not captured, never assumed to have no cause.
+export interface StopCauseCapture {
+  readonly causeCode: ErrorCode | "unlisted" | undefined;
+  readonly failedStep: string | undefined;
+  readonly captured: boolean;
+}
+
+// The cause capture of the stop in records (the same window classifyStop reads), or undefined when there is no
+// daemon.stopped row in the window at all. causeCode is read from the row's own `causeCode` field and failedStep from
+// its `failedStep` (or `step`) field, each only when it holds a catalogue code (resp. a closed step name); any other
+// value is treated as absent, so a row that carries neither reads captured false. The live test keeps the timeline of
+// daemon, gateway, compute driver, supervisor and Podman outside the repository; this parser only reads the request log
+// the harness already collects.
+export function stopCauseOf(records: readonly StopRecord[] | undefined, signalMs: number): StopCauseCapture | undefined {
+  if (records === undefined) {
+    return undefined;
+  }
+  const own = records.filter((record) => Date.parse(record.ts) >= signalMs);
+  const stopped = own.filter((record) => record.event === "daemon.stopped").at(-1);
+  if (stopped === undefined) {
+    return undefined;
+  }
+  const { row } = stopped;
+  const rawCause = row.causeCode;
+  const causeCode =
+    typeof rawCause === "string" && isErrorCode(rawCause) ? rawCause : rawCause === undefined ? undefined : "unlisted";
+  const rawStep = row.failedStep ?? row.step;
+  const failedStep = typeof rawStep === "string" && /^[A-Za-z][A-Za-z0-9_.+-]*$/.test(rawStep) ? rawStep : undefined;
+  return { causeCode, failedStep, captured: causeCode !== undefined || failedStep !== undefined };
+}
 
 // ---- E. The chain state machine -------------------------------------------------------------------------------------------
 
