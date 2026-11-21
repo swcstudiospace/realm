@@ -428,7 +428,7 @@ function teeSource(prefixLength: number, restore: boolean, force: boolean, stder
     'child.on("error", (error) => { process.stderr.write("wire-tee: cannot start the target: " + error.message + "\\n"); process.exit(127); });',
     'child.stdin.on("error", () => {});',
     'process.stdout.on("error", () => {});',
-    'process.stdin.on("end", () => { child.stdin.end(); });',
+    'process.stdin.on("end", () => { record({ kind: "lifecycle", event: "host-stdin-end" }); child.stdin.end(); });',
     'process.stdin.on("data", (chunk) => { tap("host-to-realm")(chunk); child.stdin.write(chunk); });',
     'child.stdout.on("data", (chunk) => { tap("realm-to-host")(chunk); process.stdout.write(chunk); });',
     'for (const signal of ["SIGTERM", "SIGINT"]) { process.on(signal, () => { record({ kind: "lifecycle", event: "host-signal", signal }); child.kill(signal); }); }',
