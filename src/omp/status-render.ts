@@ -19,6 +19,24 @@ import type { ActiveSession, OmpStatusUi } from "./plugin.js";
 // path calls an under-bar status surface.
 export const REALM_STATUS_KEY = "realm";
 export const REALM_WIDGET_KEY = REALM_STATUS_KEY;
+export const PLUGIN_TOGGLE_WIDGET_KEY = "realm-plugin-toggle";
+
+const togglePainted = new WeakSet<object>();
+
+// Paints the boot toggle line once per session under its own widget key. A throw propagates to the
+// caller's error path (one notice, never a second), so a failing widget never kills session start.
+export function paintToggleOnce(session: ActiveSession, text: string): boolean {
+  if (togglePainted.has(session)) {
+    return true;
+  }
+  const ui = session.ctx.ui;
+  if (typeof ui.setWidget !== "function") {
+    return false;
+  }
+  ui.setWidget(PLUGIN_TOGGLE_WIDGET_KEY, text);
+  togglePainted.add(session);
+  return true;
+}
 
 const lastPainted = new WeakMap<OmpStatusUi, string>();
 

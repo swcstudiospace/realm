@@ -49,7 +49,8 @@ void test("OMPR-05: the Omp extension's closure reaches no CLI, doctor, MCP, ACP
   );
   assert.ok(modules.has("src/daemon/launch.ts"));
   // The exact size of the closure: a change that grows it is a decision, not a drift. It was 98 modules before the move.
-  assert.equal(modules.size, 43);
+  // (43 -> 44: src/omp/status-render.ts extracted from plugin.ts for the widget-only paint.)
+  assert.equal(modules.size, 44);
 });
 
 void test("OMPR-05: src/daemon/launch.ts is the only module of the extension's closure that imports node:child_process", async () => {
@@ -62,7 +63,8 @@ void test("OMPR-05: src/daemon/launch.ts is the only module of the extension's c
 
 void test("OMPR-05: the plugin and the shared attach reach none of those modules and no child_process", async () => {
   const expected = [
-    ["src/omp/plugin.ts", 9],
+    // plugin.ts 9 -> 10: src/omp/status-render.ts extracted for the widget-only paint.
+    ["src/omp/plugin.ts", 10],
     ["src/host/attach.ts", 13],
   ] as const;
   for (const [entry, size] of expected) {
