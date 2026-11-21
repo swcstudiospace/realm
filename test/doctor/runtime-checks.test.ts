@@ -259,6 +259,7 @@ void test("RT-02: the three runtime items follow the three Phase 2 items, and th
       "runtime-roots",
       "host-plugins",
       "capability-tokens",
+      "omp-plugin",
     ],
   );
 });

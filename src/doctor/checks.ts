@@ -36,7 +36,6 @@ import { controlSocketPath, type EnvironmentLike, sessionsDirOf } from "../sessi
 import type { RuntimeConfig } from "../runtime/config.js";
 import { createHostAdapter } from "../host/adapter.js";
 import { defaultManifestFor } from "../host/manifest.js";
-import { readPresence } from "../host/presence.js";
 import { HOST_RUNTIMES } from "../host/runtimes.js";
 import type { HostEnv } from "../host/types.js";
 import { nullLogger } from "../observe/logger.js";
@@ -46,6 +45,7 @@ import {
   hostBinariesCheck,
   hostBinaryPinsFromEnv,
   kernelHardeningCheck,
+  readOmpPresence,
   type HostBinaryInput,
   type HostBinaryPins,
 } from "./checks-host.js";
@@ -748,7 +748,7 @@ async function ompPluginCheck(options: DoctorOptions): Promise<CheckResult> {
 }
 
 // The default probe reads only through the seams the other doctor items already read: the omp
-// receipt and shim target through the host adapter, the presence markers through readPresence,
+// receipt and shim target through the host adapter, the presence markers through readOmpPresence,
 // and the Omp version through runCommand. Each read is bounded by probeTimeoutMs. It writes
 // nothing and starts nothing except the version command.
 function defaultOmpPluginProbe(options: DoctorOptions): OmpPluginProbe {
@@ -767,7 +767,7 @@ function defaultOmpPluginProbe(options: DoctorOptions): OmpPluginProbe {
       return { installed: false };
     }
     const version = await readOmpVersion(options, timeoutMs);
-    const presence = await readPresence(options.stateDir, "omp", { readTimeoutMs: timeoutMs });
+    const presence = await readOmpPresence(options.stateDir, timeoutMs);
     return {
       installed: true,
       version,
