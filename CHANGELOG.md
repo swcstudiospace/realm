@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-21
+
+### Added
+- feat(v9): Phase 55 doctor check, Phase 56 capture gap, Phase 58 recorder fix, HARN-03/CRASH-04 closeout (#250) (2f25bc0)
+
 ## [0.9.1] - 2026-11-20
 
 ### Added
