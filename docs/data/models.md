@@ -190,3 +190,22 @@ No GDPR/CCPA subject deletion applies: Realm stores no personal data (only `work
 2. **Idempotent operations.** Repeating create/start/probe/attach/detach/stop/destroy against the same session returns the same state without duplicating resources. `SessionStore.delete` on a missing record is a no-op. Checkpoint snapshot reserves its id by directory creation (second snapshot with the same id is refused). Reconciliation appends 0 lines on the second start. `down` on an already-down session is a no-op.
 3. **Optimistic concurrency.** `expectedPriorSha256` on atomic writes: a save that races another writer fails rather than silently overwriting. The session lock (`checkpoint-lock.ts`) serialises checkpoint operations; a live or unprovable lock owner keeps the lock (`LOCK_CONFLICT`).
 4. **Bounded everything.** Tool queue wait bounded by `toolQueueMs`; every async boundary under `withTimeout`; audit lines ≤ 4 MiB; reads chunked at 64 KiB. No unbounded buffer holds a record.
+
+## 13. Plugin manifest boot block — Omp plugin toggle (ADR-0001, US-112)
+
+Addendum. The toggle is one optional field on the existing persisted manifest record, so the §0 ERD is unchanged (no new entity, no new relation). This section is the data contract; A05 implements the parser, resolver and wiring.
+
+### `PluginBoot` (the `boot` block of `HostPluginManifest`)
+
+| Field | Type | Rule |
+|---|---|---|
+| `enabled` | boolean, optional, default `true` | The persisted Omp plugin toggle. Absent means on (default-on). `false` registers 0 Realm tools, 0 retry command, 0 paints. Orthogonal to `reattach.enabled` (Phase 21): either may flip independently; the plugin is inert only when `enabled` is `false` |
+| `startupBudgetMs` | integer 1..200000, optional | Pre-existing (Phase 21) |
+| `reattach` | object, optional | Pre-existing (Phase 21) |
+
+- **Persisted vs resolved.** The persisted document is the manifest JSON carrying the `boot` block. `ResolvedBoot.enabled` is required in the resolved (in-memory) view and always has a value: the manifest value, or `true` when absent (`resolveBoot` is the sole producer; `BOOT_BOUNDS.enabled` is `true`). The extension edge may intersect with the `REALM_OMP_ENABLED` environment reading (unset/`1` = on, `0` = off, anything else fails the load, mirroring `reattachEnabledOf`); the environment value is ephemeral and never persisted — the persisted manifest/settings value is the source of truth across a restart (blueprint §Storage).
+- **Write path.** The toggle write is the `API-RealmOmpPlugin` `PUT /plugin/toggle` operation against this field (read: `GET /plugin/toggle`); no other writer may set `enabled`.
+- **Fail-closed.** A non-boolean `enabled`, or any unknown `boot` key, is `SCHEMA_INVALID` (closed keys, D-12); nothing is coerced and no partial manifest is accepted.
+- **ERD.** `PluginBoot` is an embedded block of the host plugin manifest record (`src/host/types.ts`, parsed by `src/host/manifest.ts`, resolved by `src/host/boot.ts`); it references no other entity by id and is referenced by none.
+- **Retention / deletion.** The block lives with the manifest/settings document; removing the document removes the toggle. Rollback of M-2026-006 carries no retention entry; the off value does not survive rollback.
+- **Paint and diagnose (no new persisted fields).** Status paint (US-113) and the named `workspaceRoot` diagnostic (US-116) persist nothing new: paint is an in-memory funnel over the daemon snapshot state (`active`, `disconnected`, `error`, `connecting` — 4 of 4 truthful) with 0 under-bar paints (ADR-0002); the diagnostic is operator-local stderr/doctor output only, never audit or log content (ADR-0003).

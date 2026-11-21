@@ -115,7 +115,7 @@ class StatusWriteUi implements OmpStatusUi {
   readonly notifications: string[] = [];
   noticesFail = false;
 
-  setStatus(_key: string, text: string): void {
+  setWidget(_key: string, text: string): void {
     this.attempts.push(text);
     if (this.failing) {
       throw new Error("status write refused");

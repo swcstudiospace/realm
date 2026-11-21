@@ -338,6 +338,16 @@
       "reason": "D-1306 test-only seam: the closed transport vocabulary, pinned by test/host/boot-report.test.ts and test/daemon/host-boot-control.test.ts; production code consumes the derived HostBootTransport type"
     },
     {
+      "file": "src/host/boot.ts",
+      "name": "getPluginToggle",
+      "reason": "D-1306 test-only seam: Phase 55/ toggle + widget paint, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot.ts",
+      "name": "setPluginToggle",
+      "reason": "D-1306 test-only seam: Phase 55/ toggle + widget paint, referenced only by tests"
+    },
+    {
       "file": "src/host/install.ts",
       "name": "HostFileInfo",
       "reason": "D-1306 test-only seam: reader result type implemented by the injected readers of test/host/adapter.test.ts and test/host/install.test.ts"
@@ -434,11 +444,6 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "ActiveSession",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
       "name": "GUARDED_HOST_TOOLS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
@@ -459,17 +464,12 @@
     },
     {
       "file": "src/omp/plugin.ts",
-      "name": "OmpStatusUi",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+      "name": "PLUGIN_TOGGLE_TARGET",
+      "reason": "D-1306 test-only seam: Phase 55/ toggle + widget paint, referenced only by tests"
     },
     {
       "file": "src/omp/plugin.ts",
       "name": "REALM_RETRY_COMMAND",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
-    },
-    {
-      "file": "src/omp/plugin.ts",
-      "name": "REALM_STATUS_KEY",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
@@ -489,13 +489,18 @@
     },
     {
       "file": "src/omp/plugin.ts",
+      "name": "pluginToggleLine",
+      "reason": "D-1306 test-only seam: Phase 55/ toggle + widget paint, referenced only by tests"
+    },
+    {
+      "file": "src/omp/plugin.ts",
       "name": "registerRealmPlugin",
       "reason": "D-1306 test-only seam: returns only the host tool set; the extension edge calls createRealmPlugin, and test/omp/plugin.test.ts and test/omp/host-tools.test.ts read the tool set through this wrapper"
     },
     {
-      "file": "src/omp/plugin.ts",
-      "name": "renderRealmStatus",
-      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+      "file": "src/omp/status-paint.ts",
+      "name": "getPluginStatusPaint",
+      "reason": "D-1306 test-only seam: Phase 55/ toggle + widget paint, referenced only by tests"
     },
     {
       "file": "src/omp/tools.ts",

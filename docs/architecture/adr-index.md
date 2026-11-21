@@ -54,3 +54,7 @@ Status convention: **accepted** = A03 may record it (L2); **proposed** = awaitin
 - **Context:** Recorded default-configuration warm run FAILED (38 external + 6 DNS = 44 offenders). Only the `LLAMA_CPP_BASE_URL` lever in a proxied scripted configuration passes, and that configuration is not the default. Refusing-proxy (0/0/7) is narrower evidence.
 - **Decision:** HARN-03 stays provisional; the zero-offender criterion is not relaxed. Owner ruling required on (a) whether port 9931 joins the allowlist and (b) whether the lever counts as passing.
 - **Consequences:** AC-3 is unverified until the ruling + a current-source live run on the 5.7.1 realm account. This ADR proposes no new infrastructure, so it is L2, but its `decision` cannot be marked accepted by A03 alone — it needs the owner.
+
+## v9.0 swarm series (Ta08e-arch)
+
+The four v9.0 decisions are recorded as MADR files under `docs/adr/` by `scripts/arch_adr.py` with swarm-series ids ADR-0001..ADR-0004 (accepted, index verdict pass, `arch_adr_supersession` valid). These ids live in a different series from the Tc8fd-arch ADR-0001..ADR-0007 above and must be cited with their file path to avoid collision. Full bodies: `docs/adr/0001-optional-omp-plugin-toggle-defaults-on.md`, `docs/adr/0002-merge-realm-status-into-the-additional-ui-widget.md`, `docs/adr/0003-name-the-missing-workspaceroot-in-the-start-diagnostic.md`, `docs/adr/0004-publish-the-omp-plugin-contract-before-implementation-tasks.md`. A future series renumbering must supersede, never renumber, existing ids.

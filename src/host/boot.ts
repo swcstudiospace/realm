@@ -17,7 +17,10 @@ import type { HostGuardVerdict, HostLinkStatus, HostPluginManifest } from "./typ
 export type BootLink = HostLinkStatus["link"];
 
 // Every bound a boot hook is built from, after defaults are applied.
+// `enabled` is the persisted Omp plugin toggle (ADR-0001): true registers 5 Realm tools and paints
+// status; false registers 0 tools, 0 retry command and 0 paints. Default true (on).
 export interface ResolvedBoot {
+  readonly enabled: boolean;
   readonly startupBudgetMs: number;
   readonly guardStatusBudgetMs: number;
   readonly statusPollMs: number;
@@ -42,6 +45,7 @@ const RETRYABLE_ATTACH: readonly ErrorCode[] = [
 ];
 
 export const BOOT_BOUNDS: ResolvedBoot = Object.freeze({
+  enabled: true,
   startupBudgetMs: 200_000,
   guardStatusBudgetMs: 5_000,
   statusPollMs: 2_000,
@@ -51,11 +55,12 @@ export const BOOT_BOUNDS: ResolvedBoot = Object.freeze({
 });
 
 // The manifest's boot block with every absent field taken from BOOT_BOUNDS. A manifest without a boot block (an mcp-config
-// host) yields the defaults. Re-attach stays off unless the manifest enables it.
+// host) yields the defaults. Re-attach stays off unless the manifest enables it. The plugin toggle defaults on.
 export function resolveBoot(manifest: HostPluginManifest): ResolvedBoot {
   const boot = manifest.boot;
   const reattach = boot?.reattach;
   return Object.freeze({
+    enabled: boot?.enabled ?? BOOT_BOUNDS.enabled,
     startupBudgetMs: boot?.startupBudgetMs ?? BOOT_BOUNDS.startupBudgetMs,
     guardStatusBudgetMs: BOOT_BOUNDS.guardStatusBudgetMs,
     statusPollMs: BOOT_BOUNDS.statusPollMs,
@@ -69,6 +74,36 @@ export function resolveBoot(manifest: HostPluginManifest): ResolvedBoot {
     retryableAttachCodes: BOOT_BOUNDS.retryableAttachCodes,
   });
 }
+// The persisted Omp plugin toggle operations (ADR-0001, US-112; API-RealmOmpPlugin 1.0.0,
+// `getPluginToggle`/`setPluginToggle`). The store is the `boot` block of the host plugin manifest
+// (`SC-PluginBoot`, M-2026-006): absence means on, `false` registers 0 Realm tools, 0 retry command
+// and 0 paints. Realm owns no manifest file, so `setPluginToggle` is pure: it returns the updated
+// manifest and the caller persists it through its own settings store; restarting the host then
+// re-resolves the same value (AC-38). The `correlationId` is paired verbatim into every response.
+export interface PluginToggleResponse {
+  readonly enabled: boolean;
+  readonly correlationId: string;
+}
+
+export interface PluginToggleRequest {
+  readonly enabled: boolean;
+  readonly correlationId: string;
+}
+
+// GET /plugin/toggle: the persisted toggle value from the passed manifest; on when no setting is stored.
+export function getPluginToggle(manifest: HostPluginManifest, correlationId: string): PluginToggleResponse {
+  return { enabled: resolveBoot(manifest).enabled, correlationId };
+}
+
+// PUT /plugin/toggle: the manifest with `boot.enabled` set and every other boot field (including
+// `reattach.enabled`, orthogonal by design) preserved untouched. Both inputs are already typed and
+// validated by the manifest parser at their own edges, so no re-validation happens here: this
+// module stays host-neutral and must not import the manifest parser (OMPR-05 closure budget,
+// test/omp/extension-load.test.ts pins the plugin closure at 9 modules).
+export function setPluginToggle(manifest: HostPluginManifest, request: PluginToggleRequest): HostPluginManifest {
+  return { ...manifest, boot: { ...manifest.boot, enabled: request.enabled } };
+}
+
 
 // Runs the attach path (attach plus its first status read) under the startup budget. Rejects with STARTUP_BUDGET_EXCEEDED
 // when the budget elapses first; the timer is cleared as soon as the work settles, so none outlives the call.

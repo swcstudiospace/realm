@@ -98,11 +98,20 @@ function makeGate(): Gate {
 }
 
 class FakeUi implements OmpStatusUi {
+  // Widget-region paints (ADR-0002): the plugin routes status here. statusTexts reads these.
   readonly calls: Array<{ readonly key: string; readonly text: string }> = [];
+  // Under-bar paints: retained so every test can prove the plugin never touches this surface (AC-39).
+  readonly underBarCalls: Array<{ readonly key: string; readonly text: string }> = [];
   readonly notifications: string[] = [];
 
-  setStatus(key: string, text: string): void {
+  setWidget(key: string, text: string): void {
     this.calls.push({ key, text });
+  }
+
+  // Legacy surface record: kept only to assert 0 under-bar paints. The plugin has no setStatus
+  // member (OmpStatusUi) and never calls this; tests assert underBarCalls stays empty.
+  setStatus(key: string, text: string): void {
+    this.underBarCalls.push({ key, text });
   }
 
   notify(message: string): void {
@@ -999,7 +1008,7 @@ void test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale
   const writes: Array<{ readonly key: string; readonly text: string }> = [];
   let failWrite = true;
   const ui: OmpStatusUi = {
-    setStatus(key, text) {
+    setWidget(key, text) {
       if (failWrite) {
         failWrite = false;
         throw new Error("rpc transport");
@@ -2333,7 +2342,7 @@ void test("a failed UI write for a mode-only change remains retryable", () => {
   const writes: string[] = [];
   let reject = false;
   const ui: OmpStatusUi = {
-    setStatus(_key, text) {
+    setWidget(_key, text) {
       if (reject) throw new Error("rpc transport");
       writes.push(text);
     },

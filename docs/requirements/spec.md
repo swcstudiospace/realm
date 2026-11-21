@@ -150,3 +150,60 @@ NFRs trace as follows: NFR-P1 → US-104/US-106 live proof; NFR-S1 → US-103/US
 ## 10. Out of Scope
 
 Architecture, product code, schema changes, IaC, release commands, Linear issue creation, gate runs, formatting, and any edit outside `docs/requirements/spec.md`, `docs/requirements/stories.md` and `docs/acceptance.md`.
+
+## 11. v9.0 Addendum — Quality, Toggle, UI Merge, Start Debug, Tracking, Ship (Ta08e-req, 2026-11-21)
+
+**Scope.** This addendum adds US-111 through US-121 and the criteria in `docs/acceptance.md`. Stories US-101 through US-110 and criteria AC-1 through AC-32 are carried unchanged. The addendum covers branch `gsd/close-harn03-crash04-next` on the 0.9.x release line and the outline of v9.0 phases 55 through 59 per `.planning/ROADMAP.md`.
+
+### 11.1 Core value
+
+Realm starts cleanly in the configured workspace, the Omp plugin is fully under operator control, Realm status renders in the additional UI region with a truthful state, and every phase shows its state in 1 Notion page and 1 Linear issue before 1 green pull request merges to main.
+
+### 11.2 Start-error debug (US-111)
+
+- Fresh-build start reaches active with 1 container, 0 module-load errors, and 1 readable audit chain head. The historical `ERR_MODULE_NOT_FOUND` against `dist/src/audit/chain.js` is closed once 0 such errors occur on a fresh build.
+- A stored config whose `workspaceRoot` points at 1 nonexistent directory exits 1 with `POLICY_DENIED` and names 1 missing directory; the operator then corrects the stored path. The start requirement is met when 0 start failures remain, or the remaining cause is named with 1 diagnostic naming 1 path and 1 remedy.
+
+### 11.3 Optional plugin toggle (US-112)
+
+- The toggle defaults on: 5 Realm tools register and 1 status paint occurs with no stored setting.
+- With the toggle off, 0 Realm tools register, 0 paints occur, and 0 workspace mutations occur; the choice persists across 1 restart. The toggle is orthogonal to the earlier `reattach.enabled` flag, which stays unchanged.
+
+### 11.4 UI merge (US-113)
+
+- With the toggle on, 1 status paint lands in the additional UI region with 0 calls to the under-bar status surface. The paint target is the additional UI (rendered by the Omp host) rather than the `ctx.ui.setStatus(REALM_STATUS_KEY)` slot in `src/omp/plugin.ts`; `adapters/omp/index.js` stays the host shim and gains no realm logic.
+- Painted text matches the daemon snapshot in 4 of 4 states (active, disconnected, error, connecting) with 1 label per paint, so the merged UI stays truthful.
+- With the toggle off, 0 paints occur and the last truthful text is retained unchanged.
+
+### 11.5 Quality bar (US-114)
+
+- The 8 standard gates each exit 0 with 0 failures on the change branch. Continuous integration is green on 2 of 2 Node versions (22 and 24) with 0 failed jobs. The vulnerability audit exits 0 with 0 dependency drift from the baseline.
+- Living quality-bar cases are also hermetic-first: the plugin toggle off-path, the UI paint target, and the doctor health check all run on injected fakes before any live window, so a live window only confirms what hermetic tests already prove.
+
+### 11.6 v9.0 phase close-out (US-115 through US-119)
+
+- **Phase 55 (HEALTH-01, HEALTH-02, US-115).** The doctor check reports pass with 1 installed version when the Omp plugin is healthy, and 1 named remedy per failing case in 3 of 3 cases (not installed, wrong version, not loaded) with 0 installs or removals. The runbook maps 3 outcomes to remedies with dated evidence and 0 foreign-process steps.
+- **Phase 56 (STOP-05, STOP-06, US-116).** Every dirty stop carries 1 failed-step cause code across 20 consecutive iterations with `failedTeardowns` equal to 0, or the cause is carried with 1 tested reason and 0 folding into F-41-1. Every wait stays bounded by 1 timeout and the orphan count stays 0.
+- **Phase 57 (HTIER-01, US-117).** A live Grok Build session writes 1 audit line attributed `grok-build` with 1 handshake and 6 tools, or GAP-40-01 stays accepted-residual with 1 missing host feature named and 1 verified workaround documented.
+- **Phase 58 (KIMV-02, US-118).** The old recorder drops 1 response that the fixed recorder retains in 1 hermetic test; the live rerun keeps 1 wire log with full output and 1 version plus date, or KIMV-02 is carried with 1 tested reason and the GAP-43-03 label is unchanged.
+- **Phase 59 (CBIND-01..03, US-119, provisional).** No implementation file lands before owner ratification of `53-DESIGN.md` cited by date. After ratification, implementation follows 53-DESIGN section 4 surfaces with 1 new module, 2 path helpers, 0 new catalogue codes and 0 shims, proven by 6 of 6 hermetic contention cases with stale takeover capped at 3. Until ratification, this section stays provisional and no code is written.
+
+### 11.7 Tracking through Notion (US-120)
+
+- 1 Notion page exists per phase for phases 55 through 59 (5 pages total), each linking 1 phase id and 1 status. Notion is the hub: each phase page links its 1 Linear issue, and each Linear issue links back to its 1 Notion page by id.
+- The Linear workspace holds 5 issues with 0 duplicates, each linking 1 phase id, 1 or more plan ids and 1 or more requirement ids, plus 1 sub-issue per plan. Duplicate scans run before creation and reuse an existing issue when a phase title already exists.
+
+### 11.8 Ship (US-121)
+
+- The pull request to main carries 11 of 11 verification checkboxes at exit 0 with every template section completed (Summary, Requirements, Verification, Risk and rollback, Checklist). Greptile reports 5 of 5 reviews with 0 open comments and 1 reviewer approval before merge.
+- The merge is 1 squash merge with 0 edited version fields and 0 CHANGELOG lines in the diff. Protected-path human review still applies to `.github/workflows/**`, `release/**`, `scripts/release/**`, `LICENSE` and `NOTICE`.
+
+### 11.9 Non-functional requirements (additive)
+
+NFR-P1, NFR-S1, NFR-A1, NFR-I1 and NFR-C1 are carried forward unchanged. Two additive NFRs apply to the toggle and UI merge and are measured in `docs/requirements/nfr.md`: NFR-S2 (0 tools and 0 paints when off, 5 tools when on) and NFR-A2 (1 additional-UI region, 0 under-bar paints, 4 of 4 truthful states). Regulatory regimes from the brief PII scan are none (`regimes_hint: []`), so no non-negotiable compliance NFR beyond NFR-C1 applies.
+
+### 11.10 Assumptions and open questions
+
+1. **Live windows are human-blocking.** Phases 56, 57 and 58 live criteria and Phase 59 ratification are not proven in this spec task; their criteria stay provisional until the owner runs the live windows. Hermetic criteria alone never pass a live gate.
+2. **WSJF scatter is provisional.** Backlog order uses MOSCOW because stakeholder WSJF scores are unavailable. No score was guessed.
+3. **Configuration repair is a runtime action.** Pointing `workspaceRoot` at an existing directory (or removing the stale config) is an operator action outside A02 scope; this spec only demands the clean-start outcome and the named diagnostic.

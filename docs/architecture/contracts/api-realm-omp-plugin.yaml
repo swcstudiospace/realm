@@ -1,0 +1,139 @@
+openapi: 3.1.0
+info:
+  title: Realm Omp Plugin
+  version: 1.0.0
+  description: >
+    Versioned contract for the Omp plugin toggle, the additional-UI status
+    paint, and the startup diagnostic. The toggle defaults on and is
+    orthogonal to the earlier reattach.enabled flag, which is unchanged.
+    Paints land in the additional UI region rendered by the Omp host, never
+    on the under-bar status surface. The startup diagnostic names a missing
+    workspaceRoot with one remedy; operator-local diagnostics only, never
+    audit or log content.
+servers:
+  - url: internal://realm-omp-plugin
+    description: Omp host plugin boundary (Realm host extension)
+paths:
+  /plugin/toggle:
+    get:
+      summary: Read the persisted plugin toggle
+      operationId: getPluginToggle
+      responses:
+        '200':
+          description: Persisted toggle value; defaults on when no setting is stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleResponse'
+      x-nfr-bindings:
+        - NFR-S2
+    put:
+      summary: Set the persisted plugin toggle
+      operationId: setPluginToggle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleRequest'
+      responses:
+        '200':
+          description: Persisted toggle value; off registers 0 tools and paints 0 times
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleResponse'
+      x-nfr-bindings:
+        - NFR-S2
+  /plugin/status-paint:
+    get:
+      summary: Render Realm status in the additional UI region
+      operationId: getPluginStatusPaint
+      responses:
+        '200':
+          description: Paint lands in the additional UI region with 0 under-bar paints and truthful text in 4 of 4 states
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusPaintResponse'
+      x-nfr-bindings:
+        - NFR-A2
+        - NFR-A1
+  /startup/diagnose:
+    get:
+      summary: Diagnose startup with a missing workspaceRoot
+      operationId: startDiagnose
+      responses:
+        '200':
+          description: Configured workspace exists; clean start is possible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnoseResponse'
+        '409':
+          description: POLICY_DENIED; diagnostic names the 1 missing directory with 1 remedy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnoseResponse'
+      x-nfr-bindings:
+        - NFR-S1
+components:
+  schemas:
+    ToggleRequest:
+      type: object
+      required: [enabled, correlationId]
+      properties:
+        enabled:
+          type: boolean
+          description: True registers 5 Realm tools and paints status; false registers 0 tools, paints 0 times, mutates 0 workspace bytes
+        correlationId:
+          type: string
+    ToggleResponse:
+      type: object
+      required: [enabled, correlationId]
+      properties:
+        enabled:
+          type: boolean
+          description: Persisted value; defaults on when no setting is stored
+        correlationId:
+          type: string
+    StatusPaintResponse:
+      type: object
+      required: [target, underBarPaints, correlationId]
+      properties:
+        target:
+          type: string
+          enum: [additional-ui]
+          description: NFR-A2 — the only paint target; the under-bar status surface is never used
+        underBarPaints:
+          type: integer
+          minimum: 0
+          description: NFR-A2 — 0 under-bar paints when the toggle is on the additional region renders 1 paint
+        states:
+          type: array
+          items:
+            type: string
+            enum: [active, disconnected, error, connecting]
+          description: NFR-A2 — painted text matches the daemon snapshot in 4 of 4 states with 1 label per paint
+        correlationId:
+          type: string
+    DiagnoseResponse:
+      type: object
+      required: [workspaceRootExists, code, correlationId]
+      properties:
+        workspaceRootExists:
+          type: boolean
+          description: True when the configured workspaceRoot is an existing directory
+        missingPath:
+          type: string
+          description: AC-34 — operator-local diagnostic only; names the 1 missing directory, never audit or log content
+        code:
+          type: string
+          enum: [POLICY_DENIED, SCHEMA_INVALID]
+          description: POLICY_DENIED for a nonexistent workspaceRoot; SCHEMA_INVALID for an unusable config shape
+        remedy:
+          type: string
+          description: "AC-34 — 1 remedy: point workspaceRoot at an existing directory owned by the account, or remove the stale config"
+        correlationId:
+          type: string

@@ -258,7 +258,7 @@ async function startOmpSession(
   const ctx: OmpSessionContext = {
     cwd,
     ui: {
-      setStatus(_key: string, text: string): void {
+      setWidget(_key: string, text: string): void {
         paints.push(text);
         if (text.includes(expectedNeedle)) {
           painted.settle();
@@ -356,7 +356,7 @@ void test("OMP-01: the Omp entry and the CLI dial one control socket, the state 
 
   const ctx: OmpSessionContext = {
     cwd: base,
-    ui: { setStatus(): void {}, notify(): void {} },
+    ui: { setWidget(): void {}, notify(): void {} },
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     setInterval: (callback, ms) => setInterval(callback, ms),
     clearTimer: (handle) => {
@@ -685,7 +685,7 @@ function recordingCtx(cwd: string, statuses: string[]): OmpSessionContext {
   return {
     cwd,
     ui: {
-      setStatus(_key: string, text: string): void {
+      setWidget(_key: string, text: string): void {
         statuses.push(text);
       },
       notify(): void {},

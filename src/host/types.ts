@@ -142,7 +142,10 @@ export interface HostCapabilityRequest {
 }
 
 // Boot bounds for `extension` hosts. Every field is optional: defaults are applied by the boot hook.
+// `enabled` is the optional Omp plugin toggle (ADR-0001, US-112): absent means on (default-on);
+// false registers 0 Realm tools, 0 retry command and 0 paints. It is orthogonal to `reattach.enabled`.
 export interface BootBounds {
+  readonly enabled?: boolean;
   readonly startupBudgetMs?: number;
   readonly reattach?: {
     readonly enabled?: boolean;

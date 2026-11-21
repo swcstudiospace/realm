@@ -188,7 +188,17 @@ export const ompBootHook: HostBootHookFactory = (deps: HostBootDeps, manifest): 
 
   const contextFor = (root: string): OmpSessionContext => ({
     cwd: root,
-    ui: deps.sink,
+    // The widget region sink (ADR-0002): Omp paints call setWidget; the fake records them via the
+    // host-neutral sink's status list so conformance assertions read one array. The 2-method
+    // HostStatusSink shape (src/host/types.ts) is unchanged; this bridge is test-only.
+    ui: {
+      setWidget: (key: string, text: string): void => {
+        deps.sink.setStatus(key, text);
+      },
+      notify: (message: string): void => {
+        deps.sink.notify(message);
+      },
+    },
     setTimeout: (callback, ms) => deps.timers.setTimeout(callback, ms),
     setInterval: (callback, ms) => {
       const poll = new PollHandle(callback, ms, deps.timers.setInterval(callback, ms));

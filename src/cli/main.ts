@@ -26,6 +26,8 @@ import {
 import { connectDaemon, selectionOf, type ConnectDaemonOptions, type DaemonClient, type DaemonStatus } from "../daemon/client.js";
 import { ensureDaemon, daemonAnswers, daemonLogPath, reportingStartFailure } from "../daemon/ensure.js";
 import { defaultSpawnDaemon, launchFilteredDaemon, type SpawnDaemon } from "../daemon/launch.js";
+import { formatDiagnoseLine, startDiagnose } from "../daemon/diagnose.js";
+import { newCorrelationId } from "../observe/ids.js";
 import { defaultRunCommand, runChecks, type DoctorOptions } from "../doctor/checks.js";
 import { applySafeFixes, FixRefusal, type FixAction } from "../doctor/fix.js";
 import { runtimeChecks } from "../doctor/runtime-checks.js";
@@ -389,7 +391,27 @@ function controlTimeoutOf(deps: ResolvedDeps, method: keyof typeof CONTROL_TIMEO
   return deps.timeoutMs ?? CONTROL_TIMEOUT_MS[method];
 }
 
-async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string): Promise<CliResult> {
+// The operator-local start diagnostic (ADR-0003, AC-34): a POLICY_DENIED start refusal names the
+// one missing directory and its one remedy, on the CLI stderr only. Audit and daemon.log lines stay
+// code-only: this fragment is composed into the CLI result's stderr here and written nowhere else.
+// The configured workspaceRoot (the `config.json` ceiling the daemon binds) is diagnosed first: the
+// stale-config refusal. When it exists, the workspace the operator asked to bring up is diagnosed:
+// a missing `--workspace` argument. Any other POLICY_DENIED cause names nothing.
+function workspaceDiagnosis(error: unknown, configuredWorkspaceRoot: string, workspaceRoot: string): string {
+  if (refusalOf(error).code !== "POLICY_DENIED") {
+    return "";
+  }
+  for (const candidate of [configuredWorkspaceRoot, workspaceRoot]) {
+    const line = formatDiagnoseLine(startDiagnose(candidate, newCorrelationId()));
+    if (line !== null) {
+      return `realm up: POLICY_DENIED: ${line}\n`;
+    }
+  }
+  return "";
+}
+
+
+async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: string, configuredWorkspaceRoot: string): Promise<CliResult> {
   const upTimeoutMs = controlTimeoutOf(deps, "up");
   let probe: PodmanProbeResult;
   try {
@@ -419,9 +441,9 @@ async function runUp(deps: ResolvedDeps, socketPath: string, workspaceRoot: stri
     return upResult(
       await deps.send(socketPath, { id: 1, method: "up", params: { workspaceRoot } }, upTimeoutMs),
     );
-  } catch (error) {
+  } catch (error: unknown) {
     const failure = failureFor(error);
-    return { ...failure, stderr: `${failure.stderr}${daemonLogHint(deps.stateDir)}` };
+    return { ...failure, stderr: `${failure.stderr}${workspaceDiagnosis(error, configuredWorkspaceRoot, workspaceRoot)}${daemonLogHint(deps.stateDir)}` };
   }
 }
 
@@ -771,7 +793,7 @@ async function dispatchCli(argv: readonly string[], deps: CliDeps): Promise<CliR
         };
       }
       if (command === "up") {
-        return runUp(resolved, socketPath, workspaceRoot);
+        return runUp(resolved, socketPath, workspaceRoot, runtimeConfig.workspaceRoot);
       }
       if (command === "mcp") {
         return runStdio("mcp", resolved, socketPath, workspaceRoot, parsed.host, parsed.reattach);
