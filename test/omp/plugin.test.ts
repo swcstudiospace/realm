@@ -105,8 +105,8 @@ class FakeUi implements OmpStatusUi {
   readonly underBarCalls: Array<{ readonly key: string; readonly text: string }> = [];
   readonly notifications: string[] = [];
 
-  setWidget(key: string, text: string): void {
-    this.calls.push({ key, text });
+  setWidget(key: string, text: string | string[]): void {
+    this.calls.push({ key, text: Array.isArray(text) ? text.join("\n") : text });
   }
 
   // Legacy surface record: kept only to assert 0 under-bar paints. The plugin has no setStatus
@@ -1015,7 +1015,7 @@ void test("OMP-02 / MED-03: a throwing status write leaves the paint cache stale
         failWrite = false;
         throw new Error("rpc transport");
       }
-      writes.push({ key, text });
+      writes.push({ key, text: Array.isArray(text) ? text.join("\n") : text });
     },
     notify() {},
   };
@@ -2346,7 +2346,7 @@ void test("a failed UI write for a mode-only change remains retryable", () => {
   const ui: OmpStatusUi = {
     setWidget(_key, text) {
       if (reject) throw new Error("rpc transport");
-      writes.push(text);
+      writes.push(Array.isArray(text) ? text.join("\n") : text);
     },
     notify() {},
   };

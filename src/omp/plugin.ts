@@ -60,7 +60,7 @@ export { REALM_STATUS_KEY, REALM_WIDGET_KEY, PLUGIN_TOGGLE_WIDGET_KEY, renderRea
 // (docs/integration/omp.md Q3) and is pinned by fake-host tests. There is deliberately no setStatus
 // member here: the under-bar surface must never be reachable from this plugin after the merge.
 export interface OmpStatusUi {
-  setWidget(key: string, text: string): void;
+  setWidget(key: string, text: string | string[]): void;
   notify(message: string): void;
 }
 

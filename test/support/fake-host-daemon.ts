@@ -187,8 +187,8 @@ export class RecordingSink implements HostStatusSink {
 
   // Omp widget paints (ADR-0002) record into the same statuses list, so boot-conformance
   // assertions on painted text keep reading one array. This lets the sink satisfy OmpStatusUi.
-  setWidget(key: string, text: string): void {
-    this.statuses.push({ key, text });
+  setWidget(key: string, text: string | string[]): void {
+    this.statuses.push({ key, text: Array.isArray(text) ? text.join("\n") : text });
   }
 
   notify(message: string): void {

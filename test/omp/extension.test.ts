@@ -258,9 +258,10 @@ async function startOmpSession(
   const ctx: OmpSessionContext = {
     cwd,
     ui: {
-      setWidget(_key: string, text: string): void {
-        paints.push(text);
-        if (text.includes(expectedNeedle)) {
+      setWidget(_key: string, text: string | string[]): void {
+        const line = Array.isArray(text) ? text.join("\n") : text;
+        paints.push(line);
+        if (line.includes(expectedNeedle)) {
           painted.settle();
         }
       },
@@ -685,8 +686,8 @@ function recordingCtx(cwd: string, statuses: string[]): OmpSessionContext {
   return {
     cwd,
     ui: {
-      setWidget(_key: string, text: string): void {
-        statuses.push(text);
+      setWidget(_key: string, text: string | string[]): void {
+        statuses.push(Array.isArray(text) ? text.join("\n") : text);
       },
       notify(): void {},
     },

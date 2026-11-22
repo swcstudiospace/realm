@@ -186,8 +186,9 @@ async function runAttach(options: RunOptions): Promise<RunResult> {
     const ctx: OmpSessionContext = {
       cwd: project,
       ui: {
-        setWidget(_key: string, text: string): void {
-          if (text.includes(ACTIVE_PAINT)) {
+        setWidget(_key: string, text: string | string[]): void {
+          const line = Array.isArray(text) ? text.join("\n") : text;
+          if (line.includes(ACTIVE_PAINT)) {
             paintedActive();
           }
         },
