@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-22
+
+### Fixed
+- fix(omp19): widget paints as array lines for RPC emission (#253) (7ae9afc)
+
 ## [0.9.4] - 2026-11-22
 
 ### Added
