@@ -104,7 +104,7 @@ paths:
                 $ref: '#/components/schemas/ToolResult'
   /tools/write:
     post:
-      summary: Registered write through the realm (5 Realm tools: exec, read, write, list, status)
+      summary: "Registered write through the realm (5 Realm tools: exec, read, write, list, status)"
       operationId: toolWrite
       responses:
         '200':

@@ -243,3 +243,249 @@ When deduplication runs before creation
 Then 1 issue exists per phase for 8 phases (12, 13, 14, 16, 17, 18, 19, 20) with 0 duplicate phase titles, each issue links 1 phase id, 1 or more plan ids and 1 or more requirement ids, titles are 1 short line, and detail lives in 1 collapsible Agent notes section per issue with 1 sub-issue per plan or requirement
 check: issue counts, title lengths and link fields
 automated: true
+
+## US-111 — Realm start-error debug and clean start
+
+AC-33 story: US-111
+Given a fresh build and a configured workspace directory that exists
+When realm up runs
+Then it reaches active with 1 container and 0 ERR_MODULE_NOT_FOUND errors
+check: realm up exit code and error text
+automated: true
+
+AC-34 story: US-111
+Given a stored config whose workspaceRoot points at 1 nonexistent directory
+When realm up runs
+Then it exits 1 with POLICY_DENIED and names 1 missing directory
+check: exit code and diagnostic text
+automated: true
+
+AC-35 story: US-111
+Given a fresh build with 1 audit chain module present
+When the daemon starts
+Then 0 module-load errors occur and 1 audit chain head is readable
+check: start exit code and chain head read
+automated: true
+
+## US-112 — Optional Omp plugin toggle
+
+AC-36 story: US-112
+Given a default install with no toggle setting recorded
+When the plugin loads
+Then 5 Realm tools are registered and 1 status paint occurs
+check: tool count and paint count
+automated: true
+
+AC-37 story: US-112
+Given a stored toggle set to off
+When the plugin loads hermetically
+Then 0 Realm tools are registered, 0 paints occur, and 0 workspace mutations occur
+check: hermetic tool count, paint count and mutation count
+automated: true
+
+AC-38 story: US-112
+Given a stored toggle set to off
+When Realm restarts 1 time
+Then 0 Realm tools remain registered and the persisted value is still off
+check: persisted flag and tool count
+automated: true
+
+## US-113 — Realm UI merged into the additional UI
+
+AC-39 story: US-113
+Given an active realm with the toggle on
+When 1 status paint executes
+Then 0 calls reach the under-bar status surface and 1 render lands in the additional UI region
+check: paint target call counts
+automated: true
+
+AC-40 story: US-113
+Given the daemon snapshot reports 1 of 4 states
+When 4 paints run, one per state among unbound, connecting, active and error
+Then painted text matches the snapshot in 4 of 4 cases with 1 label per paint
+check: painted text equality across 4 states
+automated: true
+
+AC-41 story: US-113
+Given the toggle set to off
+When 1 status poll runs
+Then 0 paints occur and the last truthful text is retained unchanged
+check: paint count and retained text
+automated: true
+
+## US-114 — Production-grade quality bar on the release line
+
+AC-42 story: US-114
+Given the change branch
+When the 8 standard gate commands run
+Then each exits 0 with 0 failures across all suites
+check: gate exit codes
+automated: true
+
+AC-43 story: US-114
+Given CI on Node 22 and Node 24 legs
+When the continuous integration workflow runs
+Then the run is green on 2 of 2 versions with 0 failed jobs
+check: continuous integration job verdicts
+automated: true
+
+AC-44 story: US-114
+Given the baseline dependency count
+When the vulnerability audit runs
+Then the audit exits 0 and the dependency count differs by 0 from the baseline
+check: audit exit code and dependency count delta
+automated: true
+
+## US-115 — Phase 55: Omp plugin health check
+
+AC-45 story: US-115
+Given injected fakes with 1 healthy plugin installed
+When the doctor check runs
+Then 1 check reports pass and names 1 installed version
+check: doctor report line
+automated: true
+
+AC-46 story: US-115
+Given 3 failing cases among not installed, wrong version and not loaded
+When the doctor check runs
+Then it reports 1 named remedy per case in 3 of 3 cases and 0 installs or removals occur
+check: remedy text and mutation count
+automated: true
+
+AC-47 story: US-115
+Given the Omp lifecycle runbook
+When each doctor outcome is read
+Then 1 section maps 3 outcomes to remedies with dated evidence cited and 0 steps signal foreign processes
+check: runbook section count and evidence citations
+automated: true
+
+## US-116 — Phase 56: F-51-1 dirty-stop cause
+
+AC-48 story: US-116
+Given a live dirty-stop window
+When 20 consecutive variant-c stop-then-up iterations run
+Then every dirty stop carries 1 failed-step cause code and failedTeardowns equals 0
+check: cause code count and failedTeardowns value
+automated: true
+
+AC-49 story: US-116
+Given the phase record
+When the cause section is read
+Then it names 1 failing step with its reason, or 1 tested reason to carry with 0 folding into F-41-1
+check: record content
+automated: true
+
+AC-50 story: US-116
+Given a bounded cause fix
+When 20 iterations complete
+Then every wait stays bounded by 1 timeout each and the orphan count stays 0
+check: wait bounds and orphan count
+automated: true
+
+## US-117 — Phase 57: HTIER-01 attribution retest
+
+AC-51 story: US-117
+Given a live Grok Build session on the production stack
+When it writes both files
+Then 1 audit line carries grok-build attribution with 1 handshake and 6 tools listed
+check: audit attribution and tool count
+automated: true
+
+AC-52 story: US-117
+Given the retest outcome
+When the registry row and gap rows are read
+Then HTIER-01 is met, or GAP-40-01 stays accepted-residual with 1 missing feature named and 1 verified workaround documented
+check: registry row and gap row content
+automated: true
+
+## US-118 — Phase 58: KIMV-02 recorder fix and rerun
+
+AC-53 story: US-118
+Given the old recorder code
+When 1 hermetic response test runs
+Then the old code drops 1 response and the fixed code retains 1 response
+check: dropped and retained counts
+automated: true
+
+AC-54 story: US-118
+Given a live rerun with the fixed recorder
+When the kimi mcp test runs 1 time
+Then 1 wire log is kept with full output and 1 version plus date recorded
+check: wire log count and version and date fields
+automated: true
+
+AC-55 story: US-118
+Given the rerun result
+When the phase record and gap rows are read
+Then KIMV-02 is met, or carried with 1 tested reason and the GAP-43-03 label is unchanged
+check: phase record and gap label
+automated: true
+
+## US-119 — Phase 59: concurrent binding behind ratification
+
+AC-56 story: US-119
+Given no owner ratification citing a date
+When the change is submitted
+Then 0 implementation files land and 1 gate-blocking statement records the missing ratification
+check: merged file count and gate statement
+automated: true
+
+AC-57 story: US-119
+Given ratification cited by date
+When implementation lands
+Then it follows 53-DESIGN section 4 surfaces with 1 new module, 2 path helpers, 0 new catalogue codes and 0 shims
+check: file list and catalogue diff count
+automated: true
+
+AC-58 story: US-119
+Given a dated ratification
+When 6 hermetic contention cases run
+Then 6 of 6 cases pass with stale takeover capped at 3
+check: test counts and takeover cap
+automated: true
+
+## US-120 — Notion and Linear tracking through Notion
+
+AC-59 story: US-120
+Given the Notion workspace
+When each of 5 phases 55 to 59 is queried
+Then 5 pages exist, 1 per phase, each linking 1 phase id and 1 status
+check: page count per phase
+automated: true
+
+AC-60 story: US-120
+Given the Linear workspace
+When the 5 phases are listed
+Then 5 issues exist with 0 duplicates, each linking 1 phase id, 1 or more plan ids and 1 or more requirement ids
+check: issue counts, duplicate count and link fields
+automated: true
+
+AC-61 story: US-120
+Given 1 phase page and its issue
+When either record is opened
+Then each references 1 counterpart link by id
+check: link field equality
+automated: true
+
+## US-121 — Green-CI pull request merge to main
+
+AC-62 story: US-121
+Given the pull request to main
+When the 11 verification checkboxes run
+Then 11 of 11 exit 0 with every template section completed
+check: checkbox results and section completion
+automated: true
+
+AC-63 story: US-121
+Given the pull request
+When review completes
+Then Greptile reports 5 of 5 reviews with 0 open comments and 1 reviewer approval before merge
+check: Greptile verdict and approval count
+automated: true
+
+AC-64 story: US-121
+Given the merged pull request
+When main is read at the merge commit
+Then 1 squash merge exists with 0 edited version fields and 0 CHANGELOG lines in the diff
+check: merge commit count and diff stat
+automated: true

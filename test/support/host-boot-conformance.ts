@@ -153,11 +153,12 @@ async function attachOkReadback(factory: HostBootHookFactory, manifest: HostPlug
     const status = rig.hook.status();
     assert.equal(status.state, "active");
     assert.equal(status.mode, "fail-closed", "the mode is the one the daemon reports");
-    const painted = rig.sink.statuses.map((entry) => entry.text);
+    // Status paints only: the boot toggle line rides its own widget key (realm-plugin-toggle) and is not a status paint.
+    const painted = rig.sink.statuses.filter((entry) => entry.key === "realm").map((entry) => entry.text);
     assert.ok(painted.length >= 1 && painted.length <= 2, `one paint per distinct state, saw ${String(painted.length)}`);
     assert.equal(new Set(painted).size, painted.length, "an identical paint is not repeated");
     await rig.timers.advance(3 * rig.boot.statusPollMs);
-    assert.equal(rig.sink.statuses.length, painted.length, "an unchanged status repaints nothing");
+    assert.equal(rig.sink.statuses.filter((entry) => entry.key === "realm").length, painted.length, "an unchanged status repaints nothing");
     assert.equal(rig.hook.status().state, "active");
   });
 }

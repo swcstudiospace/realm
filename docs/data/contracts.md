@@ -35,6 +35,9 @@ Fields: `pid`, `pgid` (must equal `pid`), `startTicks`, `bootId` — all require
 
 ## C9 — `SC-ReleaseEvidence` v1.0.0 (Phase 20)
 `ReleaseArtifact {version, tarballSha256, sbomRef, attestationRef}`, `RollbackRecord {releaseId, prereleaseMarked, docsTag, mainUnchanged}`, `ChangelogEntry {commit, type, removedBy?}`. Immutable once written; a correction is a new record that supersedes, never an edit.
+## C10 — `SC-PluginBoot` v1.0.0 (persisted manifest `boot` block; M-2026-006)
+
+BACKWARD compatible (additive-optional). Before: `startupBudgetMs` (integer, optional), `reattach` (object, optional). After: + `enabled` (boolean, optional, default `true`) (ADR-0001, US-112). No removal, rename, retype, or new required persisted field (`data_contract_field_compat`: `compatible: true`, `additive: ["enabled: new optional field"]`). `ResolvedBoot.enabled` is required in the resolved view with default `true` (`resolveBoot`, sole producer) — a resolved-view addition, not a persisted required field. Unknown `boot` keys and a non-boolean `enabled` are `SCHEMA_INVALID` (closed keys, D-12). The write/read path is the A03 `API-RealmOmpPlugin` `PUT`/`GET /plugin/toggle` operations against this field; gate counts (off ⇒ 0 tools, 0 paints) are A05/A08 checks, not contract-shape checks.
 
 ## PII classification (100% coverage of new fields)
 
@@ -43,6 +46,8 @@ Fields: `pid`, `pgid` (must equal `pid`), `startTicks`, `bootId` — all require
 | `workspaceRoot` (session record only) | `PII-indirect` / host-local path | Persisted only in `sessions/<id>.json` (0600, 0700 dir); never in audit, log, evidence, or release bundles; excluded from exports |
 | `correlationId`, `sessionId`, `containerId`, `seq`, `prev`, hashes | not PII | Join keys / integrity values; safe to log |
 | `content` (tool write), workspace file bytes, checkpoint tree | unclassified payload — **never copied into audit/log** | Only `path` (workspace-relative) + `sha256` are audited; bytes stay in the workspace/checkpoint |
-| All other fields in C1–C9 | not PII | — |
+| `boot.enabled` (persisted manifest `boot` block, `SC-PluginBoot`) | not PII — operator preference boolean | No masking (no personal data); never copied to audit/log/evidence |
+| `DiagnoseResponse.missingPath` (`API-RealmOmpPlugin` `startDiagnose`) | `PII-indirect` / host-local path (same category as `workspaceRoot`) | Operator-local stderr/doctor output only; never persisted, never in audit/log/evidence (ADR-0003) |
+| All other fields in C1–C10 | not PII | — |
 
 No new field may be added to any contract without a classification row in this table (self-gate, A07 decision logic §4). Masking rule for non-prod environments: PII-indirect fields are replaced by their `sessionId`-derived pseudonym in any exported evidence bundle. There is no retention entry for PII because there is no PII store; `workspaceRoot` retention follows the session record (§11 of `models.md`).

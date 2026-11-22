@@ -98,7 +98,7 @@ components:
       properties:
         title:
           type: string
-          description: 1 short line naming the phase, e.g. Phase 12: scripted harness and spike
+          description: "1 short line naming the phase, e.g. Phase 12: scripted harness and spike"
         phaseId:
           type: string
         correlationId:

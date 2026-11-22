@@ -68,7 +68,7 @@ function makeGate(): Gate {
 class FakeUi implements OmpStatusUi {
   readonly texts: string[] = [];
 
-  setStatus(key: string, text: string): void {
+  setWidget(key: string, text: string): void {
     if (key === REALM_STATUS_KEY) {
       this.texts.push(text);
     }

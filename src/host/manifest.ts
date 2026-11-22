@@ -122,8 +122,14 @@ function parseEntry(value: unknown): string {
 }
 
 function parseBoot(value: unknown): BootBounds {
-  const obj = strictObject(value, ["startupBudgetMs", "reattach"]);
-  const out: { startupBudgetMs?: number; reattach?: NonNullable<BootBounds["reattach"]> } = {};
+  const obj = strictObject(value, ["enabled", "startupBudgetMs", "reattach"]);
+  const out: { enabled?: boolean; startupBudgetMs?: number; reattach?: NonNullable<BootBounds["reattach"]> } = {};
+  if (obj["enabled"] !== undefined) {
+    if (typeof obj["enabled"] !== "boolean") {
+      reject();
+    }
+    out.enabled = obj["enabled"];
+  }
   if (obj["startupBudgetMs"] !== undefined) {
     out.startupBudgetMs = integerIn(obj["startupBudgetMs"], 1, 200000);
   }

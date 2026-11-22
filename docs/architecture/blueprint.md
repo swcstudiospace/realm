@@ -215,3 +215,90 @@ Current fitness state (read-only checks, this task): F1 pass (0 violations), F2 
 Decided (L2, catalog patterns): three-lane DAG with 20 last; fail-closed default; scripted-provider oracle for OMPX-01..05; per-session `realm-<sessionId>` identity with re-adoption under the 14-check verifier; seq/prev audit chain; quality ratchet (audit, pack-smoke, coverage floors, fake-clock, fast-check, mutation); 33-sub-issue Linear model; fan-out budget 8; layer order in §4.
 
 UNVERIFIED (never inferred from a skipped tool): contract check (`arch_contract_check` script not run — parent runs after join); live NFR measurements (Podman 5.x realm account only); HARN-03 zero-offender acceptance (awaiting owner ruling on 9931 + lever); OMPX-05 /workspace + host + audit pair triple (needs doubly-gated real-stack run); A10 threat co-sign; Greptile 5/5 and CI green per phase (per-PR evidence).
+
+## 17. v9.0 addendum — toggle, UI merge, start repair, tracking, ship (Ta08e-arch)
+
+**Scope.** US-111..US-121 and AC-33..AC-64 on branch `gsd/close-harn03-crash04-next`, release line 0.9.x. Sections 1–16 are unchanged; this section is normative for v9.0. No product code is written or committed under this task. Inputs: `docs/requirements/spec.md` §11, `docs/requirements/nfr.md`, `docs/requirements/stories.md` US-111..US-121, `docs/acceptance.md` AC-33..AC-64, `docs/requirements/traceability.md`.
+
+### 17.1 Decisions (all L2 catalog patterns; no breaking change)
+
+| Decision | ADR | Effect |
+|---|---|---|
+|---|---|---|
+| Persisted toggle, default on | `docs/adr/0001-optional-omp-plugin-toggle-defaults-on.md` (ADR-0001, accepted; `arch_adr_transition` proposed→accepted `allowed=true`) | `BootBounds.enabled` + `ResolvedBoot.enabled`, default true; `createRealmPlugin` gates tool loop, retry command, lifecycle attach/poll and the paint funnel |
+| Additional-UI paint, 0 under-bar | `docs/adr/0002-merge-realm-status-into-the-additional-ui-widget.md` (ADR-0002) | Single `paint()` funnel routes to the Omp additional-UI widget only; `ctx.ui.setStatus` paints become 0 when on; off-path paints 0 and retains the last truthful text |
+| Named missing-workspaceRoot diagnostic | `docs/adr/0003-name-the-missing-workspaceroot-in-the-start-diagnostic.md` (ADR-0003) | `bindRoot` failure names 1 missing directory with 1 remedy on operator-local surfaces only; audit/log stay value-free |
+| Contract-first publish | `docs/adr/0004-publish-the-omp-plugin-contract-before-implementation-tasks.md` (ADR-0004) | `API-RealmOmpPlugin` 1.0.0 (4 operations) is IN_REVIEW before implementers CLAIM; `arch_adr_supersession` `valid=true`, heads ADR-0001..0004, no dangling/forks/cycles |
+
+Autonomy: all four ADRs are L2. The container is internal (the Omp host extension boundary), not external-facing, and no new infrastructure or first-party dependency is introduced, so no L3 stop applies. `arch_breaking_readiness` on the additive design returns `autonomy_level=L2`, `ready=true`, `missing=[]`.
+
+### 17.2 Contract changes (what changed, whether breaking)
+
+| Contract | File | Version | Operations | Breaking? |
+|---|---|---|---|---|
+| API-RealmOmpPlugin (new) | `docs/architecture/contracts/api-realm-omp-plugin.yaml` | 1.0.0 | 4 | No — initial version, additive by construction |
+| API-RealmControl (quoting repair only) | `docs/architecture/contracts/api-realm-control.yaml` | 1.0.0 (unchanged) | 7 | No — 1 line quoted (`summary` colon); parsed content identical |
+| API-GsdLinear (quoting repair only) | `docs/architecture/contracts/api-gsd-linear.yaml` | 1.0.0 (unchanged) | 5 | No — 1 line quoted (`description` colon); parsed content identical |
+
+Evidence: `arch_contract_ops` on the new document returns `operations=4`; `arch_contract_check` (python) on the new file reports 1 contract, 0 breaking changes, 0 findings, verdict pass; a `--root` scan reports 3 contracts (5/7/4 operations), 0 breaking, verdict pass. `shared_verdict` on the observed severities returns `pass`. `arch_field_breaks` on the toggle request (base `image`/`stateDir`/`workspaceRoot` → head plus optional `pluginEnabled`) returns `breaking_change=false`, `additive=["added field pluginEnabled"]`. `arch_semver_bump` 1.0.0→1.1.0 for an additive change returns `bump=minor`, `required_bump=minor`, `compliant=true` — the pattern A05 follows when the toggle surface grows. The repair in the two pre-existing files was needed because the checker rejects unquoted colons; the semantic payload (ids, strings, ops) is unchanged, so no major bump and no consumer re-ack follows from the repair itself.
+
+### 17.3 Start-error repair (US-111, AC-33..AC-35)
+
+- **Stale `dist` module (`ERR_MODULE_NOT_FOUND dist/src/audit/chain.js`).** `src/audit/chain.ts` is the module and `src/daemon/main.ts` imports `../audit/chain.js`; the failure is a stale `dist`, closed by a fresh `npm run build`. Design bound: no source change; the hermetic proof is build-then-import-smoke of `dist/src/audit/chain.js` with 0 module-load errors and 1 readable audit chain head (AC-35). This matches the brief's "exists now" observation.
+- **Stale `workspaceRoot` (`POLICY_DENIED`).** `startDaemon` binds the ceiling with `bindRoot(config.workspaceRoot)` (`src/daemon/daemon.ts`) and `bindRoot` (`src/fs/root.ts`) realpaths and requires a directory, refusing `POLICY_DENIED` otherwise. The defect is the pathless refusal, not the refusal. Design: the refusal carries an operator-local diagnostic naming the missing directory and one remedy — point `workspaceRoot` at an existing account-owned directory, or remove the stale config (AC-34). `loadRuntimeConfig` (`src/runtime/config.ts`) stays shape-only (closed keys, `SCHEMA_INVALID`); existence is a bind-time fact, never a schema fact. Audit and request logs keep fixed text with 0 values (NFR-C1). Config repair is an operator action; the daemon never rewrites the stored config.
+- **Live bound (A08):** fresh-build `realm up` reaches active with 1 container and 0 `ERR_MODULE_NOT_FOUND` (AC-33); stored-missing-`workspaceRoot` exits 1 with `POLICY_DENIED` naming the directory (AC-34). Hermetic first: fake-fs bind cases pin both outcomes before the live window.
+
+### 17.4 Optional plugin toggle (US-112, AC-36..AC-38, NFR-S2)
+
+- **Storage.** `BootBounds.enabled?: boolean` in `src/host/types.ts` (`HostPluginManifest.boot`), parsed by `parseHostPluginManifest`, resolved by `resolveBoot` into `ResolvedBoot.enabled` (default `BOOT_BOUNDS.reattach.enabled = false` precedent; toggle default is the opposite: `true`). The extension edge (`src/omp/extension.ts`, one of the 4 allowed `process.env` readers) may additionally read `REALM_OMP_ENABLED` (unset/`1` = on, `0` = off, anything else fails the load, mirroring `reattachEnabledOf`) and intersects it with the manifest value. Persistence across a restart is the persisted manifest/settings value, proved by AC-38.
+- **Gating (single funnel).** When disabled, `createRealmPlugin` registers 0 Realm tools, 0 retry command, arms 0 poll/attach timers, never calls `attachDaemon`, and every `paint*` path early-returns. The `tool_call` guard is not registered, so built-ins keep their default set (0 workspace mutations). The switch is orthogonal to `reattach.enabled`, which is unchanged.
+- **Proof (hermetic before live).** A fake-`OmpExtensionApi` test counts `registerTool` calls (5 on / 0 off), `registerCommand` (1 on / 0 off), paint calls (1 session poll on / 0 off), and byte mutations (0 off). Default-install (no stored setting) registers 5 tools and paints once (AC-36).
+- **Boundaries.** Layering is unchanged: `omp-plugin` (surface) → `host-boot`/`host-manifest` (orchestration) → `core-errors` (platform); the toggle adds no new cross-layer edge. No new dependency; `acp`/`mcp` surfaces are unaffected.
+
+### 17.5 UI merge (US-113, AC-39..AC-41, NFR-A2/NFR-A1)
+
+- **Target.** The Omp host's additional-UI widget region above the editor, rendered by the host (`ctx.ui.setWidget` per `docs/integration/omp.md` Q3, upstream-sourced). `adapters/omp/index.js` stays the host shim and gains no Realm logic. The host-neutral `HostStatusSink` (`src/host/types.ts`) keeps its 2-method shape; the widget sink is an Omp-interface extension, so `src/host/boot-driver.ts` is unchanged.
+- **Truthfulness.** The painted text is the existing `renderRealmStatus` text (`<marker> <label> · <reason> · <time> · <mode disclosure>`) from `src/core/status.ts` — 1 label per paint, color-independent cue (`●`/`○` plus label, NFR-A1). 4 of 4 daemon states (active, disconnected, error, connecting) paint the snapshot label (AC-40). Cache discipline is unchanged: identical text stays quiet; a throw leaves the cache stale for repaint.
+- **Off-path.** Toggle off → 0 paints, last truthful text retained unchanged (AC-41). Toggle on → 1 render in the widget region, 0 calls to the under-bar status surface (AC-39), counted by the fake host's widget vs status call tallies.
+- **Host-signature caveat (UNVERIFIED, not a silent pass).** The exact `setWidget` shape is upstream-sourced only (`docs/integration/omp.md` Q3; official pages state `ctx.ui` carries widgets without fixing the signature — the recorded OQ-P5-01 limitation). A05 must spike-verify the deployed Omp version's signature first (OMPX-01 pattern) and pin it in `test/omp/` against a fake before the live paint proof; if the deployed host lacks the widget at all, this section needs a superseding ADR rather than a fallback under-bar paint, because AC-39 forbids under-bar paints.
+
+### 17.6 v9.0 phase bound (US-115..US-119) and tracking (US-120)
+
+- Phase 55 (HEALTH-01/02): hermetic doctor cases on injected fakes are the design; the runbook maps 3 outcomes (not installed, wrong version, not loaded) to remedies with 0 installs/removals. No new container.
+- Phase 56 (STOP-05/06), 57 (HTIER-01), 58 (KIMV-02): live-window items. Design bound is the hermetic half only; a failed live half is carried with 1 tested reason (spec §11.10). No container or contract change.
+- Phase 59 (CBIND-01..03): **zero implementation files** until owner ratification of `53-DESIGN.md` cited by date (AC-56). After ratification: 1 new module, 2 path helpers, 0 new catalogue codes, 0 shims (AC-57); 6-of-6 hermetic contention, stale takeover capped at 3 (AC-58). Provisional until the gate passes — never passes a live gate early.
+- Tracking (AC-59..AC-61): 5 Notion pages and 5 Linear issues (phases 55–59), deduplicated before creation, bidirectionally linked by id. `API-GsdLinear` 1.0.0 enumerates phases 12–20; extending it to 55–59 is additive (new phase ids, new ops unchanged) and, if A01 requires it in-contract, follows the 1.1.0 minor pattern above. A03 bounds; A01 executes creation. Notion is the hub.
+- Ship (AC-62..AC-64): 11/11 template checks, Greptile 5/5 with 1 approval, 1 squash merge, 0 version/CHANGELOG edits. Protected-path human review still applies (§8).
+
+### 17.7 Containers, layering, cycles, coupling (fitness evidence)
+
+- C4: `arch_c4_fanout` returns `container_count=16` (prior 15 + `OmpAdditionalUI`), `relation_count=19`, `max_fan_out=4` (RealmDaemon), `over_budget=[]`, `isolated=[]` against the fan-out budget **8**.
+- Layers: `arch_layer_violations` returns `violation_count=0`, `checked_edges=9`, `unassigned=[]` over `surface → orchestration → runtime → domain → platform`.
+- Cycles: `arch_cycle_check` returns `has_cycle=false`, `node_count=10`, `cyclic_node_count=0`.
+
+### 17.8 NFR allocation (7 NFRs, 100%)
+
+`arch_nfr_allocation` returns `nfr_count=7`, `allocated=[NFR-P1, NFR-S1, NFR-S2, NFR-A1, NFR-A2, NFR-I1, NFR-C1]`, `unallocated=[]`, `unmeasurable=[]`, `coverage_pct=100`, `fully_allocated=true`. Detail:
+
+| NFR | Kind | Binding (clause / component budget) | Limit |
+|---|---|---|---|
+|---|---|---|---|
+| NFR-P1 | quantitative | Component budget: `realm up` active; control read | 200 s; 10 s, 1 response |
+| NFR-S1 | quantitative | Clause: `API-RealmControl /tools/write` fail-closed | 0 successes disconnected |
+| NFR-S2 | quantitative | Clause: `API-RealmOmpPlugin /plugin/toggle` | 0 tools + 0 paints off; 5 on |
+| NFR-A1 | qualitative | Clause: 1 of 2 labels + color-independent cue | 1 label per paint |
+| NFR-A2 | quantitative | Clause: `API-RealmOmpPlugin /plugin/status-paint` | 0 under-bar paints; 4 of 4 truthful |
+| NFR-I1 | quantitative | Clause: frozen catalogue codes C + en_US, English text | 0 locale parses |
+| NFR-C1 | qualitative | Clause: redaction sentinel; AGPL-3.0-only | 0 telemetry; 0 PII fields |
+
+Budgets vs measurements: `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, tools_when_off max 0} and no measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, tools_when_off]`. That is the honest fail-closed reading: measurements are pending hermetic and live proof (the checkout host has Podman 4.9.3; live proof runs on the realm account). F5 stays UNVERIFIED — never a pass.
+
+### 17.9 Tech stack (changes: none)
+
+The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:test`, `fast-check`), rootless Podman 5.x digest-pinned, OpenShell 0.1.5 + Realm compute driver, GitHub Actions attested release. The toggle, widget paint, and diagnostic use only existing host/daemon APIs — **no new first-party dependency, no new infrastructure, no licence change** (AGPL-3.0-only preserved). Any future pick outside §10 remains an ADR; infrastructure or dependency picks are L3.
+
+### 17.10 What was decided vs UNVERIFIED (v9.0)
+
+Decided: persisted default-on toggle gating a single registration/paint funnel; widget-only paint with 0 under-bar calls; operator-local named diagnostic with 0 audit/log leakage; contract-first publish at 1.0.0 with 4 operations; 7-NFR 100% allocation; fan-out budget 8 held (max 4); phase-59 code gate is absolute.
+
+UNVERIFIED (never inferred): live `setWidget` signature on the deployed Omp version (spike-verify first; a missing widget needs a superseding ADR, not a fallback paint); hermetic counts (5/0 tools, 1/0 paints, 4-of-4 states) — no fake-host run under this task; live starts (AC-33/34), phases 56/57/58 live windows, phase-59 ratification; A10 co-sign of the §17 threat deltas; 8 gates green / CI green / Greptile 5/5 on the change branch (parent owns after join).

@@ -2,7 +2,7 @@
 // the state directory and the control socket once, builds the attach path and the boot observer, and hands them to the
 // plugin. The plugin itself stays free of environment and runtime reads.
 //
-// The bounds come from the omp manifest through resolveBoot (src/host/boot.ts); the one switch this edge reads is REALM_OMP_REATTACH.
+// The bounds come from the omp manifest through resolveBoot (src/host/boot.ts); the two switches this edge reads are REALM_OMP_REATTACH and REALM_OMP_ENABLED (the persisted plugin toggle, ADR-0001).
 // The attach is the shared one (createDaemonAttach, src/host/attach.ts) with refusal retention "verified". The presence marker, the
 // boot log line and the host-boot report go through the shared observer (createBootObserver, src/host/boot-observer.ts), driven by
 // the plugin's onAttach and onSessionEnd callbacks; none of the three ever changes an attach outcome.
@@ -51,6 +51,20 @@ export function reattachEnabledOf(value: string | undefined): boolean {
   throw makeRealmError("SCHEMA_INVALID");
 }
 
+// The plugin toggle switch (ADR-0001, US-112). Unset and 1 leave the plugin on (default-on), 0 turns
+// it off. Any other value is a bad setting (SCR-OmpPluginToggle error.invalid-setting: only on/off
+// exist) and fails the load with SCHEMA_INVALID. Toggling never sends up/down and never touches the
+// sandbox; it only gates registration and paints in the plugin. Orthogonal to REALM_OMP_REATTACH.
+export function pluginEnabledOf(value: string | undefined): boolean {
+  if (value === undefined || value === "1") {
+    return true;
+  }
+  if (value === "0") {
+    return false;
+  }
+  throw makeRealmError("SCHEMA_INVALID");
+}
+
 // Event fields are bounded the way a boot report's are (src/host/boot-report.ts): attempts 1 to 9, durations up to 600 000 ms.
 const MAX_ATTEMPT = 9;
 const MAX_DURATION_MS = 600_000;
@@ -62,8 +76,10 @@ export default function realmExtension(pi: OmpExtensionApi): void {
   const stateDir = readHostRuntime(process.env).stateDir;
   // The re-attach switch is read once, here: a value that is neither unset, 0 nor 1 fails the load before anything registers.
   const reattachEnabled = reattachEnabledOf(process.env.REALM_OMP_REATTACH);
+  // The plugin toggle switch is read once, here: unset or 1 leaves it on (default-on), 0 turns it off.
+  const pluginEnabled = pluginEnabledOf(process.env.REALM_OMP_ENABLED);
   const bounds = resolveBoot(
-    parseHostPluginManifest({ ...defaultManifestFor("omp", packageVersion()), boot: { reattach: { enabled: reattachEnabled } } }),
+    parseHostPluginManifest({ ...defaultManifestFor("omp", packageVersion()), boot: { enabled: pluginEnabled, reattach: { enabled: reattachEnabled } } }),
   );
   const socketPath = controlSocketPath(stateDir);
   const daemonEntry = fileURLToPath(new URL("../daemon/main.js", import.meta.url));

@@ -95,3 +95,28 @@ Legend: **M** = mitigation (control, owner, test).
 ## 4. Out of scope
 
 No new threat-model text is invented beyond the containers already in the blueprint; cells that cannot be filled with a control + owner + test would be open questions (§3), never marked accepted.
+
+## 5. v9.0 addendum (Ta08e-arch) — toggle, widget paint, start diagnostic
+
+**Status:** proposed deltas, A10 co-sign pending. No risk is marked accepted by A03.
+
+### X1 addendum — Operator/OmpHost → RealmDaemon (toggle)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+|---|---|
+| Spoofing | Forged toggle value silencing the plugin. **M:** toggle is operator-owned persisted state (manifest/settings), not model input; invalid values fail the load, never silence silently. Owner: omp-extension edge. Test: invalid-toggle load refusal. |
+| Elevation of privilege | Off-path leaves built-ins free to mutate unsandboxed. **M:** off registers 0 Realm tools and arms 0 attach paths; the fail-closed guard is the host's own default, not Realm's to weaken. Residual: with the plugin off, Omp runs unguarded by design — operator choice, stated in the contract, never a pass. Owner: omp-plugin. Test: hermetic 0-registration/0-paint/0-mutation |
+
+### X7 addendum — OmpHost additional UI (widget paint)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+| Tampering | Widget text spoofing a state Realm never reported. **M:** painted text is `renderRealmStatus` output from the daemon snapshot via the single `paint()` funnel; 0 second paint paths; cache keyed per UI. Owner: omp-plugin. Test: 4-of-4 snapshot equality (AC-40) |
+| Information disclosure | Path or secret in widget text. **M:** status text carries label, reason (catalogue code or fixed reason), time, mode only; never a path, token, or daemon text. Owner: plugin/status. Test: text-shape assertions |
+
+### X1 addendum — start diagnostic (workspaceRoot)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+| Information disclosure | Missing-directory naming leaks a path. **M:** naming is operator-local only (stderr/doctor); audit and request logs keep fixed text with 0 values; no telemetry. Owner: daemon/fs. Test: audit redaction suite (NFR-C1) + log-shape check |

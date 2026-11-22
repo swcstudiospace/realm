@@ -8,9 +8,11 @@
 // The host surface and its evidence are recorded in docs/integration/omp.md:
 //   - pi.on handles session_start, session_switch, session_shutdown and tool_call.
 //   - session_switch keeps the attachment when its payload has no working directory.
-//   - ctx.cwd selects the workspace; ctx.ui.setStatus and notify carry status and warnings.
+//   - ctx.cwd selects the workspace; ctx.ui.setWidget paints the status in the additional-UI region
+//     (ADR-0002, US-113): the under-bar ctx.ui.setStatus surface is never used after the merge.
 //   - Managed timers are cleared by the host at shutdown and by the plugin when it ends the session.
-//   - pi.registerCommand registers retry; pi.registerTool registers the five Realm tools.
+//   - pi.registerCommand registers retry; pi.registerTool registers the five Realm tools. When the
+//     persisted toggle (bounds.enabled, ADR-0001) is off, the plugin registers 0 tools and paints 0 times.
 //   - getAllTools/getActiveTools/setActiveTools maintain the fail-closed allowlist.
 // bash remains on the allowlist and the tool_call backstop refuses it. Neither removal nor
 // the hook covers every host path (OQ-P5-02). The host fails closed on hook errors or timeouts.
@@ -24,7 +26,6 @@ import type { DaemonClient, DaemonStatus } from "../daemon/client.js";
 import { SentRequestError } from "../daemon/channel.js";
 import type { PolicyMode } from "../contract/validate.js";
 import type { StateSnapshot } from "../core/state-machine.js";
-import { STATUS_LABELS, displayStatus } from "../core/status.js";
 import {
   PASS_THROUGH_HOST_TOOLS,
   REALM_WRITE_NAME,
@@ -43,13 +44,23 @@ import {
   type ResolvedBoot,
 } from "../host/boot.js";
 import { hostToolSetOf, modeOf, setHostMode, type HostToolSet } from "./host-tools.js";
+import { nowIso, paint, paintError, paintRefusal, paintStatusRead, paintToggleOnce, shownBySession } from "./status-render.js";
+
+// Status rendering lives in ./status-render.js (extracted to keep this module under the size
+// ratchet); the names below stay importable from here, unchanged.
+export { REALM_STATUS_KEY, REALM_WIDGET_KEY, PLUGIN_TOGGLE_WIDGET_KEY, renderRealmStatus } from "./status-render.js";
 
 // ---- Verified host surface (minimal structural reads) ----------------------
 // Each interface names only members the plugin calls. A richer host object is
 // assignable; the plugin never reads past these members.
 
+// The Omp status UI: the additional-UI widget region (ADR-0002) plus notifications. The widget sink
+// is an Omp-interface extension of the host-neutral HostStatusSink (src/host/types.ts keeps its
+// two-method shape); setWidget signature (key, text) mirrors the host's documented region rendering
+// (docs/integration/omp.md Q3) and is pinned by fake-host tests. There is deliberately no setStatus
+// member here: the under-bar surface must never be reachable from this plugin after the merge.
 export interface OmpStatusUi {
-  setStatus(key: string, text: string): void;
+  setWidget(key: string, text: string): void;
   notify(message: string): void;
 }
 
@@ -171,82 +182,25 @@ export interface ActiveSession {
   onLinkLost: ((code: string) => void) | null;
 }
 
-// The single status key (P5-D5). The label, reason, and time are one item, so the indicator can
-// never present two competing labels.
-export const REALM_STATUS_KEY = "realm";
 export const REALM_RETRY_COMMAND = "realm-retry";
+
+// The Omp plugin toggle text line (SCR-OmpPluginToggle, AC-36/AC-37). State is always a text line,
+// never position or color alone: exactly two states exist. The switch target is 48x28 px (WCAG 2.2
+// SC 2.5.8, a11y sheet); the text line rides the widget/notify surface, the host owns placement.
+// (see pluginToggleLine below): its own key, so the status paints under REALM_WIDGET_KEY keep their
+// dedup and counts untouched. Only the on state can be reached there, because bounds.enabled false
+// returns before any handler exists (AC-37: 0 handlers, 0 paints); the off line stays the contract
+// text for hosts that render it.
+export const PLUGIN_TOGGLE_TARGET = Object.freeze({ widthPx: 48, heightPx: 28 });
+export function pluginToggleLine(enabled: boolean): string {
+  return enabled ? "Realm plugin on — 5 tools registered" : "Realm plugin off — 0 tools registered, status hidden";
+}
 
 // Host tools the tool_call guard checks against the daemon status: edit, the built-in that writes outside the realm. The Realm
 // write is never hidden: it replaces the built-in write (spike S1), reaches the daemon in every state, and the daemon decides it
 // (advisory: the write lands with its warning; fail-closed: refused). The names in PASS_THROUGH_HOST_TOOLS pass the guard; in
 // fail-closed mode the backstop refuses every other tool name.
 export const GUARDED_HOST_TOOLS: readonly string[] = Object.freeze(["edit"]);
-
-// ---- Status rendering (OMP-02, OMP-03; P5-D5) -------------------------------
-// One shared label with a readable marker, reason, time and mode disclosure.
-// Cache the full text per UI so any change repaints and identical status reads stay quiet.
-// A known mode is current only after a successful status read and active-tool readback.
-// On a failed read or application, it describes the last success, not the present tool set.
-
-const lastPainted = new WeakMap<OmpStatusUi, string>();
-
-export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode: PolicyMode | null, confirmed: boolean, reconnectCode?: string): void {
-  const display = displayStatus(snapshot);
-  const marker = display.label === STATUS_LABELS.active ? "●" : "○";
-  const modeText = mode === null ? "mode: unknown" : `${confirmed ? "applied mode" : "last successfully applied mode"}: ${mode}${mode === "fail-closed" ? " (Omp host-tool guard; not host process containment)" : ""}`;
-  const text = `${marker} ${display.label} · ${display.reason}${reconnectCode === undefined ? "" : ` (${reconnectCode})`} · ${display.lastTransitionAt} · ${modeText}`;
-  if (lastPainted.get(ui) === text) {
-    return;
-  }
-  // Cached only after the write succeeds: a throw above leaves the cache stale, so the next
-  // render repaints instead of skipping it (MED-03).
-  ui.setStatus(REALM_STATUS_KEY, text);
-  lastPainted.set(ui, text);
-}
-
-// The state and catalogue code a session last painted, read by view(). Kept beside the session, not on it, so ActiveSession keeps
-// its shape. code is set only for a paint that carries a catalogue code.
-const shownBySession = new WeakMap<ActiveSession, { readonly state: StateSnapshot["state"]; readonly code: string | undefined }>();
-
-// The one funnel every status paint goes through: it renders the text and records what was shown. reconnectCode is the code the
-// text carries after the reason; shownCode defaults to it, and an error paint (whose reason is the code) passes its own.
-function paint(
-  session: ActiveSession,
-  snapshot: StateSnapshot,
-  mode: PolicyMode | null,
-  confirmed: boolean,
-  reconnectCode?: string,
-  shownCode: string | undefined = reconnectCode,
-): void {
-  renderRealmStatus(session.ctx.ui, snapshot, mode, confirmed, reconnectCode);
-  shownBySession.set(session, { state: snapshot.state, code: shownCode });
-}
-
-// Paints an error whose reason is a catalogue code.
-function paintError(session: ActiveSession, code: string, at: string, confirmed: boolean): void {
-  paint(session, { state: "error", reason: code, lastTransitionAt: at }, session.mode, confirmed, undefined, code);
-}
-
-// Paints a refusal the attach reported, in the same error rendering a thrown attach error uses: the reason is the refusal's code.
-// The stamp is kept while the same code stands, so repaint ticks stay quiet.
-function paintRefusal(session: ActiveSession, code: string, confirmed = false): void {
-  const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
-  session.errorStamp = { code, at };
-  paintError(session, code, at, confirmed);
-}
-
-// Paints one successful status read. While the daemon reports the state a refusal was reported in, the refusal stays on
-// screen. A read that reports a different state replaces it with the snapshot.
-function paintStatusRead(session: ActiveSession, snapshot: StateSnapshot): void {
-  const refusal = session.refusal;
-  if (refusal !== null && refusal.state === snapshot.state) {
-    paintRefusal(session, refusal.code, true);
-    return;
-  }
-  session.refusal = null;
-  session.errorStamp = null;
-  paint(session, snapshot, session.mode, true);
-}
 
 // ---- Managed timers ----------------------------------------------------------
 // Every timer the plugin arms goes through these two helpers, so the session can clear them all.
@@ -358,18 +312,27 @@ type AttachOutcome =
 
 // Registers the Realm tools, the retry command and the lifecycle handlers. Returns the host tool set this registration shares,
 // so a host or a test can read what the plugin owes, and a read-only view of what it last painted.
+// The persisted toggle (bounds.enabled, ADR-0001, default true) gates everything: when off the plugin
+// registers 0 tools, 0 retry command, 0 lifecycle handlers, arms 0 timers, never calls attachDaemon
+// and paints 0 times (NFR-S2, AC-37). Toggling never sends up/down and never touches the sandbox.
 export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptions): RealmPluginHandle {
+  // The host tool set, shared by every session of this registration.
+  const hostTools = hostToolSetOf(pi);
+  // Every bound comes from src/host/boot.ts. The default is the Phase 21 BOOT_BOUNDS, so a plugin built without bounds behaves as before.
+  const bounds = options.bounds ?? BOOT_BOUNDS;
+  if (!bounds.enabled) {
+    return {
+      tools: hostTools,
+      view: (): RealmPluginView => ({ state: "unbound", mode: null, link: "off" }),
+    };
+  }
   // The live session, or null after shutdown. A settle compares against it: an attach that ends
   // after shutdown, or after a newer attach started, releases its client and paints nothing.
   let live: ActiveSession | null = null;
   let attempt = 0;
-  // The host tool set, shared by every session of this registration.
-  const hostTools = hostToolSetOf(pi);
   // The re-attach policy, or null while re-attach is off (the default). The plugin reads no environment: the edge passes the switch.
   const reattachOption = options.reattach;
   const reattach = reattachOption !== undefined && reattachOption.enabled ? { random: reattachOption.random } : null;
-  // Every bound comes from src/host/boot.ts. The default is the Phase 21 BOOT_BOUNDS, so a plugin built without bounds behaves as before.
-  const bounds = options.bounds ?? BOOT_BOUNDS;
 
   // Ends the captured session. Every timer it armed is cleared and its wait settled, and the poll
   // is cleared, so the host runs no callback for an ended session. The client is closed, never taken
@@ -513,6 +476,9 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
     } else {
       paintRefusal(session, attached.hostCode);
     }
+    // The toggle line paints once per session alongside the first daemon paint, inside this same
+    // error path: a widget failure surfaces as exactly one notice (noticeFailure), never a kill.
+    paintToggleOnce(session, pluginToggleLine(bounds.enabled));
     // The daemon keeps its startup-reap notice for its lifetime; each attach shows it once.
     if (attached.status.notice !== undefined) {
       ctx.ui.notify(attached.status.notice);
@@ -804,12 +770,6 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
 // Registers the plugin and returns only the host tool set it shares, for a host or a test that reads what the plugin owes.
 export function registerRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptions): HostToolSet {
   return createRealmPlugin(pi, options).tools;
-}
-
-// The clock is wall time: the snapshot carries the daemon's own transition instants, and only the
-// connecting and failure paints, which have no daemon snapshot, stamp the host time.
-function nowIso(): string {
-  return new Date().toISOString();
 }
 
 // ---- tool_call guard (OMP-05; P5-D6; OMPX-03 backstop) ----------------------

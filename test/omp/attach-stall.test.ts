@@ -186,7 +186,7 @@ async function runAttach(options: RunOptions): Promise<RunResult> {
     const ctx: OmpSessionContext = {
       cwd: project,
       ui: {
-        setStatus(_key: string, text: string): void {
+        setWidget(_key: string, text: string): void {
           if (text.includes(ACTIVE_PAINT)) {
             paintedActive();
           }
