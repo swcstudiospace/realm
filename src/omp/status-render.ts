@@ -33,7 +33,7 @@ export function paintToggleOnce(session: ActiveSession, text: string): boolean {
   if (typeof ui.setWidget !== "function") {
     return false;
   }
-  ui.setWidget(PLUGIN_TOGGLE_WIDGET_KEY, text);
+  ui.setWidget(PLUGIN_TOGGLE_WIDGET_KEY, [text]);
   togglePainted.add(session);
   return true;
 }
@@ -56,7 +56,7 @@ export function renderRealmStatus(ui: OmpStatusUi, snapshot: StateSnapshot, mode
   }
   // Cached only after the write succeeds: a throw above leaves the cache stale, so the next
   // render repaints instead of skipping it (MED-03).
-  ui.setWidget(REALM_WIDGET_KEY, text);
+  ui.setWidget(REALM_WIDGET_KEY, [text]);
   lastPainted.set(ui, text);
   return true;
 }

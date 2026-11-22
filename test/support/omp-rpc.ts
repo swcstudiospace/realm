@@ -418,13 +418,20 @@ export class OmpSession {
     return this.#exited;
   }
 
-  // The text of the last `setStatus` frame with statusKey "realm"; undefined before the first one or after one that cleared it.
+  // The text of the last paint for statusKey "realm": a `setWidget` frame's first widget line
+  // (Omp 19.1 emits widget paints as array lines), or a legacy `setStatus` frame's statusText.
+  // Undefined before the first paint or after one that cleared it.
   status(): string | undefined {
     for (let index = this.#frames.length - 1; index >= 0; index -= 1) {
       const frame = this.#frames[index];
-      if (frame?.["type"] === "extension_ui_request" && frame["method"] === "setStatus" && frame["statusKey"] === "realm") {
+      if (frame?.["type"] !== "extension_ui_request") continue;
+      if (frame["method"] === "setStatus" && frame["statusKey"] === "realm") {
         const text = frame["statusText"];
         return typeof text === "string" ? text : undefined;
+      }
+      if (frame["method"] === "setWidget" && frame["widgetKey"] === "realm") {
+        const lines = frame["widgetLines"];
+        return Array.isArray(lines) && typeof lines[0] === "string" ? lines[0] : undefined;
       }
     }
     return undefined;

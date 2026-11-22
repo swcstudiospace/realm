@@ -192,8 +192,8 @@ export const ompBootHook: HostBootHookFactory = (deps: HostBootDeps, manifest): 
     // host-neutral sink's status list so conformance assertions read one array. The 2-method
     // HostStatusSink shape (src/host/types.ts) is unchanged; this bridge is test-only.
     ui: {
-      setWidget: (key: string, text: string): void => {
-        deps.sink.setStatus(key, text);
+      setWidget: (key: string, text: string | string[]): void => {
+        deps.sink.setStatus(key, Array.isArray(text) ? text.join("\n") : text);
       },
       notify: (message: string): void => {
         deps.sink.notify(message);

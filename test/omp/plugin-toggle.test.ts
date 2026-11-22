@@ -15,8 +15,8 @@ class WidgetUi implements OmpStatusUi {
   readonly widgetCalls: Array<{ readonly key: string; readonly text: string }> = [];
   readonly underBarCalls: Array<{ readonly key: string; readonly text: string }> = [];
   readonly notifications: string[] = [];
-  setWidget(key: string, text: string): void {
-    this.widgetCalls.push({ key, text });
+  setWidget(key: string, text: string | string[]): void {
+    this.widgetCalls.push({ key, text: Array.isArray(text) ? text.join("\n") : text });
   }
   // Never callable from the plugin (OmpStatusUi has no setStatus member); kept to prove 0 under-bar.
   setStatus(key: string, text: string): void {
