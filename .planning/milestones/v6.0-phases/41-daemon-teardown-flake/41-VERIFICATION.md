@@ -1,6 +1,6 @@
 ---
 phase: 41-daemon-teardown-flake
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "2/2 requirements covered (TEAR-01, TEAR-02): TEAR-01 met (the cause is established by code reading and reproduced hermetically red-first; the live reproduction was not obtained), TEAR-02 met for the stop bounds (10 live stops on the production stack reported no failed teardown and left no residue); one live iteration failed for a reason that is not the teardown bound (F-41-1, carried); 5 items listed as behavior_unverified"
@@ -67,3 +67,10 @@ What this phase is: Plan 41-01 reproduced the report `daemon.stopped code=REALM_
 ## Verdict
 
 passed, with TEAR-01 and TEAR-02 met as stated: the cause is established and reproduced hermetically, the fix is proved hermetically and on ten live stops that reported no failed teardown, and the one failed live iteration is a named finding (F-41-1) that is not a teardown-bound result. The claim is limited to what the evidence shows.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

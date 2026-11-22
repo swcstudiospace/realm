@@ -1,6 +1,6 @@
 ---
 phase: 28-remove-the-anda-bridge
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "3/3 requirements covered (ANDAX-03, ANDAX-04, ANDAX-05); the claims rest on repository files read on 2026-11-17 and on CI of PR 138, not on a build, test or live run by the verifier; 6 items outside the evidence reach, listed as behavior_unverified"
@@ -79,3 +79,10 @@ Rule recorded by this phase: Realm no longer dials an Anda engine and has no And
 
 - The plans named eight commits with set subjects; the PR kept four (see Key facts). The plan 28-02 task 3 and plan 28-03 tasks 2 and 3 produced no repository artifact of their own: the closure search output and the PR title and body are in GitHub or in the orchestrator's report, not in the repository.
 - One CI failure: the export-usage gate, because `DEFAULT_REQUEST_TIMEOUT_MS` became test-only after the bridge removal. Fixed by the allowlist commit `54b6b41`. No other deviation was found in the files read.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

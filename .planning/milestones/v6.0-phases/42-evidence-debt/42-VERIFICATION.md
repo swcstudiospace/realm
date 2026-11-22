@@ -1,6 +1,6 @@
 ---
 phase: 42-evidence-debt
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "3/3 requirements covered (DEBT-01, DEBT-02, DEBT-03): DEBT-01 met (Set B as uid 5002: 5542 tests, 0 failed, 83 skipped); DEBT-02 met (script, 46 tests, docs, and the CI workflow of option A written; the workflow awaits the owner's review of its exact head and has not run on a real pull request); DEBT-03 partial (the record, the replay, the ENF-04 closure and the workflow are written; enforcement in CI starts only when the workflow is reviewed and merged, and the ship flow's own enforce run is unconfirmed)"
@@ -69,3 +69,10 @@ What this phase is, stated once: a process and evidence phase. It added a guard 
 2. The ship flow's enforce run: not confirmed to be configured, so no merge has been gated by the guard.
 3. The throwaway pull request controls of plan 42-02 Task 4: not run.
 4. The grouping of the 83 skipped tests of Set B by reason: kept in the evidence directory, not on the page.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

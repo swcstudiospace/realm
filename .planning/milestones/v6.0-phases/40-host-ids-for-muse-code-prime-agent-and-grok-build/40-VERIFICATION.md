@@ -1,6 +1,6 @@
 ---
 phase: 40-host-ids-for-muse-code-prime-agent-and-grok-build
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "3/3 requirements covered (HOSTID-01, HOSTID-02, HOSTID-03): HOSTID-01 met; HOSTID-02 met at the daemon (hermetic proof over a real socket under the enforce default) and at the validator tier (each host's own CLI read what the real recipe wrote, 3 of 3 passed on 2026-11-18), partial for a host-driven tool call, which no tier makes; HOSTID-03 met for the documents and the registry, with the docs site build carried by CI. The tier of all three hosts is config-only: no production tier and no model-driven call (D-25-08, D-40-06), and a Grok Build session that loads the shared Claude files stays attributed claude (GAP-40-01)"
@@ -90,3 +90,10 @@ What this phase is, stated once: a product change with an evidence tail. Plan 40
 1. A real Muse Code model turn that calls a Realm tool through the labelled entry: not observed (the echo provider never calls tools).
 2. A real Prime Agent model turn that calls a Realm tool: not observed; its listing commands print only the name and the transport.
 3. A real Grok Build model turn that calls a Realm tool, and the attribution of a session when both `config.toml` and the Claude files carry a `realm` server, beyond the planning-time observation: not observed by a test.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

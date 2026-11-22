@@ -1,6 +1,6 @@
 ---
 phase: 31-production-stack-boot-rehearsals-for-wave-1-hosts
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "BOOTP-02 met; BOOTP-01 met for claude and codex (production tier passed on 2026-11-18 for both); opencode rehearsed beyond the requirement; the live results rest on a human-owned window whose evidence is kept outside the repository, not on a run by the verifier; 7 items outside the evidence reach, listed as behavior_unverified"
@@ -73,3 +73,10 @@ The definitions are in `31-CONTEXT.md`, "Requirement IDs".
 ## Verdict
 
 passed, with BOOTP-01 and BOOTP-02 met: the harness, the recorder, the named gaps and the boot matrix exist on `main`, claude and opencode have dated production-stack results with version and date, codex has a dated production-stack result (after the exit-race fix) beside its validator session rehearsal, and kimi and kimi-code are named gaps with reasons and lift conditions. Nothing in the phase is FAILED. The seven items above are not proven and must not be claimed beyond what is stated; in particular nothing here says a cold first attach works, or that any host called a Realm tool.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

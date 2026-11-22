@@ -1,6 +1,6 @@
 ---
 phase: 35-capability-token-evidence
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "3/3 requirements met (EVID-01 for Set A twice as a regular user, EVID-02 settled, EVID-03 recorded with both drives); the Set B whole-suite run was not made; the claim is measured evidence for capability tokens, not a new defence, and a scripted provider is not a model; 6 items outside the evidence reach, listed as behavior_unverified"
@@ -78,3 +78,10 @@ What this phase is, stated once: it measures three claims about capability token
 ## Verdict
 
 passed. EVID-01 is met for Set A (two runs as a regular user on a `ptrace_scope` 1 host, 494 of 494), EVID-02 is met and settled (a same-uid non-descendant process is denied at the open of the memory file on Linux 6.8 with `ptrace_scope` 1, with both controls found), and EVID-03 is met with its tier stated: on the production stack under the effective default the registered command attached cold, an unlabelled session was refused, the audit lines carried host claude and the active key id with a verifying chain, no token or key text leaked, and claude itself issued a tool call against a scripted provider. The limits above stand and are written on the evidence page.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

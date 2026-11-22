@@ -1,6 +1,6 @@
 ---
 phase: 29-mcp-tool-annotations
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "2/2 requirements covered (MCPA-01, MCPA-02); the claims rest on repository files read on 2026-11-17 and on CI of PR 134, not on a build, test or live run by the verifier; 5 items outside the evidence reach, listed as behavior_unverified"
@@ -71,3 +71,10 @@ Rule recorded by this phase: annotations are hints for a host that chooses to us
 ## Verdict
 
 passed: the annotation table, the type, the pin module, the wire, mutation, behavior, smoke-gate, cross-pin and docs tests, the Q9 section and the two one-line gate descriptions exist on `main` at `63f89c0`, the values match the D-29-03 table, the Phase 29 change is limited to tool metadata and tests and docs, and CI on PR 134 passed after one fix round (the docs test file rename). Nothing in the phase is FAILED. The five items above are not proven and must not be claimed beyond what is stated; in particular nothing here says any host changes its behavior because of the hints, and the live production-driver assertion has not run.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

@@ -1,6 +1,6 @@
 ---
 phase: 43-kimi-and-kimi-code-rehearsal
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "2/2 requirements covered (KIMI-01, KIMI-02): KIMI-01 met (both CLIs installed outside the repository and run, four results recorded with version and date: three passes and one failure); KIMI-02 met as recording (no blocker applied, GAP-24-02 narrowed, the support matrix and the wave 1 page state the tier reached); the legacy kimi production tier FAILED and is carried as GAP-43-03, not as a pass"
@@ -68,3 +68,10 @@ What this phase is, stated once: an evidence phase. Plan 43-01 gave the two Kimi
 ## Verdict
 
 passed, with KIMI-01 and KIMI-02 met as evidence and recording: Kimi Code 2.6.3 is rehearsed (validator as a session proof, production cold), and the legacy kimi 1.51.0 passed its validator tier and failed its production tier with an unestablished cause, carried as an open gap. Kimi Code is the supported product; the legacy CLI is archived.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

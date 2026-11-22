@@ -1,6 +1,6 @@
 ---
 phase: 37-spec-update
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "1/1 requirement covered (SPEC-01), met by repository evidence read on origin/main; the verifier ran xmllint and read-only grep and git diff counts, no build, test or live run; the claim is that the spec no longer requires the Anda bridge, andaUrl, the ANDA_ codes or the degraded state, with history kept and marked retired; 4 items outside the evidence reach, listed as behavior_unverified"
@@ -59,3 +59,10 @@ What this phase is: one owner-directed edit of the product spec (owner instructi
 ## Verdict
 
 passed. SPEC-01 is met: the spec is well-formed, no longer contains `andaUrl`, `ANDA_` codes, the degraded state or a six-state count, states that Realm has five states and does not connect to Anda, keeps the original request and the bridge-related planning history marked retired, changed exactly the 43 instructed lines on `origin/main`, and the merged pull request and D-37-1 record the owner's instruction of 2026-11-18 and the reason. Nothing in the phase failed. The four items above are not proven and must not be claimed beyond what is stated: in particular nothing here says the spec is checked against the code by any automated test, or that the history in the spec is gone.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

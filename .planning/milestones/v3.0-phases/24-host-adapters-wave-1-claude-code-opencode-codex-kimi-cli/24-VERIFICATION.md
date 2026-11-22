@@ -1,6 +1,6 @@
 ---
 phase: 24-host-adapters-wave-1-claude-code-opencode-codex-kimi-cli
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 9/9 requirements covered (ADPT-01 to ADPT-09); proven on fixture hosts and CI; the claude validator tier ran live (3/3, twice) and the codex validator tier ran live (the first run found a real defect that PR 114 fixed; the run after PR 114 passed 5/0/2 skipped); 6 claims outside the evidence reach, listed as behavior_unverified
@@ -96,3 +96,10 @@ Resolved since the first draft: the marker-free Codex recipe was run against a r
 ## Verdict
 
 passed: the engine groundwork, the five recipes, the gated live files, the docs and the allowlist exist on `main` at `c157149`, CI passed on both PR heads, the claude and codex validator tiers ran live and passed (the codex run on the merged marker-free recipe), and the one earlier live failure (Codex comment markers) was a real defect that was fixed in PR 114 with the cause recorded. Nothing in the phase is FAILED. The six items above are not proven and must not be claimed from this report; in particular, no claim that a real Claude Code, Codex, OpenCode or Kimi boots Realm through `realm mcp --host <id>` follows from it, and no claim about OpenCode or Kimi against a real host.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

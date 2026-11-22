@@ -1,6 +1,6 @@
 ---
 phase: 36-live-re-verification-of-v1-0-open-items
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "2/2 requirements covered (V1LIVE-01, V1LIVE-02): V1LIVE-01 met as re-verified or carried with a named reason (OI-11 was re-verified on a loaded host and failed its latency thresholds; it is carried as a finding, not a pass), V1LIVE-02 met (14 of 14 items have a final label); the live steps ran on 2026-11-18 on the production stack and are copied from evidence kept outside the repository; 6 items outside the evidence reach, listed as behavior_unverified (OI-13 was closed by the owner's decision of 2026-11-18, accepted as proposed)"
@@ -93,3 +93,10 @@ Every snapshot (before, after each step, final) of every run read 0 containers, 
 ## Verdict
 
 passed, with V1LIVE-01 and V1LIVE-02 met: the live checks this host can run (doctor, control-socket modes, the hung-exec timeout, the two reaper checks, Muse Code and Hermes loading) were re-verified with dated evidence kept outside the repository, the Omp responsiveness item ran on a loaded host and failed its thresholds (recorded as Re-verified (loaded host, thresholds failed) and carried as a finding), and all 14 items of the v1.0 open-item list have a final status (6 re-verified, 1 re-verified in its current contract form, 1 closed by test, 3 dropped, 1 closed as moot, 1 re-verified on a loaded host with failed thresholds, 1 closed by the owner's decision of 2026-11-18). The claim is limited to what the evidence shows: one machine, no model-driven tool call, and no quiet-host measurement of the Omp attach.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

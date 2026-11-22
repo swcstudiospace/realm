@@ -1,6 +1,6 @@
 ---
 phase: 27-anda-disposition-and-v4-0-requirement-closure
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "2/2 requirements covered (ANDAX-01, ANDAX-02); records and documentation only; the dispositions rest on repository files read on 2026-11-17 and on CI of PR 133, not on a build, test or live run by the verifier; 6 items outside the evidence reach, listed as behavior_unverified (PRD-DRV-01 stays Open)"
@@ -75,3 +75,10 @@ Deferred, not unverified: the removal of the bridge code, the codes, the `degrad
 ## Verdict
 
 passed: the decision record, the two superseded notes, the adopted research note, the `AGENTS.md` bullet, the 12-row Part A, the 4-row Part B, the `omp.md` notes and the REQUIREMENTS and PROJECT carry edits exist on `main` at `4f136dc`, every cited full path exists, and CI on PR 133 passed. Nothing in the phase is FAILED. The six items above are not proven and must not be claimed beyond what is stated; in particular PRD-DRV-01 is Open and the Anda code is still present until Phase 28.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

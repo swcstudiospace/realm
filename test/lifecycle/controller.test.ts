@@ -10,6 +10,8 @@ import { LockTable } from "../../src/fs/locks.js";
 import { bindWorkspaceUnderPolicy } from "../../src/fs/root.js";
 import { LifecycleController } from "../../src/lifecycle/controller.js";
 import { SessionStore } from "../../src/session/store.js";
+import { bindingLockPathOf } from "../../src/session/paths.js";
+import { bindingIsLive } from "../../src/session/workspace-binding.js";
 import { FakeExecutionService } from "../support/fake-execution.js";
 
 const SESSION = "session-1";
@@ -529,4 +531,17 @@ void test("a record write that fails as a raw probe failure still takes the real
   await assert.rejects(controller.probe(), (error: unknown) => error instanceof Error && error.message === "disk full");
   assert.equal(controller.snapshot().state, "error");
   assert.equal(store.load(SESSION)?.state, "active", "the failed write leaves the last saved record");
+});
+
+void test("grant-then-swap: a swapped workspace is refused POLICY_DENIED and the granted binding is released", async (t) => {
+  const { controller, store, base, workspace } = fixture(t);
+  await controller.create(workspace);
+  await controller.destroy();
+  controller.releaseBinding();
+  const swapped = join(base, "swapped");
+  renameSync(workspace, swapped);
+  mkdirSync(workspace);
+  await assertRejectsWith(controller.create(workspace), "POLICY_DENIED");
+  assert.equal(store.load(SESSION), null);
+  assert.equal(bindingIsLive(bindingLockPathOf(store.stateDir, SESSION)), false);
 });

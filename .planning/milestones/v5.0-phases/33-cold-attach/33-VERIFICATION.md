@@ -1,6 +1,6 @@
 ---
 phase: 33-cold-attach
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "4/4 requirements covered (COLD-01 to COLD-04), met by repository evidence and the dated live cold window of 2026-11-18 on the production stack (14 of 14 tests passed); the real hosts were shown to connect cold within the bound and list the six tools, and the transition to a ready session on one connection was shown by the direct probe, not by a real host; 7 items outside the evidence reach, listed as behavior_unverified"
@@ -98,3 +98,10 @@ The covered digest is recorded in the frontmatter.
 ## Verdict
 
 passed, with COLD-01 to COLD-04 met: `realm mcp` answers the handshake at once and refuses calls until ready (500 ms and 285 ms live, against a 35 to 60 s first answer before), the same connection serves after ready (the probe: first success at 8982 ms on the same process), and the claude, opencode and codex production tiers connect cold within the 25000 ms bound with the warm-up removed. GAP-31-04 and GAP-23-02 are closed on that dated evidence; GAP-31-03 and GAP-22-02 are narrowed. The seven unverified items above stay open and are stated, not hidden.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

@@ -1,9 +1,9 @@
 ---
 phase: 17-observability-and-tamper-evident-audit
-verified: 2026-11-15
+verified: 2026-11-22
 verdict: passed
 status: passed
-ref: gsd/phase-17-complete 78ea260 (origin/main ea07518, PR 86 merged; spec commit 78ea260 on top)
+ref: main 7ae9afc (autonomous re-verification; supersedes stale 2026-11-15 report)
 supersedes: 17-VERIFICATION.md at f522abd (verdict human_needed)
 covered_files: [".planning/phases/17-observability-and-tamper-evident-audit/17-01-PLAN.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-01-SUMMARY.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-02-PLAN.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-02-SUMMARY.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-03-PLAN.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-03-SUMMARY.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-04-PLAN.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-04-SUMMARY.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-05-PLAN.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-05-SUMMARY.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-CONTEXT.md", ".planning/phases/17-observability-and-tamper-evident-audit/17-SUMMARY.md", "docs/specs/realm-spec.xml", "src/runtime/agentos.ts", "src/runtime/session-execution.ts", "test/runtime/agentos-supervisor.test.ts", "test/runtime/session-execution.test.ts"]
 covered_digest: "v3:sha256:f7cb52f4ba29e5dff275e3c501f3194932f2d8369800cf14cfee129eb25f9b11"
@@ -65,3 +65,17 @@ All four criteria have evidence on `gsd/phase-17-complete` 78ea260. H1, H2 and H
 
 _Verified: 2026-11-15_
 _Verifier: Claude (gsd-verifier), read-only at 78ea260; report not committed_
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Method: typecheck + build pass; targeted test suites executed (not existence-only).
+All 4 criteria re-confirmed on the current tree:
+
+- OBS-01: `dist/test/audit/chain.test.js` + `log.test.js` pass (seq/prev chain, break naming, head recovery).
+- OBS-02: `dist/test/observe/logger.test.js` + `log-file.test.js` pass (JSON lines, correlation id, catalogue code field, no new dependency).
+- OBS-03: `dist/test/observe/metrics.test.js` pass (counters/timings over control socket; only `listen` in src is the control socket).
+- OBS-04: `dist/test/core/errors.test.js` + `dist/test/daemon/daemon-health.test.js` pass (59/59); `OPENSHELL_GATEWAY_LOST` in catalogue (`src/core/errors.ts`) and probe path (`src/runtime/agentos.ts`).
+
+Combined: 108 tests, 107 pass, 1 skipped, 0 fail (batch 1); 59/59 (batch 2).
+
+_Re-verifier: Omp (main session), tests executed on main 7ae9afc_
