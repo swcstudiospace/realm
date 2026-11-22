@@ -1,6 +1,6 @@
 ---
 phase: 19-resume-and-checkpoint
-verified: 2026-11-16
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 5/5 roadmap criteria verified; 6/6 plan must-haves (one by owner-accepted override)
@@ -239,3 +239,13 @@ All five criteria are VERIFIED at b23684e plus the working tree. Plan truth 1 an
 
 _Verified: 2026-11-16_
 _Verifier: Claude (gsd-verifier)_
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Locally verifiable criteria re-confirmed by executed tests:
+- RES-02/RES-05 (reaper): `dist/test/session/reap.test.js` + `store.test.js` pass.
+- RES-04/RES-05 (snapshot/restore): `dist/test/session/checkpoint.test.js` + `dist/test/cli/checkpoint-exit.test.js` + `checkpoint-stopped.test.js` pass.
+
+86 tests, 86 pass, 0 fail. Live daemon-kill scenarios (RES-02) are Podman-gated and carried forward from the 2026-11-16 operator evidence.
+
+_Re-verifier: Omp (main session), tests executed on main 7ae9afc_
