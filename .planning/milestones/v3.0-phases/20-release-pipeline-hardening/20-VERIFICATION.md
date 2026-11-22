@@ -1,6 +1,6 @@
 ---
 phase: 20-release-pipeline-hardening
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 4/4 requirements verified (REL-02 normal path)
@@ -49,3 +49,10 @@ PR 96 moved six jobs in `ci.yml`, `mutation.yml`, `pages.yml` and `rollback.yml`
 
 - **G1.** The repair path and draft/partial-release states were not exercised live; covered offline only.
 - **G2.** `main` has no branch protection (TD-10, owner-held).
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

@@ -1,6 +1,6 @@
 ---
 phase: 34-capability-tokens-enforce-by-default
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "4/4 requirements covered (ENF-01 to ENF-04): ENF-01, ENF-02 and ENF-03 met; ENF-04 met in its intent and partial in its letter (the 34-03 pull request was squashed with a title that has no breaking marker); met by repository evidence, CI on the merged commits, and one dated live window on 2026-11-18 on the production stack in which two real stale client binaries were refused POLICY_DENIED by a daemon on the new default and admitted under an explicit mode off; the claim is per-host least privilege and verified audit attribution, not isolation from a same-user reader; 7 items outside the evidence reach, listed as behavior_unverified"
@@ -115,3 +115,10 @@ Run history, stated plainly: the passing run was the sixth. Five earlier runs we
 ## Verdict
 
 passed. ENF-01, ENF-02 and ENF-03 are met: the default is `enforce` and defined once, every shipped client class attaches under it with a test per class (three hosts with no id are named, guarded and refused by design), and a refused client gets the reason text, a one-time stderr line, the doctor guidance and the migration section. ENF-04 is met in its intent and partial in its letter: the flip commit carries the marker and is in the release notes through a merge commit, the release note text and the migration notes are in Q10, and the 34-03 squash title lacks the marker. The live window showed two real stale binaries refused `POLICY_DENIED` by a daemon on the default and admitted under an explicit `off`. The seven unverified items above stay open.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

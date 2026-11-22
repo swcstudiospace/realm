@@ -1,6 +1,6 @@
 ---
 phase: 38-omp-responsiveness-during-cold-attach
-verified: 2026-11-19
+verified: 2026-11-22
 verdict: passed_with_accepted_limitations
 status: passed
 score: "1 of 3 requirements met (OMPR-03 recorded either way); OMPR-01 not met (one valid quiet-host run in six attempts, three needed; outcome VOID); OMPR-02 not triggered (the frozen rule gave no verdict; plans 38-02 and 38-03 do not run)"
@@ -74,3 +74,10 @@ gaps_found. OMPR-01 is not met: the quiet-host window made six attempts and reco
 ## Closure (2026-11-19)
 
 The verdict above stands unchanged: gaps_found for OMPR-01 (not met, outcome VOID), OMPR-02 not triggered, OMPR-03 met as VOID, OI-11 Carried. The phase closure tool accepts only a `passed` status, so at milestone v6.0 closure the frontmatter `status` was set to `passed` and the `verdict` to `passed_with_accepted_limitations`, with two `overrides` entries that cite the owner decisions of 2026-11-18/19 (Phase 44 on the loaded evidence, D-44-01) and of 2026-11-19 (complete v6.0). This is not a result of the quiet-host window and does not meet OMPR-01. Plans 38-02 and 38-03 were not run and are marked `status: superseded` (superseded by Phase 44); the `covered_digest` was recomputed after that edit.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

@@ -1,6 +1,6 @@
 ---
 phase: 32-capability-tokens-for-stdio-hosts
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "8/8 requirements covered (CAPT-02 to CAPT-09), all met by repository evidence and CI on Node 22.x and 24.x as a regular user; the verifier ran no test, build or live run; the claim is per-host least privilege and verified audit attribution, not isolation from a same-user reader; 8 items outside the evidence reach, listed as behavior_unverified"
@@ -119,3 +119,10 @@ What this phase is, stated once: with `capabilityTokens.mode` set to `enforce`, 
 ## Verdict
 
 passed, with CAPT-02 to CAPT-09 met by repository evidence and CI on Node 22.x and 24.x as a regular user: the token core, the keyring with rotation and revoke, the policy key with its default off, the redaction, the gate before dispatch with POLICY_DENIED and no reason on the wire, the audit attribution under a bound, the client that keeps the token in memory, the stdio and Omp wiring, the 24-row refusal matrix over a real socket, `realm host token status` and `rotate`, the `capability-tokens` doctor item, the recipe guard and the documented limits all exist on `main`. Nothing in the phase is FAILED. The eight items above are not proven and must not be claimed beyond what is stated; in particular nothing here says a same-user process is stopped, that a token identifies a host, that the memory-read boundary was measured, or that enforce mode ran on the production stack. The build rests on an owner override of the Phase 30 criteria outcome, recorded as D32-1.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

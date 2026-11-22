@@ -1,6 +1,6 @@
 ---
 phase: 26-plugin-contract-tests-boot-tests-and-author-docs
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "8/8 requirements covered (TEST-HOST-01 to TEST-HOST-08) on fixture and in-process evidence; 3 plans merged (PRs 122, 121, 123) after the plans (PR 120); no change under src; no new live, T2 or T3 evidence; 4 claims outside the evidence reach, listed as behavior_unverified"
@@ -77,3 +77,10 @@ Coverage ratchet note (not counted above, it is recorded evidence with a stated 
 
 - OQ-26-01 (publish the harness as a package), OQ-26-02 (mutation campaign for `src/host`), OQ-26-03 (matrix block by test or script) and OQ-26-05 (split of the boot matrix by transport) keep their plan defaults; none was decided by the owner in this phase.
 - Every GAP row marked open on the gaps page stays open.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

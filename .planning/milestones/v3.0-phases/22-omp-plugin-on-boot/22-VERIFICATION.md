@@ -1,6 +1,6 @@
 ---
 phase: 22-omp-plugin-on-boot
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 8/8 requirements covered (OMPB-01 to OMPB-08); one live rehearsal on Omp 18.22.0 passed; 4 claims outside the evidence reach, listed as behavior_unverified
@@ -100,3 +100,10 @@ Findings: the daemon needs the account's `HOME` (an isolated `HOME` made the san
 ## Verdict
 
 passed: Omp consumes the host boot contract and passes the conformance harness, the install recipe and refusals exist, auto-open works including under a Bun host, doctor and status report presence, the docs state their evidence tiers, and the live rehearsal on Omp 18.22.0 passed. Nothing in the phase is FAILED. The four items above are not proven and must not be claimed from this report.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

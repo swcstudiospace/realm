@@ -1,6 +1,6 @@
 ---
 phase: 23-boot-integration-for-host-plugins
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 9/9 requirements covered (BOOT-01 to BOOT-09); proven against fakes, a real daemon over fakes and CI; the live rehearsal with a real stdio host was not run; 6 claims outside the evidence reach, listed as behavior_unverified
@@ -80,3 +80,10 @@ Method: read-only read of the repository at `82928b6` (existence and content of 
 ## Verdict
 
 passed: attach logic exists once, the production boot driver and the `realm mcp|acp --host <id>` runner exist and are wired, the daemon records closed-vocabulary boot reports with metrics and a reserved audit chain, the observer is shared, the docs state their evidence tiers, and CI passed on the PR head. Nothing in the phase is FAILED. The six items above are not proven and must not be claimed from this report; in particular, no claim that a real host boots Realm through `realm mcp --host <id>` follows from it.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

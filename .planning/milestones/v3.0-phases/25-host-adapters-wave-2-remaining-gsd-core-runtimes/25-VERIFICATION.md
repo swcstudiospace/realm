@@ -1,6 +1,6 @@
 ---
 phase: 25-host-adapters-wave-2-remaining-gsd-core-runtimes
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "8/8 requirements covered (WAVE2-01 to WAVE2-08); 16 of 19 hosts have a recipe, 3 are deferred by owner decision; proven on fixture hosts and CI; the wave 2 validator tier ran live for qwen 0.22.0 (PASS) and the helper test passed (32 pass, 0 fail, 8 skipped); 7 claims outside the evidence reach, listed as behavior_unverified"
@@ -90,3 +90,10 @@ Deferred, not unverified: `windsurf`, `trae` and `zcode` have no recipe by owner
 ## Verdict
 
 passed: the `shadows` guard, the `yaml-map` kind, the sixteen recipes, the three named deferrals, the gated live tier and the docs exist on `main` at `2540115`, CI passed on the PR 118 head, and the wave 2 validator tier ran live for qwen 0.22.0 and passed. Nothing in the phase is FAILED. The seven items above are not proven (the live qwen result is a recorded pass and is not one of them; it narrows items 3 and 6 only for qwen 0.22.0, and none of the seven became provable) and must not be claimed from this report: no claim follows that a real Cursor, Copilot, Augment, Pi, Cline, Antigravity, Kilo, CodeBuddy or Hermes accepts what Realm writes, and no claim that any wave 2 host boots Realm.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

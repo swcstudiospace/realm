@@ -1,6 +1,6 @@
 ---
 phase: 21-host-plugin-contract-and-installer
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: 9/9 requirements covered (HOST-01 to HOST-09) on fixture hosts; 19/19 plan must-have truths verified by code and test reading; 3 claims outside this phase's evidence reach, listed as behavior_unverified
@@ -114,3 +114,10 @@ Method: read of the repository at `bf70847` (read-only), plus the CI and local r
 ## Verdict
 
 passed: the contract, the runtime table, the boot-hook port with parity and a harness, the installer engine with receipts and audit, the `realm host` CLI, the doctor item, the docs and the gates all exist on `origin/main` at `bf70847` and meet HOST-01 to HOST-09 as proven on fixture hosts. Nothing in the phase is FAILED. What is not proven, and must not be claimed from this report, is any live host integration.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

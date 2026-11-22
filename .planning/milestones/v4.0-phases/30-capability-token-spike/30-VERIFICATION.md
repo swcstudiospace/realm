@@ -1,6 +1,6 @@
 ---
 phase: 30-capability-token-spike
-verified: 2026-11-17
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "1/1 requirement covered (CAPT-01); the claims rest on repository files read on 2026-11-17 and on the recorded results of plan 30-01, not on a re-run by the verifier; 4 items outside the evidence reach, listed as behavior_unverified"
@@ -61,3 +61,10 @@ Rule recorded by this phase: the build or drop outcome follows only from the cri
 ## Verdict
 
 passed: the design note, the recorded experiments and their reading against the frozen criteria, the criteria outcome (DROP) and the owner override (BUILD) as separate records, decision D30-1 and the research pointer exist; the criteria hash is unchanged; no production code was written. Nothing in the phase is FAILED. The four items above are not proven and must not be claimed beyond what is stated; in particular nothing here says the token stops a same-uid attacker, and the BUILD is an owner override of the criteria outcome.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_

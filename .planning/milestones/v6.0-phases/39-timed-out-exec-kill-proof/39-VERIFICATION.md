@@ -1,6 +1,6 @@
 ---
 phase: 39-timed-out-exec-kill-proof
-verified: 2026-11-18
+verified: 2026-11-22
 verdict: passed
 status: passed
 score: "3/3 requirements covered (EXEC-01, EXEC-02, EXEC-03): all met. EXEC-01 met by one dated live run (closeout C: the tree dead 2988 ms after the reply with 269 s of the sleeper's life left, controls held) and, as its evidence, the failing baseline run; EXEC-02 met by the in-sandbox bash /proc-sweep watchdog after a first attempt (coreutils timeout) that failed the same live proof; EXEC-03 met: the reply, bounds, audit line and catalogue are unchanged and pinned, with named observable differences."
@@ -75,3 +75,10 @@ What this phase is: finding F-3 said the Phase 36 pass of `live closeout C` coul
 ## Verdict
 
 passed, with EXEC-01, EXEC-02 and EXEC-03 met: a timed-out exec's process tree is now ended inside the sandbox within about 3 s of the `TOOL_TIMEOUT` reply (shown by a process-state check with controls and a run-time-independent margin), after the baseline run showed it survived and a first attempt failed; the reply contract is unchanged. The limits are the six items above.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+Full local suite executed on main 7ae9afc: 5945 tests, 5849 pass, 0 fail, 96 skipped (Podman-gated). Prior verdict (passed) stands; covered files changed only by later merged phases.
+
+_Re-verifier: Omp (main session)_
