@@ -1,6 +1,6 @@
 ---
 phase: 44-omp-non-blocking-cold-attach
-verified: 2026-11-19
+verified: 2026-11-22
 verdict: passed_with_accepted_limitations
 status: passed
 score: "2 of 3 requirements met (OMPR-04 met, OMPR-05 met on its hermetic basis); OMPR-06 partial: the rule was fixed as code before the first run and the loaded window was run, recorded and labelled, but it reached three valid pairs of the five required, so the outcome is VOID and no effect is claimed; OMPR-01 NOT met and OI-11 Carried (unchanged)"
@@ -85,3 +85,10 @@ gaps_found. OMPR-04 and OMPR-05 are met; OMPR-06 is partial because the paired w
 ## Closure (2026-11-19)
 
 The verdict above stands unchanged: gaps_found, with OMPR-04 and OMPR-05 met, OMPR-06 partial (VOID, three valid pairs of five), OMPR-01 not met and OI-11 Carried. The phase closure tool accepts only a `passed` status, so at milestone v6.0 closure the frontmatter `status` was set to `passed` and the `verdict` to `passed_with_accepted_limitations`, with `overrides` entries that cite the owner decisions of 2026-11-18/19 (D-44-01) and of 2026-11-19 (complete v6.0). This is not a quiet-host result, and no effect of the change on the cold attach is claimed.
+
+
+## Re-verification at main 7ae9afc (2026-11-22, autonomous)
+
+OMPR-04/OMPR-05 hermetic criteria re-confirmed by executed tests: attach-stall, attach-window, stdio-cold-attach, cold-attach-e2e — 31 tests, 31 pass, 0 fail. OMPR-06/OMPR-01 remain as recorded (VOID/Carried under owner decision D-44-01).
+
+_Re-verifier: Omp (main session)_
