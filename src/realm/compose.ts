@@ -42,6 +42,9 @@ export interface CreateRealmHandleOptions {
   readonly runOpenShell: OpenShellRunner;
   // The bound of the controller's teardown in milliseconds. Defaults to TEARDOWN_TIMEOUT_MS.
   readonly teardownTimeoutMs?: number;
+  // The cross-process workspace binding wait budget (upLockWaitMs for up). Absent, a held binding
+  // refuses with LOCK_CONFLICT, never waits.
+  readonly bindingWaitMs?: number;
 }
 
 // Builds the controller and the dispatcher from the runtime input with one
@@ -74,6 +77,7 @@ export function createRealmHandle(options: CreateRealmHandleOptions): RealmHandl
     // the pinned root, with POLICY_DENIED, before any state change.
     pinnedRoot: boundRoot,
     ...(options.teardownTimeoutMs !== undefined ? { teardownTimeoutMs: options.teardownTimeoutMs } : {}),
+    ...(options.bindingWaitMs !== undefined ? { bindingWaitMs: options.bindingWaitMs } : {}),
   });
   const dispatcher = new ToolDispatcher({
     sessionId: options.sessionId,

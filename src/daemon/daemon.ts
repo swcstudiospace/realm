@@ -200,6 +200,7 @@ export function buildDaemonHandle(options: BuildDaemonHandleOptions): RealmHandl
     clock,
     runOpenShell,
     ...(options.teardownTimeoutMs !== undefined ? { teardownTimeoutMs: options.teardownTimeoutMs } : {}),
+    ...(options.bindingWaitMs !== undefined ? { bindingWaitMs: options.bindingWaitMs } : {}),
   });
 }
 
@@ -257,6 +258,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     ...options,
     policy,
     libpod,
+    // The cross-process workspace binding reuses the up lock wait as its wait budget (CBIND, D-53-H3).
+    bindingWaitMs: upWaitMs,
     ...(agentosFor === undefined ? {} : { agentosFor }),
   };
   // The doctor report. With a session selected, its AgentOS reading is that session's supervisor; with none, unbound (C4).
@@ -380,7 +383,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     return { sessionId, pinned, handle, health };
   };
 
-  const finishUp = (correlationId: string, startedAt: number, state: string | undefined, code: ErrorCode | undefined): void => {
+  const finishUp = (correlationId: string, startedAt: number, state: string | undefined, code: ErrorCode | undefined, binder?: { readonly sessionId: string; readonly pid: number; readonly bootId: string }): void => {
     const durationMs = Math.round(performance.now() - startedAt);
     metrics.recordAttach(durationMs);
     logger.info("up.end", {
@@ -389,6 +392,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       durationMs,
       ...(state === undefined ? {} : { state }),
       ...(code === undefined ? {} : { code }),
+      // Binding identity (CBIND, S6): additive and optional. A line written before this change still parses.
+      ...(binder === undefined ? {} : { binderSessionId: binder.sessionId, binderPid: binder.pid, binderBootId: binder.bootId }),
     });
   };
 
@@ -466,7 +471,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
       throw error;
     }
     // An error snapshot other than a teardown's keeps its slot as the create settles it (the enterError rule of the controller).
+    // The cross-process binding is released before the entry is removed (CBIND, S4 ordering).
     if (snapshot.state === "error" && snapshot.reason !== "REALM_STOPPING") {
+      current.handle.controller.releaseBinding();
       settleFailedCreate(ledger, registry, stateDir, sessionId, current.handle, fresh);
     }
     if (!wasLive && snapshot.state !== "error") {
@@ -613,7 +620,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
           throw error;
         }
         const code = result.snapshot.state === "error" ? catalogueCode(result.snapshot.reason) : undefined;
-        finishUp(correlationId, startedAt, result.snapshot.state, code);
+        finishUp(correlationId, startedAt, result.snapshot.state, code, registry.get(sessionId)?.handle.controller.bindingIdentity() ?? undefined);
         return { id, result };
       }
       case "tool": {

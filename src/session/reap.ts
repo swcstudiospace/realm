@@ -8,10 +8,10 @@
 // runStartupMaintenance (src/daemon/startup.ts), which hands the counts and the removed container ids to its onStartup
 // observer (the daemon entry logs them on one line) and carries a notice on the status, up and down replies for its lifetime.
 //
-// Single-owner precondition (D-87, OQ-P4-06): the reap must run before any LifecycleController or ToolDispatcher exists in the
-// process, and only one host daemon may own the state directory. Nothing here checks that another process is not reaping or
-// using a live session; that cross-process check belongs to Phase 6. Until then, a second process reaping the same state
-// directory is an accepted residual risk.
+// Single-owner precondition (D-87, OQ-P4-06, CBIND): the reap must run before any LifecycleController or ToolDispatcher exists in the
+// process, and only one host daemon may own the state directory. The precondition extends to cross-process: a session with a
+// live workspace binding (binding lock file present) is kept, never deleted or removed. Nothing here checks that another process is not reaping or
+// using a live session; that check is the takeover rule of the binding lock.
 //
 // This module imports no runtime module (D-50). The listing, inspection, verdict and removal arrive as function arguments.
 
@@ -19,7 +19,8 @@ import type { SessionRecord } from "../contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { SessionStore } from "./store.js";
-
+import { bindingLockPathOf } from "./paths.js";
+import { bindingIsLive } from "./workspace-binding.js";
 // Bound for the whole selective reap: the listing, the inspections, every verdict, every removal and the proving listing.
 // A reap that does not finish in time rejects with PODMAN_MACHINE_DOWN, the code D-53 gives a runtime socket timeout, before
 // any record is deleted; the next start reaps again.
@@ -56,6 +57,9 @@ export type ReapVerdict<Property extends string = string> = { readonly ok: true 
 
 export interface SelectiveReapDeps<Property extends string = string> {
   readonly store: Pick<SessionStore, "list" | "load" | "delete">;
+  // The state directory the binding lock files live in. Present, a session with a live binder is kept
+  // by the reap (CBIND precondition). Absent, no binding is consulted.
+  readonly stateDir?: string;
   // Lists the realm containers and inspects each one. Called once, before any verdict or removal.
   readonly listCandidates: () => Promise<readonly ReapCandidate[]>;
   // Judges a candidate against the record that names its container. Called once per record, before any removal.
@@ -166,6 +170,18 @@ async function judge<Property extends string>(
   const removed = new Map<string, Property | "no-record">();
   const deleted: { sessionId: string; cause: string }[] = [];
   for (const { sessionId, record } of records) {
+    // Cross-process binding precondition (CBIND, D-87 extended): a session with a live binder is kept.
+    // The reap deletes no binding lock file of an adopted session; takeover handles the rest.
+    const bound =
+      record?.state !== "unbound" && deps.stateDir !== undefined && bindingIsLive(bindingLockPathOf(deps.stateDir, sessionId));
+    if (bound) {
+      const candidate = typeof record?.containerId === "string" ? byContainer.get(record.containerId) : undefined;
+      if (candidate !== undefined) {
+        named.add(candidate.containerId);
+        adopted.push({ sessionId, containerId: candidate.containerId });
+      }
+      continue;
+    }
     if (record === undefined) {
       deleted.push({ sessionId, cause: "unreadable" });
       continue;
