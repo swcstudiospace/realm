@@ -152,6 +152,7 @@ export async function runStartupMaintenance(deps: StartupMaintenanceDeps): Promi
     unreadableRecordCodes = captured.unreadableCodes;
     reaped = await reapStartupSelective({
       store: deps.store,
+      stateDir: deps.stateDir,
       listCandidates: deps.reap.listCandidates,
       verdict: deps.reap.verdict,
       remove: async (containerId) => {

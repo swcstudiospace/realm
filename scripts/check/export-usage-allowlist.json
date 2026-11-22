@@ -853,6 +853,11 @@
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     },
     {
+      "file": "src/session/workspace-binding.ts",
+      "name": "bindingRemoval",
+      "reason": "D-1306 test-only seam: the binding tests replace unlink to make a release fail"
+    },
+    {
       "file": "src/session/paths.ts",
       "name": "WORKSPACE_ID_HEX_LENGTH",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"

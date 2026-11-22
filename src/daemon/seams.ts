@@ -54,6 +54,9 @@ export interface BuildDaemonHandleOptions {
   readonly readProcStatus?: (pid: number) => string;
   // The bound of one session's teardown in milliseconds. Defaults to TEARDOWN_TIMEOUT_MS. A test injects a small value; production never sets it.
   readonly teardownTimeoutMs?: number;
+  // The cross-process workspace binding wait budget (upLockWaitMs for up). Absent, a held binding
+  // refuses with LOCK_CONFLICT, never waits.
+  readonly bindingWaitMs?: number;
 }
 
 // The report of status, up and down. `notice` is present only after a startup reap that destroyed something, so a reply with

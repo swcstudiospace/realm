@@ -33,6 +33,19 @@ export function recordFileName(sessionId: string): string {
   return `${sessionId}.json`;
 }
 
+// Workspace bindings (CBIND, D-v9-6). One lock file per session id under the state directory's bindings
+// directory, outside every workspace root. The session id gate matches checkpointSessionDirOf.
+export function bindingsDirOf(stateDir: string): string {
+  return join(stateDir, "bindings");
+}
+
+export function bindingLockPathOf(stateDir: string, sessionId: string): string {
+  if (!isSessionId(sessionId)) {
+    throw makeRealmError("SCHEMA_INVALID");
+  }
+  return join(bindingsDirOf(stateDir), `${sessionId}.lock`);
+}
+
 // Checkpoints (RES-04) live under the state directory, outside every workspace root. Each session has one
 // directory, and each checkpoint has one directory inside it. Both names come from the safe session id set.
 export function checkpointsDirOf(stateDir: string): string {

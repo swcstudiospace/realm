@@ -1,8 +1,8 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { SessionRecord } from "../../src/contract/validate.js";
 import { makeRealmError, RealmError, type ErrorCode } from "../../src/core/errors.js";
 import {
@@ -13,7 +13,8 @@ import {
   type ReapVerdict,
   type SelectiveReapDeps,
 } from "../../src/session/reap.js";
-import { recordFileName } from "../../src/session/paths.js";
+import { bindingLockPathOf, recordFileName } from "../../src/session/paths.js";
+import { currentBootId, startTicksOf } from "../../src/session/proc-identity.js";
 import { SessionStore } from "../../src/session/store.js";
 
 const REALM_ID = "7b1c2d3e-4f50-4a61-8b72-9c83d4e5f601";
@@ -350,4 +351,30 @@ void test("D19-1: the reap settles only after every removal and the removal proo
   assert.deepEqual(result.removed, [{ containerId: "c-slow", cause: "running" }]);
   assert.deepEqual(events, ["remove:c-slow", "proof", "delete:session-slow"]);
   assert.deepEqual(store.list(), []);
+});
+
+void test("a session with a live workspace binding is kept, never deleted or removed (CBIND)", async (t) => {
+  const { stateDir, store } = await startFixture(t);
+  const sessionId = "p0123456789ab";
+  store.save(recordFor(stateDir, sessionId, "c-bound"));
+  const events: string[] = [];
+  const lockPath = bindingLockPathOf(stateDir, sessionId);
+  mkdirSync(dirname(lockPath), { recursive: true });
+  const liveOwner = `${JSON.stringify({
+    schema: 1,
+    pid: process.pid,
+    startTicks: String(startTicksOf(process.pid) ?? 0),
+    bootId: currentBootId() ?? "",
+    sessionId,
+    dev: 1,
+    ino: 2,
+  })}\n`;
+  writeFileSync(lockPath, liveOwner);
+  const result = await reapStartupSelective({
+    ...selectiveDeps({ store, events, candidates: [candidate("c-bound")], refuse: { "c-bound": "running" } }),
+    stateDir,
+  });
+  assert.deepEqual(result.removed, []);
+  assert.deepEqual(result.deleted, []);
+  assert.deepEqual(store.list(), [sessionId]);
 });

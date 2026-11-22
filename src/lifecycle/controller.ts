@@ -10,6 +10,7 @@
 // enforces. Every operation returns the same snapshot shape: state, reason, and the time of
 // the last transition. Repeating an operation changes no state and creates no second
 // resource, because the port keys containers by session id.
+import { statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { Policy } from "../contract/validate.js";
@@ -23,6 +24,7 @@ import { PinnedRoot, verifyPinnedAt } from "../fs/root.js";
 import { realmSandboxName } from "../runtime/openshell.js";
 import { withStartLock } from "../session/checkpoint-lock.js";
 import { controlSocketPath } from "../session/paths.js";
+import { acquireBinding, tryAcquireBinding, type BindingHandle } from "../session/workspace-binding.js";
 import type { SessionStore } from "../session/store.js";
 import { currentBootId } from "../session/proc-identity.js";
 import { groupHasMembers, readRunnerRecord, RUNNER_STOP_GRACE_MS, stopRecordedRunner } from "../session/runner-record.js";
@@ -79,6 +81,9 @@ export interface LifecycleDeps {
   readonly pinnedRoot: PinnedRoot;
   // The teardown bound in milliseconds. The default is TEARDOWN_TIMEOUT_MS.
   readonly teardownTimeoutMs?: number;
+  // The workspace binding wait budget in milliseconds: the caller's existing bound (upLockWaitMs for up).
+  // Absent or zero, a binding held by another process refuses with LOCK_CONFLICT, never waits.
+  readonly bindingWaitMs?: number;
   // The runner stop of a hydration (runner-record.ts). The grace is the time the recorded group gets after SIGTERM, and
   // groupLive reports whether any live process still holds a process group. Both default to the production values. Tests
   // inject a short grace, and a group probe to model a group that survives SIGKILL.
@@ -111,6 +116,9 @@ export class LifecycleController {
   // The code of the last background teardown step that failed. Its container stays recorded, so
   // the next destroy retries it. If that retry fails too, this code is the causeCode of the error
   // that destroy throws, and a retry that succeeds clears it (G-04).
+  // The cross-process workspace binding (CBIND-03). Acquired before the port create, held for the session
+  // life, released on destroy and on the settled-failed-create path. Null while unbound.
+  private binding: BindingHandle | null = null;
   private orphanFailure: ErrorCode | null = null;
   // Counts the starts and ends of a session's life: it advances when a create begins and when a
   // stop or destroy takes the session. A probe compares it before and after its port call, so the
@@ -137,7 +145,46 @@ export class LifecycleController {
   // before any state is read, so a checkpoint that holds the session refuses the start with REALM_NOT_ACTIVE. Starts in this
   // process share the lock. Both the daemon's up and the tool retry reach create, so this is the one place a start is taken.
   create(workspaceRoot: string): Promise<StateSnapshot> {
-    return withStartLock(this.deps.store.stateDir, this.deps.sessionId, () => this.createHeld(workspaceRoot), () => this.unsettledStarts());
+    return withStartLock(this.deps.store.stateDir, this.deps.sessionId, () => this.createBound(workspaceRoot), () => this.unsettledStarts());
+  }
+
+  // Acquires the cross-process workspace binding before anything is created, then runs the create. The binding
+  // is held for the session life. A create that throws releases the granted binding before the caller sees the
+  // error; the granted lock confers no right to skip the pre-create verification inside createHeld.
+  private async createBound(workspaceRoot: string): Promise<StateSnapshot> {
+    // The pre-create pinned-root verification runs before any lock is taken, so a workspace outside the
+    // pin is refused POLICY_DENIED without touching the binding.
+    verifyPinnedAt(this.deps.pinnedRoot, workspaceRoot);
+    if (this.binding === null) {
+      let stat;
+      try {
+        stat = statSync(workspaceRoot);
+      } catch {
+        throw makeRealmError("POLICY_DENIED");
+      }
+      const options = { waitMs: this.deps.bindingWaitMs ?? 0, dev: stat.dev, ino: stat.ino };
+      // Sync fast path first: an uncontended binding grants without any async hop, so the port create is
+      // issued in the same tick as before the binding existed (teardown races keep their ordering).
+      this.binding = tryAcquireBinding(this.deps.store.stateDir, this.deps.sessionId, options) ?? (await acquireBinding(this.deps.store.stateDir, this.deps.sessionId, options));
+    }
+    try {
+      return await this.createHeld(workspaceRoot);
+    } catch (error) {
+      this.releaseBinding();
+      throw error;
+    }
+  }
+
+  // Releases the cross-process workspace binding, if held. Returns the release outcome.
+  releaseBinding(): { readonly ok: true } | { readonly ok: false; readonly error: RealmError } {
+    const handle = this.binding;
+    this.binding = null;
+    return handle === null ? { ok: true } : handle.release();
+  }
+
+  // The identity of the held cross-process binding, for audit/log attribution (CBIND, S6). Null while unbound.
+  bindingIdentity(): { readonly sessionId: string; readonly pid: number; readonly bootId: string } | null {
+    return this.binding === null ? null : { sessionId: this.deps.sessionId, pid: process.pid, bootId: currentBootId() ?? "" };
   }
 
   // Verifies the requested workspace against the pinned root, writes the record with containerId
@@ -527,6 +574,7 @@ export class LifecycleController {
       await this.destroyRecorded(containerId);
     } finally {
       this.locks.releaseOwner(this.deps.sessionId);
+      this.releaseBinding();
     }
     if (this.machine.snapshot().state !== "unbound") {
       this.machine.transition("unbound", INITIAL_REASON);

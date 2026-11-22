@@ -7,7 +7,7 @@
 
 **Goal.** Implement the cross-process workspace binding lock from the frozen Phase 53 design so that at most one live binder holds a workspace at a time, across processes. This closes CBIND-03. Nothing today stops two processes from binding the same workspace concurrently: the in-process `LockTable` dies with its process and `withSessionLock` is per-process (53-DESIGN §0).
 
-**Gate status: NOT RATIFIED.** `53-DESIGN.md` is frozen but **not ratified**. Owner ratification of D-53-H1..H6 is required before any code; no wave in `59-PLAN.md` starts until ratification is recorded with a date. CBIND-01..02 close on ratification of D-53-H1..H6; CBIND-03 closes on the implementation. Until ratification is recorded, this phase is paperwork only.
+**Gate status: RATIFIED 2026-11-22.** Owner ratified D-53-H1..H6 (D-v9-6) on 2026-11-22; waves 1-3 are unblocked. CBIND-01..02 are closed by this ratification record; CBIND-03 closes on the implementation (59-01.3 step 4).
 
 **Out of scope:** any surface outside the frozen inventory below; any design re-decision (re-picking a D-53-Hn row is a design change, not an implementation change); live proof beyond what the hermetic and enumerating tests cover.
 
