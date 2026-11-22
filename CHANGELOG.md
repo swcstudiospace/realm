@@ -4,6 +4,16 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-22
+
+### Added
+- feat(omp): toggleable plugin, widget UI merge, start diagnose, local review fixes (#252) (a28d5e0)
+
+## [0.9.3] - 2026-11-21
+
+### Documentation
+- docs(v9): Phase 59 concurrent-binding CONTEXT and PLAN (gated) (#251) (f227185)
+
 ## [0.9.2] - 2026-11-21
 
 ### Added
