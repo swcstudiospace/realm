@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-11-22
+
+### Added
+- feat(binding): cross-process workspace binding lock (CBIND-03) (#254) (b3fc8b8)
+
 ## [0.9.5] - 2026-11-22
 
 ### Fixed
