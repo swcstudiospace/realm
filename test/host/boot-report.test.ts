@@ -174,7 +174,8 @@ void test("BOOT-06: an accessor, a symbol key and a prototype-carrying object ar
 });
 
 void test("BOOT-06: a refusal never echoes the offending input", () => {
-  const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+  // Fake sequential fixture assembled from two parts so it never appears as a literal in source (ADR-0013).
+  const secret = "ghp_0123456789abcdef" + "ghijklmnopqrstuvwxyz";
   for (const over of [{ bootId: `${secret} ${secret}` }, { hostId: secret }, { phase: secret }, { transport: secret }, { state: secret }]) {
     try {
       parseHostBootReport(report(over));
