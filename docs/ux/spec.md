@@ -38,8 +38,15 @@ Default, loading, error, empty, success — specified per screen below as dotted
 | SCR-ReleaseProvenance | AC-27, AC-28, AC-29 |
 | SCR-LinearGsd | AC-30, AC-32, AC-59, AC-60, AC-61 |
 | SCR-PhaseEvidence | AC-48, AC-49, AC-50, AC-51, AC-52, AC-53, AC-54, AC-55, AC-56, AC-57, AC-58 |
+| SCR-UltrathinkPlanAdvisory | AC-65, AC-66, AC-67, AC-71, AC-72, AC-73 |
+| SCR-UltrathinkReloadResume | AC-68, AC-69, AC-70 |
+| SCR-Tb559ResumeVerify | AC-74, AC-75, AC-76, AC-77, AC-82, AC-83, AC-84, AC-85 |
+| SCR-Tb559W3Matrix | AC-78, AC-79, AC-80, AC-81 |
+| SCR-SecSplitFixture | AC-86, AC-87, AC-88 |
+| SCR-Merge256Gate | AC-89, AC-90, AC-91 |
+| SCR-R3W3Closeout | AC-92, AC-93, AC-94, AC-95, AC-96 |
 
-Coverage: AC-1..AC-64 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
+Coverage: AC-1..AC-96 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
 
 ## SCR-RealmStatus — `realm status`
 
@@ -455,3 +462,254 @@ Nav links and buttons: 44 px targets. Dense table links: meet the WCAG 2.2 SC 2.
 ## Brand / tokens note
 
 No brand guide supplied → system default theme only, `provisional: true`. Tokens `1.1.0` is a minor (additive) bump: `color.surface.widget` and `color.toggle.track-on` added; 0 removed; 0 deprecation aliases needed (A04 verified with `ux_token_semver_impact`). No new dedicated components are introduced — the toggle row and widget region compose existing `ds/*` text-output blocks (spec L2). A new component or a brand change would be L3 and must stop for human approval.
+## SCR-UltrathinkPlanAdvisory — plan completeness notice, advisory path (US-122 W1 + US-124 W3)
+
+**Question:** is the plan tracker done, and is work still moving on its own?
+**Flows:** read-plan-status, continue-autonomously.
+**Layout (Omp host notice region above the composer; host-owned placement, content is Ultrathink's):**
+
+```
+┌─ [ds/NoticeBanner advisory] ──────────────────────────┐
+│ ⚠ Plan tracker: 32/48 rows set — 16 pending.           │
+│ Warning: incomplete-verdict refresh pending.           │
+│ Planning continues automatically under autonomous mode.│
+│ [tracker-detail-link 24×24]  [composer-input]          │
+└────────────────────────────────────────────────────────┘
+```
+
+- `default.pending-rows`: 1 advisory note naming the pending count (`Plan tracker: <done>/<total> rows set — <pending> pending.`), 1 warning line visible (`Warning: incomplete-verdict refresh pending.`), and 1 line stating autonomous continuation (`Planning continues automatically under autonomous mode.`). Request continues with 0 manual steps (AC-71, AC-72, AC-73, UTR-05/UTR-06). Surface `color.surface.advisory`, border `color.border.advisory`, text `color.text.primary`, warning glyph line `color.status.warning` (warning on advisory measured 6.36 this run).
+- `loading.revalidating`: `Refreshing verdict from tracker…` with elapsed; the advisory stays visible beneath it; never blank.
+- `error.pending-rows`: tracker at 1 pending row → release reads `not_ready` with 1 pending row named (AC-67); rendered as the same advisory (visible warning, continued request), never as a blocking gate.
+- `empty.zero-pending`: tracker complete, spec rewritten with 0 pending → `Plan tracker: 0 pending — ready.` and the stale incomplete verdict is retired (AC-65, AC-66).
+- `success.ready`: verdict recomputed to `ready`, 0 stale incomplete rows, pending count reads 0 (AC-65, AC-66).
+
+**Banned-copy rule (design-doc only; never host render):** the host-rendered advisory must contain 0 of the 3 banned blocking strings named in AC-71, 0 blocking prompt, and 0 manual step. The render above avoids all 3 and never asks the operator for an answer. No dark pattern: the pending count is stated as a fact, never as urgency.
+**Components:** `ds/NoticeBanner@1.0` (props: advisory true, neverSilent true), `ds/StatusReadout@1.0` (props: labels ["ready", "not_ready"]). Reuse only — no new component (L2).
+**Focus order:** `tracker-detail-link`, `composer-input`. The advisory note itself is `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.36 (warning-on-advisory pair this run).
+
+```json
+{ "screen_id": "SCR-UltrathinkPlanAdvisory", "flows": ["read-plan-status", "continue-autonomously"], "states": ["default.pending-rows", "loading.revalidating", "error.pending-rows", "empty.zero-pending", "success.ready"], "components": [{ "ref": "ds/NoticeBanner@1.0", "props": { "advisory": true, "neverSilent": true } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ready", "not_ready"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["tracker-detail-link", "composer-input"], "min_contrast": 6.36 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-65", "AC-66", "AC-67", "AC-71", "AC-72", "AC-73"] }
+```
+
+## SCR-UltrathinkReloadResume — reload resume, durable answered state (US-123 W2)
+
+**Question:** after a reload, where does the session pick up, and what was already settled?
+**Flows:** reload-resume, view-restored-answers.
+**Layout (Omp host resume line at the top of the reloaded transcript):**
+
+```
+┌─ [ds/StatusReadout resumed] ───────────────────────────────┐
+│ Session restored — 3 of 3 settled answers active.          │
+│ Work resumes at recorded step 1 of 48.                     │
+│ [tracker-detail-link 24×24]  [composer-input]              │
+└────────────────────────────────────────────────────────────┘
+```
+
+- `default.resumed`: 1 resume line stating `Session restored — 3 of 3 settled answers active.` and the resume step (`Work resumes at recorded step 1 of 48.`); 0 settled questions re-asked, 0 blocking prompts rendered (AC-68, AC-70).
+- `loading.restoring`: `Restoring settled answers…` with elapsed; the note never blocks the composer.
+- `error.restore-failed`: persisted record unreadable → `Session restore incomplete — settled answers unavailable; planning starts from scratch.` + named remedy `re-answer from the settled-answers list at the tracker`. Never paints a false resumed state.
+- `empty.fresh-plan`: no persisted record → `No settled answers on file — plan starts fresh.` (a fresh plan is stated, not blank).
+- `success.kickoff-resumed`: `kickedOff` true with 3 of 3 settled answers restored; ANSWER persistence recorded before kickoff step 1 completes (AC-68, AC-69).
+
+Copy rule: the resume line contains 0 of the 3 banned blocking strings from AC-71 and offers no answer request. No new component — reuse `ds/StatusReadout@1.0` and `ds/NoticeBanner@1.0` (L2).
+**Focus order:** `tracker-detail-link`, `composer-input`. The resume line is `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.36.
+
+```json
+{ "screen_id": "SCR-UltrathinkReloadResume", "flows": ["reload-resume", "view-restored-answers"], "states": ["default.resumed", "loading.restoring", "error.restore-failed", "empty.fresh-plan", "success.kickoff-resumed"], "components": [{ "ref": "ds/StatusReadout@1.0", "props": { "labels": ["restored", "fresh"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["tracker-detail-link", "composer-input"], "min_contrast": 6.36 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-68", "AC-69", "AC-70"] }
+```
+
+## Ultrathink motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| ultrathink-advisory-swap | 0 ms | instant text replace (no transition; paint happens on change only) |
+| ultrathink-resume-swap | 0 ms | instant text replace (no transition) |
+
+Target: `tracker-detail-link` 24×24 px with 24 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). The advisory and resume notes are non-interactive and have no target.
+
+## Tb559-be resume addendum (Tb559r-ux, 2026-11-22; tokens 1.2.0 unchanged)
+
+**Scope.** US-125..US-128 (AC-74..AC-85) plus the W3 verification-matrix extension on US-124 (AC-78..AC-81). Human decisions are final: signing waiver with 0 keys provisioned, PR split with c53a15c preserved, host-suite extension to 119/119. Zero new components — both screens reuse `ds/GateBoard`, `ds/NoticeBanner`, `ds/StatusReadout`, `ds/CheckList` (L2). No brand change, no token bump (1.2.0 stays; verified with `ux_token_semver_impact` — 0 added, 0 removed). Fidelity: lofi (no Figma). Provisional: true (no brand guide; system default theme). CAPT-09 routing statement is a visible line on SCR-Tb559ResumeVerify, not a fix.
+
+## SCR-Tb559ResumeVerify — waiver, split, suite, gates, tracking, hashes (US-125..US-128)
+
+**Question:** can this resume land as drafted, or what is still missing?
+**Flows:** verify-waiver, verify-split, verify-suite, verify-gates, verify-tracking.
+**Layout (operator verification board, docs view):**
+
+```
+┌─ [ds/GateBoard] resume board ──────────────────────────┐
+│ waiver 90b18ce: recorded · 0d5032f: recorded           │
+│ split c53a15c on swarm/Tb559-think · PR259: 1 commit   │
+│ suite src/host 119/119 · gates 10/10 pass              │
+│ hashes STATE 29bc314a… ROADMAP 4b26403c… (read-only)  │
+│ CAPT-09 at runtime-decision.md:753 (b37b94c): routed   │
+│   to A08, 0 fixes here, 0 block on scoped DONE         │
+│ [gate-row-link 24×24] [linear-fix-link 44×44]          │
+└────────────────────────────────────────────────────────┘
+```
+
+- `default`: 10 gate plans `Tb559-data, Tb559-fe, Tb559-be, Tb559-qa, Tb559-rev, Tb559-sec, build, rel, obs, docs` each exit 0; waiver rows show 1 record per commit with 0 `commits_signed` failures from missing signatures (AC-74, AC-82); split rows show 1 branch holding c53a15c with 0 loss and PR #259 holding 1 commit 90b18ce with 0 forced pushes on main (AC-75, AC-76); suite row shows 119/119 with the partial-plan advisory assertion and fatal-path silence unchanged (AC-77); hash rows show STATE prefix `29bc314a` and ROADMAP prefix `4b26403c` with 0 planning edits (AC-84); Linear rows show SPE-36512, SPE-36513, SPE-36515, SPE-36516 each with 1 `Refs` commit ref and 1 `Fixes` PR-body ref (AC-83); CAPT-09 line states pre-existing/unrelated, routed to A08, 0 fixes in this scope, 0 block on scoped DONE (AC-85). Both PRs read `Draft` until gates green and merge only via ultrathink ship flow — never rendered green before gates pass.
+- `loading`: `gates: running resume board…` with elapsed; board never appears green while running.
+- `error.gate-fail`: the failing gate named with its check (`BELOW` for coverage floors, named missing file for pack-smoke, named commit for waiver gaps); other rows keep their last truthful verdicts, never erased.
+- `error.validation`: usage line + code; unknown gate plan reads `not run`, never pass.
+- `empty.no-run`: `no gate run for this ref` (exit 1, not pass). Empty is stated, never blank.
+- `success`: 10/10 pass + 119/119 + hashes match + 4 Linear refs + CAPT-09 routing stated; PRs still `Draft` until the ship flow runs.
+
+**Components:** `ds/GateBoard@1.0`, `ds/NoticeBanner@1.0` (CAPT-09 routing line, neverSilent true), `ds/CheckList@1.0` (waiver/split/suite rows, verdicts in text).
+**Focus order:** `gate-row-link`, `pr-commit-link`, `linear-fix-link`.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white pair this run). Board links meet SC 2.5.8 (24 px minimum, measured `compliant: true`).
+
+```json
+{ "screen_id": "SCR-Tb559ResumeVerify", "flows": ["verify-waiver", "verify-split", "verify-suite", "verify-gates", "verify-tracking"], "states": ["default", "loading", "error.gate-fail", "error.validation", "empty.no-run", "success"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "gates": ["Tb559-data", "Tb559-fe", "Tb559-be", "Tb559-qa", "Tb559-rev", "Tb559-sec", "build", "rel", "obs", "docs"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "capt09": "routed-to-A08" } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["waiver", "split", "suite", "hashes", "linear"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "pr-commit-link", "linear-fix-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-74", "AC-75", "AC-76", "AC-77", "AC-82", "AC-83", "AC-84", "AC-85"] }
+```
+
+## SCR-Tb559W3Matrix — herdr advisory verification matrix (US-124 extension)
+
+**Question:** does the advisory render exactly once, name its context, and stay silent when done?
+**Flows:** poll-plan-state, read-advisory, confirm-silence.
+**Layout (Omp host notice region above the composer in herdr; host-owned placement):**
+
+```
+┌─ [ds/NoticeBanner advisory] herdr matrix ──────────────────────────┐
+│ ⚠ Plan tracker (graph ut-...): 32/48 rows set — 16 pending.        │
+│ Unblocking action: complete 16 rows at the tracker, then reload.   │
+│ Planning continues automatically under autonomous mode.             │
+│ [tracker-detail-link 24×24]  [composer-input]                       │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+- `default.incomplete-advisory`: exactly 1 advisory rendered 1 time naming graph id, row count, and 1 unblocking action, with 0 banned strings (AC-79). Copy: `Plan tracker (graph <id>): <done>/<total> rows set — <pending> pending.` + `Unblocking action: <one action>.` + `Planning continues automatically under autonomous mode.` Surface `color.surface.advisory`, border `color.border.advisory`, text `color.text.primary` (15.93 this run), warning line `color.status.warning` (6.36 this run).
+- `loading.polling`: `Reading plan state…` with elapsed; a second poll over unchanged state adds 0 prompts (prompt count stays at 1 across 2 polls, AC-80). The advisory paint happens on change only, so an unchanged poll repaints nothing.
+- `error.state-malformed`: `Plan state unreadable — <named cause>; planning continues from the last known good snapshot.` rendered as 1 named failure with 0 silent drops (AC-81). Cause names which read failed (missing file vs malformed JSON) and never dumps file contents.
+- `empty.complete-silent`: complete plan → 0 advisories render in 2 of 2 renders, live plus after reload in herdr (AC-78). Silence is the absence of the advisory component, stated in the matrix log as `0 advisories in 2 renders`, never as a blank line.
+- `success.verified`: matrix log reads `4 of 4 cases verified (complete/silent live+reload, incomplete/advisory-once, no-second-prompt, malformed/named-failure)`; advisory and notice lines remain `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+
+**Banned-copy rule:** host render contains 0 of the 3 banned blocking strings from AC-71, 0 blocking prompts, 0 manual steps. No dark pattern: pending count stated as fact, never as urgency. Complete-plan silence is per-render verified (live and reload), so a reload cannot resurrect a stale advisory.
+**Components:** `ds/NoticeBanner@1.0` (props: advisory true, neverSilent true, live polite), `ds/StatusReadout@1.0` (props: labels ["ready", "not_ready"]). Reuse only — no new component (L2).
+**Focus order:** `tracker-detail-link`, `composer-input`. Advisory is non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.36 (warning-on-advisory pair this run). Focus ring `#2563eb` on advisory surface 4.64, `meets: true` (SC 1.4.11 needs 3).
+
+```json
+{ "screen_id": "SCR-Tb559W3Matrix", "flows": ["poll-plan-state", "read-advisory", "confirm-silence"], "states": ["default.incomplete-advisory", "loading.polling", "error.state-malformed", "empty.complete-silent", "success.verified"], "components": [{ "ref": "ds/NoticeBanner@1.0", "props": { "advisory": true, "neverSilent": true } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ready", "not_ready"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["tracker-detail-link", "composer-input"], "min_contrast": 6.36 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-78", "AC-79", "AC-80", "AC-81"] }
+```
+
+## Tb559 motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| tb559-board-swap | 0 ms | instant text replace (no transition) |
+| tb559-matrix-swap | 0 ms | instant text replace (no transition; paint happens on change only) |
+
+Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `pr-commit-link` 24x24, `linear-fix-link` 44x44 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Advisory and matrix notes are non-interactive and have no target.
+
+## Swarm cffd9419 resume addendum (Tcffd1-ux, 2026-11-23; tokens 1.2.0 unchanged)
+
+**Scope.** US-129..US-131 (AC-86..AC-96). Human decisions are final: SEC=split (fake fixture assembled in-test from 2 concatenated parts, 0 allowlists, literal value redacted in this spec and the task record), merge of PR #256 conditional on local + CI green with Greptile absence recorded as the user-accepted substitute (0 fake 5 of 5 claims). Zero new components — all three screens reuse `ds/GateBoard`, `ds/CheckList`, `ds/StatusReadout`, `ds/NoticeBanner` (L2). No brand change, no token bump (`ux_token_semver_impact` diff_empty true, l3_required false, next 1.2.1 if file touched). Fidelity: lofi (ASCII wireframes; no Figma). Provisional: true (no brand guide; system default theme). Engineering execution of the split commit, local/CI runs, merge and round-3/W3 runs is owned downstream and only specified here; this addendum states how each state must be displayed and what copy is forbidden.
+
+## SCR-SecSplitFixture — boot-report fixture split and scanner evidence (US-129)
+
+**Question:** is the fixture split clean, does the scanner stay silent, and do refusals stay echo-free?
+**Flows:** verify-split, run-refusal-tests, read-scanner.
+**Layout (operator evidence board, docs view):**
+
+```
+┌─ [ds/GateBoard] boot-report evidence ──────────────────────┐
+│ fixture: 2 parts concatenated, value redacted (0 literal)   │
+│ tests: compiled run 0 failures · refusals 0 echoes          │
+│ scanner: 0 secrets · 0 literal occurrences                  │
+│ [gate-row-link 24x24] [scanner-report-link 24x24]           │
+└────────────────────────────────────────────────────────────┘
+```
+
+- `default.split-clean`: split row reads `fixture assembled from 2 concatenated parts at 1 test location (boot-report, line 177); 0 literal fixture strings in repo` (AC-86). The literal value never appears on this surface, in this spec, or in the task record; downstream verification reads the test file directly for the literal count. Test row reads `compiled boot-report run: 0 failures; refusal assertions: 0 echoes` (AC-87). Scanner row reads `secret scanner: 0 secrets; 0 literal fixture occurrences` (AC-88). All verdicts are text, never colour-only; `color.text.primary` on `color.background.primary` 17.73, `color.status.error` on white 6.47 (measured this run via `ux_contrast`).
+- `loading`: `split: verifying fixture and scanner…` with elapsed; board never reads clean while loading.
+- `error.literal-found`: scanner reports 1+ secrets → the literal count is named (`scanner: 1 secret at <path>:<line>; remedy: split into 2 concatenated parts`) and the commit is shown as not landed. The secret value itself is never rendered (redaction sentinel `REDACTED` only, NFR-C1).
+- `error.validation`: usage line + code; unknown fixture state reads `not run`, never clean.
+- `empty.no-run`: `no scanner run for this ref` (exit 1, not pass). Empty is stated, never blank.
+- `success`: split row + 0-failure test row + 0-secret scanner row together read `split clean — 0 literal strings, 0 failures, 0 echoes, 0 secrets`, and the scanner report link is the only interactive element beyond the gate link.
+
+**Copy bans (design rule):** never print the fixture literal, never print a secret, never print an allowlist entry (0 allowlists exist). Refusal output states the reason without echoing the fixture (0 echoes, AC-87). No dark pattern: the 0-secret claim is stated as a count, never as urgency or praise.
+**Components:** `ds/GateBoard@1.0` (props: rows ["split", "tests", "scanner"]), `ds/CheckList@1.0` (props: rows ["split", "refusals", "scanner"]), `ds/NoticeBanner@1.0` (props: redacted true, neverSilent true, error row only).
+**Focus order:** `gate-row-link`, `scanner-report-link`.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white this run). Links meet SC 2.5.8 (24x24, 24 px centre-to-edge clearance, `ux_target_size_check` compliant true).
+
+```json
+{ "screen_id": "SCR-SecSplitFixture", "flows": ["verify-split", "run-refusal-tests", "read-scanner"], "states": ["default.split-clean", "loading.verifying", "error.literal-found", "error.validation", "empty.no-run", "success"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "rows": ["split", "tests", "scanner"] } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["split", "refusals", "scanner"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "scanner-report-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-86", "AC-87", "AC-88"] }
+```
+
+## SCR-Merge256Gate — conditional PR #256 merge board (US-130)
+
+**Question:** may PR #256 merge under the conditional rule, and what proves the rule held?
+**Flows:** view-local-gates, check-ci, read-absence-note, confirm-merge.
+**Layout (PR evidence board, docs view):**
+
+```
+┌─ [ds/GateBoard] PR #256 merge gate ────────────────────────┐
+│ local: check:docs · test:scripts · build · lint · boot     │
+│ ci: Verify 22.x · 24.x · docs site · breaking · audit      │
+│ Greptile: offline — absence recorded; no 5 of 5 claim      │
+│ [gate-row-link 24x24] [pr-commit-link 24x24]               │
+└────────────────────────────────────────────────────────────┘
+```
+
+- `default.gates-green`: local rows read pass in text (`check:docs pass · test:scripts pass · build pass · lint pass · compiled boot-report pass`) and CI rows read pass (`Verify Node 22.x pass · Verify Node 24.x pass · docs site pass · breaking-change pass · audit pass`), 0 failures (AC-89). The merge action stays disabled until every row is pass; a pending row reads `running…`, never green.
+- `loading`: `merge gate: running local + CI checks…` with elapsed; the board never reads `ready to merge` while any row is loading.
+- `error.gate-fail`: the failing gate named with its check (`check:docs` exit code, CI job name, breaking-change name) and 1 remedy; other rows keep last truthful verdicts, never erased. A red row never repaints as pass.
+- `error.greptile-offline`: the absence state is the default when Greptile is offline, not an error that blocks the board: `Greptile: offline — absence recorded as the user-accepted substitute; gate is local + CI green. 0 claims of 5 of 5 reviews are made.` (AC-91). The surface never fabricates a `5 of 5` verdict and never shows a pass-adjacent Greptile chip.
+- `empty.no-run`: `no local or CI run for this commit` (exit 1, not pass).
+- `success.merged`: `PR #256 merged 1 time with squash through the ship flow; main holds 1 merge commit from the 354f00a line (5 docs files); PR body carries 1 Greptile absence note; 0 claims of 5 of 5` (AC-91), plus `check:docs on merged main: pass exit 0` (AC-90). The success line is reached only after the merge commit exists; before that the board reads `ready to merge — awaiting ship flow`, never `merged`.
+
+**Copy bans (design rule):** 0 of the string bands `5 of 5`, `5/5`, `perfect review`, or any pass-adjacent Greptile verdict may appear unless Greptile actually reported it (it did not in the brief evidence). The absence note must name the offline signal so a reader cannot mistake silence for approval. No dark pattern: the conditional rule is stated as a fact (`merge once local + CI are green`), never as urgency.
+**Components:** `ds/GateBoard@1.0` (props: gates ["check:docs", "test:scripts", "build", "lint", "boot-report", "Verify-22", "Verify-24", "docs-site", "breaking-change", "audit"]), `ds/StatusReadout@1.0` (props: labels ["ready to merge", "merged"]), `ds/NoticeBanner@1.0` (props: greptile "offline-absence-recorded", neverSilent true).
+**Focus order:** `gate-row-link`, `pr-commit-link`.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white this run). Gate and commit links meet SC 2.5.8 (24x24 minimum, `ux_target_size_check` compliant true).
+
+```json
+{ "screen_id": "SCR-Merge256Gate", "flows": ["view-local-gates", "check-ci", "read-absence-note", "confirm-merge"], "states": ["default.gates-green", "loading.running", "error.gate-fail", "error.greptile-offline", "empty.no-run", "success.merged"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "gates": ["check:docs", "test:scripts", "build", "lint", "boot-report", "Verify-22", "Verify-24", "docs-site", "breaking-change", "audit"] } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ready to merge", "merged"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "pr-commit-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-89", "AC-90", "AC-91"] }
+```
+
+## SCR-R3W3Closeout — round-3 gates, W3 matrix, hashes and Linear close-out (US-131)
+
+**Question:** are the resume gates and the W3 matrix green on merged main, and may the tracking close?
+**Flows:** run-r3-gates, run-w3-matrix, verify-hashes, close-tracking, read-final-report.
+**Layout (close-out board on merged main, docs view):**
+
+```
+┌─ [ds/GateBoard] close-out board ───────────────────────────┐
+│ r3: qa.r3 · rev.r3 · sec.r3 · build · rel · obs · docs     │
+│ w3: 9 of 9 green (stack a519184 + 0d5032f)                 │
+│ hashes: STATE 29bc314a… · ROADMAP 4b26403c… (0 edits)     │
+│ linear: n3 · n4 · n6 · n7 (closed only after gates pass)   │
+│ report: PR #255: <state> · PR #259: <state>                │
+│ [gate-row-link 24x24] [linear-fix-link 44x44]              │
+└────────────────────────────────────────────────────────────┘
+```
+
+- `default.gates-running`: 7 plan rows each read `qa.r3 … · rev.r3 … · sec.r3 … · build … · rel … · obs … · docs …`; the W3 row reads `W3 matrix: running 9 checks` (AC-92, AC-93). Hash rows state the read-only promise before they verify: `STATE hash read-only (0 planning edits)`.
+- `loading`: `close-out: running round-3 gates + W3 matrix…` with elapsed; Linear rows read `open — awaiting gates`, never closed early.
+- `error.gate-fail`: the failing plan or W3 check named with its count (`qa.r3 exit 1` / `W3 check 4 of 9 failed: <id>`); Linear rows stay `open` and the final-report row names `not yet listed`, never a guessed PR state (AC-95, AC-96).
+- `error.validation`: usage line + code; an unknown plan or PR id reads `not run`, never pass.
+- `empty.no-run`: `no round-3 or W3 run on merged main` (exit 1, not pass).
+- `success`: 7 of 7 plans exit 0, W3 9 of 9 green on stack `a519184 + 0d5032f`, STATE prefix `29bc314a` and ROADMAP prefix `4b26403c` with 0 planning files changed (AC-92..AC-94), 4 of 4 sub-issues `n3 SPE-36512 · n4 SPE-36513 · n6 SPE-36515 · n7 SPE-36516` closed with 1 commit ref each — 0 closed before gates pass (AC-95), and the final report row reads `PR #255: <state> · PR #259: <state>` with 2 of 2 states listed (AC-96). The advisory surface reuses `color.surface.advisory` with `color.text.primary` 15.93 and `color.status.warning` 6.36 (measured this run); it stays non-interactive (`role="status"` `aria-live="polite"`, never in tab order).
+
+**Copy bans (design rule):** never mark Linear closed while any plan or W3 check is red or not run; never list a PR state that was not read. No dark pattern: the close-out is gated on counts, never narrated as urgency.
+**Components:** `ds/GateBoard@1.0` (props: plans ["qa.r3", "rev.r3", "sec.r3", "build", "rel", "obs", "docs"], w3 checks 9), `ds/CheckList@1.0` (props: rows ["hashes", "linear", "final-report"]), `ds/NoticeBanner@1.0` (props: advisory true, neverSilent true, live polite, hash read-only).
+**Focus order:** `gate-row-link`, `pr-commit-link`, `linear-fix-link`. The advisory note is non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.36 (warning-on-advisory this run). Links meet SC 2.5.8 (24x24 / 44x44, `ux_target_size_check` compliant true). Focus ring `#2563eb` lowest 4.64 across white/advisory/widget/secondary, `ux_focus_contrast_check` meets true (SC 1.4.11 needs 3).
+
+```json
+{ "screen_id": "SCR-R3W3Closeout", "flows": ["run-r3-gates", "run-w3-matrix", "verify-hashes", "close-tracking", "read-final-report"], "states": ["default.gates-running", "loading.running", "error.gate-fail", "error.validation", "empty.no-run", "success"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "plans": ["qa.r3", "rev.r3", "sec.r3", "build", "rel", "obs", "docs"], "w3Checks": 9 } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["hashes", "linear", "final-report"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "pr-commit-link", "linear-fix-link"], "min_contrast": 6.36 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-92", "AC-93", "AC-94", "AC-95", "AC-96"] }
+```
+
+## cffd9419 motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| secsplit-board-swap | 0 ms | instant text replace (no transition) |
+| merge-board-swap | 0 ms | instant text replace (no transition) |
+| r3-closeout-swap | 0 ms | instant text replace (no transition; paint happens on change only) |
+
+Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `pr-commit-link` 24x24, `scanner-report-link` 24x24, `linear-fix-link` 44x44 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Board and advisory notes are non-interactive and have no target.

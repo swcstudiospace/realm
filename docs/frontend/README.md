@@ -85,3 +85,12 @@ Any future `src/cli` edit that changes a string must update `copy-table.md` firs
 2. `copy-table.md` — exact operator copy per state, with `src/cli` source line refs.
 3. `test-notes.md` — component/Playwright/axe test plan for A08, a11y self-check evidence,
    perf/bundle notes, and the handover table for reviewers.
+
+## Tcffd1 addendum — AC-86..AC-96 (tokens 1.2.0, contract 1.1.0)
+
+Screens (docs-view boards, details in `component-spec.md` addendum): `SCR-SecSplitFixture`,
+`SCR-Merge256Gate`, `SCR-R3W3Closeout`. Zero new component — reuse `ds/GateBoard@1.0`,
+`ds/CheckList@1.0`, `ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0`; zero new dependency; zero token
+change (`design.system.tokens@1.2.0`; `API-UltrathinkCompletionGate@1.1.0` advisory precedent, no
+new API call). Execution (split commit, local + CI runs, merge, round-3 / W3 runs, Linear closes)
+is downstream (A05 / A08 / A12 / A01); this catalog states display + forbidden copy only.

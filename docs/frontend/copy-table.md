@@ -68,3 +68,28 @@ Do not write: a third status label (e.g. treating `degraded` as a label rather t
 `ACTIVE` + notice), colour-only pass/fail, `no audit file` phrased as pass, silent absence of a
 notice (`neverSilent: true`), truncated paths that become ambiguous, env values or tokens on
 either stream, loss-framed or urgency copy, progress bars without counts.
+
+## cffd9419 boards — exact board copy (AC-86..AC-96)
+
+Text verdicts only, never colour-only. `stdout` gate verdicts first, `stderr` reasons second.
+The fixture value never appears here (sentinel `REDACTED` only); Greptile absence is plain text,
+never a chip; Linear rows read `open` until gates pass.
+
+| Screen.state | Board row text |
+|---|---|
+| SCR-SecSplitFixture.default.split-clean | `fixture assembled from 2 concatenated parts at 1 test location (boot-report, line 177); 0 literal fixture strings in repo`; `compiled boot-report run: 0 failures; refusal assertions: 0 echoes`; `secret scanner: 0 secrets; 0 literal fixture occurrences` |
+| SCR-SecSplitFixture.loading.verifying | `split: verifying fixture and scanner…` |
+| SCR-SecSplitFixture.error.literal-found | `scanner: 1 secret at <path>:<line>; remedy: split into 2 concatenated parts` (value `REDACTED`, never rendered) |
+| SCR-SecSplitFixture.empty.no-run | `no scanner run for this ref`; exit 1, not pass |
+| SCR-SecSplitFixture.success | `split clean — 0 literal strings, 0 failures, 0 echoes, 0 secrets` |
+| SCR-Merge256Gate.default.gates-green | `check:docs pass · test:scripts pass · build pass · lint pass · compiled boot-report pass`; `Verify Node 22.x pass · Verify Node 24.x pass · docs site pass · breaking-change pass · audit pass` |
+| SCR-Merge256Gate.loading.running | `merge gate: running local + CI checks…` |
+| SCR-Merge256Gate.error.gate-fail | `<gate>: fail` + 1 remedy; other rows keep last verdicts, never erased |
+| SCR-Merge256Gate.error.greptile-offline | `Greptile: offline — absence recorded as the user-accepted substitute; gate is local + CI green. 0 claims of 5 of 5 reviews are made.` |
+| SCR-Merge256Gate.empty.no-run | `no local or CI run for this commit`; exit 1, not pass |
+| SCR-Merge256Gate.success.merged | `PR #256 merged 1 time with squash through the ship flow; main holds 1 merge commit from the 354f00a line (5 docs files); PR body carries 1 Greptile absence note; 0 claims of 5 of 5`; `check:docs on merged main: pass exit 0` |
+| SCR-R3W3Closeout.default.gates-running | `qa.r3 … · rev.r3 … · sec.r3 … · build … · rel … · obs … · docs …`; `W3 matrix: running 9 checks`; `STATE hash read-only (0 planning edits)` |
+| SCR-R3W3Closeout.loading.running | `close-out: running round-3 gates + W3 matrix…`; Linear rows `open — awaiting gates` |
+| SCR-R3W3Closeout.error.gate-fail | `<plan or W3 id>: fail` + count; Linear rows stay `open`; report row names `not yet listed` |
+| SCR-R3W3Closeout.empty.no-run | `no round-3 or W3 run on merged main`; exit 1, not pass |
+| SCR-R3W3Closeout.success | `7 of 7 plans exit 0; W3 9 of 9 green on stack a519184 + 0d5032f; STATE prefix 29bc314a and ROADMAP prefix 4b26403c with 0 planning files changed; 4 of 4 sub-issues n3 SPE-36512 · n4 SPE-36513 · n6 SPE-36515 · n7 SPE-36516 closed with 1 commit ref each; PR #255: <state> · PR #259: <state>` |

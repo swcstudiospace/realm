@@ -489,3 +489,248 @@ When main is read at the merge commit
 Then 1 squash merge exists with 0 edited version fields and 0 CHANGELOG lines in the diff
 check: merge commit count and diff stat
 automated: true
+## US-122 — Ultrathink W1: stale verdict retires on tracker completion
+
+AC-65 story: US-122
+Given 48 pending tracker rows staged with 1 partial_failure verdict
+When tracker completion writes 0 pending rows and complete status
+Then release recomputes verdict to ready with 0 stale partial_failure rows remaining
+check: stale verdict count and ready state
+automated: true
+
+AC-66 story: US-122
+Given a spec rewritten with 0 pending rows after tracker completion
+When release is read 1 time
+Then reported pending count equals 0 and stale verdict count equals 0
+check: pending count equality
+automated: true
+
+AC-67 story: US-122
+Given a tracker state at 1 pending row
+When the completion gate runs
+Then release reports not_ready with 1 pending row named
+check: not_ready state and named pending count
+automated: true
+
+## US-123 — Ultrathink W2: proceed answer survives reload
+
+AC-68 story: US-123
+Given 1 proceed answer with 3 settled answers Q1, Q2, Q3
+When the session ends with SIGTERM and relaunches
+Then kickedOff equals true with 3 of 3 settled answers restored and 0 settled questions re-asked
+check: kickedOff flag and restored answer count
+automated: true
+
+AC-69 story: US-123
+Given 1 proceed answer recorded
+When kickoff starts
+Then ANSWER persistence is recorded before kickoff step 1 completes with 1 persisted record
+check: persistence ordering record
+automated: true
+
+AC-70 story: US-123
+Given a reload with persisted kickedOff true
+When the host renders the next turn
+Then 0 blocking proceed prompts render and continuation resumes at 1 recorded step
+check: blocking prompt count and resume step
+automated: true
+
+## US-124 — Ultrathink W3: incomplete notice advises and continues
+
+AC-71 story: US-124
+Given 1 staged incomplete verdict with 1 pending set
+When the host renders the plan notice
+Then output holds 1 advisory note naming the pending count with 0 banned STOP, proceed or confirm strings
+check: banned string count and advisory presence
+automated: true
+
+AC-72 story: US-124
+Given 1 advisory incomplete state
+When the next request runs under gsd-autonomous
+Then 1 request continues with 0 manual proceed steps required
+check: continuation count and manual step count
+automated: true
+
+AC-73 story: US-124
+Given the advisory path active
+When incomplete metrics are read 1 time
+Then pending count and incomplete verdict stay visible with 1 warning line and 0 warnings suppressed wholesale
+check: warning line count and visible metrics
+automated: true
+
+## US-125 — Tb559-be resume: signing waiver for BE and FE commits
+
+AC-74 story: US-125
+Given 2 commits 90b18ce and 0d5032f recorded with %G?=N and 0 keys provisioned
+When be_patch_shape_check runs over the 2 commits
+Then commits_signed failures equal 0 with 1 waiver record per commit
+check: waiver records and failure count
+automated: true
+
+## US-126 — Tb559-be resume: preserve think commit and split pull requests
+
+AC-75 story: US-126
+Given 1 commit c53a15c present in local history
+When branch swarm/Tb559-think at c53a15c is created and pull request 259 history is read
+Then 1 branch holds c53a15c with 0 loss and pull request 259 holds 1 commit
+check: branch head and pull request commit count
+automated: true
+
+AC-76 story: US-126
+Given pull request 259 rebased onto 0d5032f
+When force-with-lease update lands on the swarm branch
+Then pull request 259 diff holds 1 commit and main holds 0 forced pushes
+check: diff commit count and main push count
+automated: true
+
+## US-127 — Tb559-be resume: extend host suite to 119 of 119
+
+AC-77 story: US-127
+Given src/host/omp.test.ts as 1 of 6 target files with 1 partial-plan test at line 454
+When src/host suite runs
+Then the suite reports 119 of 119 passed with 0 failures and the test asserts 1 advisory note with fatal-path silence unchanged
+check: passed count and advisory assertion
+automated: true
+
+## US-124 — Ultrathink W3 verification matrix extension
+
+AC-78 story: US-124
+Given 1 complete plan in herdr
+When the host renders live and after reload with 2 renders
+Then 0 advisories render in 2 of 2 renders
+check: advisory count across 2 renders
+automated: true
+
+AC-79 story: US-124
+Given 1 incomplete plan with 1 graph id and row count
+When the host renders the notice 1 time
+Then 1 advisory renders naming graph id, row count, and 1 unblocking action with 0 banned strings
+check: named graph, row count, unblocking action, banned count
+automated: true
+
+AC-80 story: US-124
+Given 1 advisory rendered 1 time with state unchanged
+When 2 polls run over unchanged state
+Then prompt count stays at 1 with 0 second prompts
+check: prompt count across 2 polls
+automated: true
+
+AC-81 story: US-124
+Given 1 malformed or missing plan state
+When the host reads state 1 time
+Then 1 named failure renders with 0 silent drops
+check: named failure count and silent drop count
+automated: true
+
+## US-128 — Tb559-be resume: gates, Linear, planning hashes, CAPT-09 record
+
+AC-82 story: US-128
+Given 6 Tb559 plans Tb559-data, Tb559-fe, Tb559-be, Tb559-qa, Tb559-rev, Tb559-sec plus build, rel, obs, docs plans
+When each named gate plan runs
+Then each named gate plan exits 0 with 0 failures
+check: gate exit codes
+automated: true
+
+AC-83 story: US-128
+Given 4 Linear issues SPE-36512, SPE-36513, SPE-36515, SPE-36516
+When sub-issue updates complete per task
+Then 4 issues carry 1 commit ref each with Refs SPE-3651x and 1 PR body fix ref each with Fixes SPE-3651x
+check: issue update refs
+automated: true
+
+AC-84 story: US-128
+Given .planning STATE.md and ROADMAP.md
+When sha256 hashes are read
+Then STATE hash starts 29bc314a and ROADMAP hash starts 4b26403c with 0 planning edits
+check: hash prefixes and edit count
+automated: true
+
+AC-85 story: US-128
+Given 1 CAPT-09 record at docs/integration/runtime-decision.md line 753 from commit b37b94c
+When pull request scope is read
+Then 1 record routes CAPT-09 to A08 with 0 fixes in this scope and 0 block on scoped DONE
+check: routing record and fix count
+automated: true
+
+## US-129 — SEC canary split in the boot-report test fixture
+
+AC-86 story: US-129
+Given 1 test file test/host/boot-report.test.ts at line 177 with 1 literal 40-character fixture
+When the fixture is split into 2 concatenated parts and committed on swarm/Tb559r-capt09
+Then the repository holds 0 literal fixture strings and 1 commit holds 2 parts
+check: literal fixture grep count and commit diff
+automated: true
+
+AC-87 story: US-129
+Given 1 compiled boot-report test file with the 2-part fixture
+When node --test runs on the compiled file 1 time
+Then 1 run exits 0 with 0 failures and refusal assertions report 0 echoes of the fixture
+check: test exit code, failure count and echo count
+automated: true
+
+AC-88 story: US-129
+Given 1 repository on swarm/Tb559r-capt09 with the 2-part fixture
+When the secret scanner runs 1 time
+Then the scanner reports 0 secrets with 0 literal fixture occurrences
+check: scanner secret count and literal occurrence count
+automated: true
+
+## US-130 — Conditional merge of pull request 256
+
+AC-89 story: US-130
+Given 1 branch swarm/Tb559r-capt09 in the 354f00a line with 5 docs files
+When local gates check-docs, test-scripts, build, lint and 1 compiled boot-report run execute plus CI reruns on the split commit
+Then each local gate exits 0 and CI Verify on Node 22.x and 24.x passes with the docs site, the breaking-change check and the audit all passing and 0 failures
+check: local gate exit codes and CI job verdicts
+automated: true
+
+AC-90 story: US-130
+Given 1 merged main tree after pull request 256 merges
+When npm run check:docs runs on main 1 time
+Then the command exits 0 with 0 failures
+check: check-docs exit code and failure count
+automated: true
+
+AC-91 story: US-130
+Given 1 pull request 256 with local green and CI green and 1 Greptile offline signal
+When the ship flow merges 1 time with squash
+Then main holds 1 merge commit, the pull request body records 1 Greptile absence note and 0 claims of 5 of 5 reviews appear
+check: merge commit count, absence note count and 5 of 5 claim count
+automated: true
+
+## US-131 — Round 3 gates, W3 matrix and Linear close-out
+
+AC-92 story: US-131
+Given 1 merged main tree
+When plans qa.r3, rev.r3, sec.r3, build, rel, obs and docs run
+Then 7 of 7 plans exit 0 with 0 failures
+check: plan exit codes and failure counts
+automated: true
+
+AC-93 story: US-131
+Given 1 ultrathink stack with commits a519184 and 0d5032f
+When the 9 W3 checks across the 3 waves run
+Then 9 of 9 checks report green with 0 failures
+check: W3 check verdicts and failure counts
+automated: true
+
+AC-94 story: US-131
+Given .planning STATE.md and ROADMAP.md on the merged main tree
+When sha256 hashes are read 1 time
+Then the STATE hash starts 29bc314a, the ROADMAP hash starts 4b26403c and 0 planning files changed
+check: hash prefixes and changed-file count
+automated: true
+
+AC-95 story: US-131
+Given 4 sub-issues n3 SPE-36512, n4 SPE-36513, n6 SPE-36515 and n7 SPE-36516
+When round 3 gates and the W3 matrix pass
+Then 4 of 4 sub-issues close with 1 commit ref each and 0 sub-issues close before gates pass
+check: closed sub-issue count and commit ref presence
+automated: true
+
+AC-96 story: US-131
+Given 1 final resume report
+When the report is read 1 time
+Then the report names 1 state for pull request 255 and 1 state for pull request 259 with 2 of 2 states listed
+check: named state counts for 2 pull requests
+automated: true

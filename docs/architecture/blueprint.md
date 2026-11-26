@@ -302,3 +302,207 @@ The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:t
 Decided: persisted default-on toggle gating a single registration/paint funnel; widget-only paint with 0 under-bar calls; operator-local named diagnostic with 0 audit/log leakage; contract-first publish at 1.0.0 with 4 operations; 7-NFR 100% allocation; fan-out budget 8 held (max 4); phase-59 code gate is absolute.
 
 UNVERIFIED (never inferred): live `setWidget` signature on the deployed Omp version (spike-verify first; a missing widget needs a superseding ADR, not a fallback paint); hermetic counts (5/0 tools, 1/0 paints, 4-of-4 states) — no fake-host run under this task; live starts (AC-33/34), phases 56/57/58 live windows, phase-59 ratification; A10 co-sign of the §17 threat deltas; 8 gates green / CI green / Greptile 5/5 on the change branch (parent owns after join).
+
+## 18. Ultrathink stale-verdict fix — completion-gate revalidation, durable proceed, advisory notice (Tb559-arch)
+
+**Scope.** US-122..US-124 and AC-65..AC-73 (spec §12). The change lands in the `claude-ultrathink` planner-host repo (`src/host/completion-gate.ts`, host `omp.ts`): `validateArtifacts` + `release()` revalidation (W1), ANSWER persistence before kickoff (W2), advisory `planAdvisoryNote` delivery (W3). This blueprint writes 0 product code and changes 0 agent-realm `.planning` files. **Correlation:** `b55904dd-b3b1-4b36-9f34-6a46245066b5` · **Task:** `Tb559-arch` · **Capability:** `design.blueprint`.
+
+### 18.1 System context (C4 Level 1, Ultrathink containers)
+
+```mermaid
+flowchart TB
+  Operator([Operator]) --> OmpHost[Omp host omp.ts]
+  OmpHost --> CompletionGate[CompletionGate<br/>stage / complete / release]
+  CompletionGate --> Validator[validateArtifacts<br/>PENDING_ROW_RE]
+  Validator --> TrackerStore[Tracker rows<br/>issues spec]
+  OmpHost --> SessionStore[Session store<br/>ANSWER kickedOff]
+  OmpHost --> AdvisoryNotifier[AdvisoryNotifier<br/>planAdvisoryNote aside]
+```
+
+Trust zones: **host conversation** (Operator, chat) · **planner host** (OmpHost, CompletionGate, AdvisoryNotifier) · **persisted session** (TrackerStore, SessionStore). The chat-only proceed answer and the persisted ANSWER record must agree after reload (equivalence via shared state, Q2).
+
+### 18.2 Container model and coupling budget (Ultrathink slice)
+
+`arch_c4_fanout`: `container_count=6`, `relation_count=6`, `max_fan_out=3`, `over_budget=[]`, `isolated=[]` against fan-out budget **8**. Containers: OmpHost, CompletionGate, Validator, TrackerStore, SessionStore, AdvisoryNotifier. Cross-boundary state flows only through `API-UltrathinkCompletionGate` (§18.6): OmpHost never reads tracker rows directly; CompletionGate never writes session answers.
+
+### 18.3 Module layering and cycles (Ultrathink slice)
+
+`layer_order`: `surface → orchestration → domain → platform`. `arch_layer_violations`: `violation_count=0`, `checked_edges=5`, `unassigned=[]` (omp-host surface → completion-gate/session-store orchestration → validator/tracker domain → xml-check platform). `arch_cycle_check`: `has_cycle=false`, `node_count=6`, `cyclic_node_count=0`, `cyclic_components=[]`. Any new edge into the ultrathink slice enters the fitness set; an upward edge or a cycle blocks downstream CLAIMED tasks.
+
+### 18.4 Design (W1 → W2 → W3, ordered plan n7)
+
+**W1 — stale verdict retires on tracker completion (UTR-01, UTR-02; AC-65..AC-67; ADR-0005).** `release()` in `CompletionGate` recomputes the verdict with `validateArtifacts` against the current tracker XML on every read: tracker rewrites the spec with 0 pending rows → fresh verdict `ready` → `ok:true`, 0 stale `partial_failure` rows. At 1 pending row, `PENDING_ROW_RE` still matches → `partial_failure` (`rows_pending`) → `ok:false, reason:not_ready` naming the pending count. `stage()` alone never settles the gate (`complete()` settles); a later `stage()` after completion triggers revalidation on the next `release()`. Gaps: no new timer, no background revalidator — revalidation is synchronous in `release()` and budgeted by NFR-P2.
+
+**W2 — proceed answer survives reload (UTR-03, UTR-04; AC-68..AC-70; ADR-0006).** A proceed answer persists as ANSWER with the 3 settled answers (Q1 both transcripts, Q2 shared-state equivalence, Q3 pause-until-completed) and `kickedOff=true` before kickoff step 1 completes (ordering record kept for AC-69). Reload restores the record under 1 session identity: `kickedOff=true`, 3 of 3 answers, 0 re-asks, 0 blocking prompts, continuation resumes at the recorded step. Persisted record carries 0 secrets and 0 chat-only content (NFR-S3). Clarifications Q1..Q3 are never re-asked: the spec file is their single home; the session store is the reload source.
+
+**W3 — incomplete notice advises and continues (UTR-05, UTR-06; AC-71..AC-73; ADR-0007).** A `partial_failure` verdict renders `planAdvisoryNote` (composed by `advisoryNoteForVerdict`: `Plan note: <details>. The request continues as written.`) through the aside path; the turn starts at once with 0 STOP/proceed/confirm strings and 0 manual proceed steps (gsd-autonomous autonomy intact). The pending count and incomplete verdict stay visible: 1 warning line, 0 warnings suppressed wholesale. The blocking STOP path is removed (design AC-32/33 / UX advisory rule); fatal verdicts keep the host's unusable-plan notice. `release()` returning `not_ready` under W1 renders as advisory + continuation, never as a blocking prompt.
+
+Constraint compliance: 0 manual proceed steps (§12.6); warnings visible, never suppressed wholesale; 0 `.planning` STATE/ROADMAP edits.
+
+### 18.5 Threat model summary (STRIDE delta, A10 co-sign pending)
+
+Crossings added by W2: Chat → SessionStore (spoof/tamper: forged ANSWER could fake kickoff; mitigation: persistence gated on recorded ordering before kickoff step 1 + restore under the same session identity, AC-69). SessionStore → PlannerHost (information disclosure: persisted answers leaking secrets; mitigation: NFR-S3, 0 secrets in the persisted record, verified by A08/A10). TrackerStore → CompletionGate (tamper: tracker rows rewritten after staging change the verdict; mitigation: W1 revalidation recomputes from current rows, 0 stale verdicts). Residual-risk acceptance is A10-only; this blueprint accepts no security risk.
+
+### 18.6 Contract (consumed by A05/A08, pinned by digest)
+
+| Contract | File | Version | Consumers | Key clauses |
+|---|---|---|---|---|
+| API-UltrathinkCompletionGate | `docs/architecture/contracts/api-ultrathink-completion-gate.yaml` (OpenAPI 3.1) | 1.0.0 (5 ops) | A05, A08 | `/gate/validate` fresh verdict, `/gate/release` ready/not_ready+pendingRows, `/session/answer` PUT+GET persist/restore, `/gate/advisory` advisory note+continues |
+
+`arch_contract_ops`: `operations=5`. `arch_contract_check` (python): 1 contract, 0 breaking, 0 findings, verdict pass; `--root` scan: 4 contracts (5/7/4/5 operations), 0 breaking, verdict pass. `arch_field_breaks` (ReleaseResponse +`pendingRows`): `breaking_change=false`, `additive=["added field pendingRows"]`. `arch_breaking_readiness`: `autonomy_level=L2`, `ready=true`, `missing=[]`. Initial version → non-breaking by construction; any future breaking change needs major bump + migration + consumer acks → L3 → BLOCKED.
+
+### 18.7 NFR bindings
+
+`arch_nfr_allocation`: `nfr_count=2`, `allocated=[NFR-P2, NFR-S3]`, `unallocated=[]`, `unmeasurable=[]`, `coverage_pct=100`, `fully_allocated=true`.
+
+| NFR | Kind | Binding (contract clause / component budget) | Limit |
+|---|---|---|---|
+| NFR-P2 (perf) | quantitative | Component budget: revalidation in `POST /gate/validate` | 5 s |
+| NFR-P2 (perf) | quantitative | Component budget: 1 release read `/gate/release` | 10 s, 1 response |
+| NFR-S3 (security) | quantitative | Clause: `/session/answer` persisted record | 0 secrets |
+
+`arch_nfr_budget` with budgets {revalidation_s max 5, release_read_s max 10} and 0 measurements: `checked=0`, `within_budget=false`, `unmeasured=[revalidation_s, release_read_s]` — honest fail-closed reading; measurements are pending A08 on the planner host (UNVERIFIED, not a pass). Detail in `nfr-allocation.md` §18 addendum. Carried NFR-P1/S1/A1/I1/C1 unchanged (no new binding).
+
+### 18.8 Fitness functions (CI, Ultrathink slice)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` on the §18.3 edge set | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` on §18.3 edge set | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` on §18.2 containers | fan-out ≤ 8; 0 isolated (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` | `fully_allocated=true`, coverage 100% (measured pass) |
+| F5 | NFR budget | `arch_nfr_budget` vs live measurements | within budget or named skip (skip ≠ pass; currently UNVERIFIED) |
+| F6 | Contract conformance | `arch_contract_check` + `arch_field_breaks` + `arch_breaking_readiness` | semver-compliant, no breaking without L3 (measured pass) |
+| F7 | ADR lifecycle | `arch_adr_supersession` on ADR-0005..0008 | `valid=true`, heads ADR-0005..0008, 0 dangling/forks/cycles (measured pass) |
+
+### 18.9 Tech stack (changes: none)
+
+The §10 table is unchanged. W1/W2/W3 use existing `CompletionGate`, `validateArtifacts`, `planAdvisoryNote`/`advisoryNoteForVerdict`, and the session store — **no new first-party dependency, no new infrastructure, no licence change**. Any future pick outside §10 remains an ADR; infrastructure or dependency picks are L3.
+
+### 18.10 What was decided vs UNVERIFIED
+
+Decided (L2): W1 synchronous revalidation in `release()`; W2 persist-before-kickoff with same-identity restore; W3 advisory-aside continuation with 0 banned strings; contract-first publish at 1.0.0 with 5 operations; NFR-P2/S3 100% allocated; fitness F1–F4/F6/F7 pass. UNVERIFIED (never inferred): live NFR-P2 measurements (A08 on planner host); persisted ordering record and reload-restore counts (A05/A08 runs of AC-68..AC-70); advisory banned-string scan + continuation count (A08 runs of AC-71..AC-73); A10 co-sign of §18.5; CI green / Greptile 5/5 on the change branch (parent owns after join).
+
+## 19. Tb559-be resume — waiver, split, host suite, W3 matrix (Tb559r-arch)
+
+**Scope.** US-125..US-128 plus the W3 verification-matrix extension on US-124 (spec §13, AC-74..AC-85). **Correlation:** `85d9e52f-ec68-4338-94b9-fb1091c2de2c` · **Task:** `Tb559r-arch` · **Capability:** `design.blueprint`. This blueprint writes 0 product code, provisions 0 keys, force-pushes 0 commits on main, and edits 0 planning files. CAPT-09 (`docs/integration/runtime-decision.md:753`, commit `b37b94c`) is pre-existing and unrelated, routed to A08 with 0 fixes here; it blocks 0 scoped DONE outcomes.
+
+### 19.1 Container model and coupling (unchanged)
+
+`arch_c4_fanout`: `container_count=6`, `relation_count=6`, `max_fan_out=3`, `over_budget=[]`, `isolated=[]` against fan-out budget **8** (same 6 containers as §18.2). `arch_layer_violations`: `violation_count=0`, `checked_edges=5`, `unassigned=[]` (`surface → orchestration → domain → platform`). `arch_cycle_check`: `has_cycle=false`, `node_count=6`, `cyclic_node_count=0`, `cyclic_components=[]`. No new container, layer, or edge is introduced by §13; waiver, split and test scope are governance and verification bindings, not runtime topology.
+
+### 19.2 Decisions (L2, recorded as ADRs under `docs/adr/`)
+
+| Decision | ADR | Acceptance |
+|---|---|---|
+|---|---|---|
+| Record signing waiver for 90b18ce (BE) and 0d5032f (FE) with 0 keys provisioned | ADR-0009 | SIGN-01, AC-74 |
+| Preserve c53a15c on `swarm/Tb559-think`; rebase BE onto 0d5032f so PR 259 holds 90b18ce only; force-with-lease on swarm branches only, never main; Draft until gates green, ultrathink ship flow only | ADR-0010 | SPLIT-01..02, AC-75..AC-76 |
+| Extend host suite: `src/host/omp.test.ts` as 6th target file; convert the line 454 partial-plan test to the W3 advisory expectation modeled on `omp-flight.test.ts`; fatal-path silence unchanged; 119/119 | ADR-0011 | TEST-01, AC-77 |
+| Extend W3 matrix additively in the completion-gate contract at 1.1.0 (see §19.3) | ADR-0012 | UTR-05..06, AC-78..AC-81 |
+
+All four are L2: catalog patterns, non-breaking contract revision, no novel infrastructure, no new first-party dependency, no security-risk acceptance. None supersedes another; ADR-0005..0008 remain the live W1..W3 decisions.
+
+### 19.3 Contract (consumed by A05/A08)
+
+`API-UltrathinkCompletionGate` 1.1.0 (`docs/architecture/contracts/api-ultrathink-completion-gate.yaml`, OpenAPI 3.1, **5 operations**) advances the 1.0.0 slice in §18.6. `arch_contract_ops`: `operations=5`. `AdvisoryResponse` gains 4 optional fields only — `graphId`, `unblockingAction`, `renderCount`, `failure{code,detail}` — with `required` unchanged; `arch_field_breaks` on the response side: `breaking_change=false`, `additive=[added field failure, added field graphId, added field renderCount, added field unblockingAction]`. `arch_semver_bump` 1.0.0 → 1.1.0: `bump=minor`, `required_bump=minor`, `compliant=true`. `arch_breaking_readiness` at 1.1.0: `autonomy_level=L2`, `ready=true`, `missing=[]`. Matrix binding: AC-78 complete plan stays silent on both renders; AC-79 advisory names graph id, row count and one unblocking action with 0 banned strings; AC-80 `renderCount` stays 1 across 2 polls on unchanged state; AC-81 malformed/missing state returns 1 named `failure` with 0 silent drops.
+
+### 19.4 NFR bindings (no new NFR)
+
+Spec §13.6 adds 0 new NFRs. `arch_nfr_allocation` over {NFR-P2, NFR-S3}: `nfr_count=2`, `allocated=[NFR-P2, NFR-S3]`, `unallocated=[]`, `unmeasurable=[]`, `coverage_pct=100`, `fully_allocated=true`. NFR-P2 (revalidation 5 s, release read 10 s) and NFR-S3 (0 secrets persisted) carry forward unchanged. No quantitative NFR in AC-74..AC-85 lacks a numeric limit; gates AC-82 (10 plans exit 0), Linear AC-83 (4 issues with Refs/Fixes), planning hashes AC-84 (STATE `29bc314a`, ROADMAP `4b26403c`, 0 edits) and CAPT-09 routing AC-85 are correctness bindings verified by A08/A10 suites, not new load budgets.
+
+### 19.5 Fitness functions (CI, delta)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` (§19.1) | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` (§19.1) | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` (§19.1) | fan-out ≤ 8; 0 isolated (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` (§19.4) | 100% allocated (measured pass) |
+| F6 | Contract conformance | `arch_contract_check` + `arch_field_breaks` + `arch_semver_bump` + `arch_breaking_readiness` | minor bump compliant, L2, no breaking (measured pass) |
+| F7 | ADR lifecycle | `arch_adr.py --list` | 12 ADRs, 0 findings (measured pass; supersession heads ADR-0009..0012 plus ADR-0005..0008) |
+| F8 | Host-suite advisory | `src/host` suite (A05/A08 runs) | 119/119, 0 failures, advisory assertion present (UNVERIFIED here — no product run under this task) |
+| F9 | Waiver + split | waiver records, branch topology, PR 259 commit count (A05/A08 runs) | 0 commits_signed failures on 90b18ce/0d5032f; 1 preserved branch; PR 259 = 1 commit (UNVERIFIED here — no git write under this task) |
+
+Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5, F8, F9 are `UNVERIFIED`, not passes, until the owning suite or git operation reports.
+
+### 19.6 Tech stack (changes: none)
+
+The §10 table is unchanged: no new first-party dependency, no new infrastructure, no licence change, 0 keys provisioned, 0 force pushes on main.
+
+### 19.7 What was decided vs UNVERIFIED (§19)
+
+Decided (L2): waiver narrow to the two named commits; split topology with loss forbidden and Draft-until-green; hermetic advisory conversion keeping fatal silence; additive 1.1.0 contract extension with the W3 matrix binding; NFR carry-forward at 100% allocation. UNVERIFIED (never inferred): F8 119/119 run, F9 waiver/split git evidence, Linear SPE-36512/13/15/16 updates with Refs/Fixes refs, W3 live renders in herdr, A10 co-sign of the §18.5 deltas that still stand, CI green / Greptile 5/5 and ultrathink-ship merge (parent owns after join).
+
+## 20. Swarm task cffd9419 resume — SEC split, conditional merge 256, round 3 gates and W3 matrix (Tcffd1-arch)
+
+**Scope.** US-129..US-131 and AC-86..AC-96 (spec §14) on branch `swarm/Tb559r-capt09`, correlation `cffd9419-11d3-47d0-a760-9b04c94cc7d5`, task `Tcffd1-arch`, capability `design.blueprint`. This blueprint writes 0 product code, runs 0 merge operations, and edits 0 `.planning` files. The change is a test-fixture split plus merge-governance and gate-ordering design; the Realm runtime topology, layer order (§4) and the §10 tech stack are unchanged.
+
+### 20.1 System context (C4 Level 1 — resume pipeline slice)
+
+```mermaid
+flowchart TB
+  T[BootReportTest<br/>test/host/boot-report.test.ts] --> S[SecretScanner<br/>scanner]
+  L[LocalGates<br/>check:docs test:scripts build lint compiled boot-report] --> C[CIPipeline<br/>CI verify docs breaking audit]
+  P[PRShipFlow<br/>ultrathink ship flow squash] --> L
+  P --> C
+  P --> M[MergedMain<br/>main after PR 256 squash]
+  M --> LIN[LinearTracker<br/>SPE-36512 13 15 16 close-out]
+  U[UltrathinkStack<br/>a519184 + 0d5032f] --> LIN
+```
+
+Trust zones: **test zone** (BootReportTest) · **scanner zone** (SecretScanner) · **pipeline zone** (LocalGates, CIPipeline, PRShipFlow) · **release core** (MergedMain) · **parallel tree** (UltrathinkStack) · **tracking** (LinearTracker). State crosses zones only through the evidence trail per step (scanner report → local/CI verdicts → ship-flow merge → r3/W3 results → Linear refs), never by direct mutation.
+
+### 20.2 Container model and coupling budget (resume slice)
+
+`arch_c4_fanout`: `container_count=8`, `relation_count=7`, `max_fan_out=3`, `over_budget=[]`, `isolated=[]` against fan-out budget **8**. Containers: BootReportTest, SecretScanner, LocalGates, CIPipeline, PRShipFlow, MergedMain, UltrathinkStack, LinearTracker. PRShipFlow fans out to 3 (LocalGates, CIPipeline, MergedMain); every other container fans out ≤ 1; 0 containers are isolated (each crossing has a named evidence producer/consumer).
+
+### 20.3 Module layering and cycles (resume slice)
+
+`layer_order`: `pipeline → verification → core → tracking` (outermost → innermost; a module may depend on its own layer or any later one). `arch_layer_violations`: `violation_count=0`, `checked_edges=7`, `unassigned=[]` (PRShipFlow/LocalGates/CIPipeline pipeline; BootReportTest/SecretScanner/UltrathinkStack verification; MergedMain core; LinearTracker tracking). `arch_cycle_check`: `has_cycle=false`, `node_count=8`, `cyclic_node_count=0`, `cyclic_components=[]`. Any new edge into the resume slice enters the fitness set; an upward edge or a cycle blocks downstream CLAIMED tasks.
+
+### 20.4 Decisions (all L2, recorded as ADRs under `docs/adr/`)
+
+| Decision | ADR | Acceptance |
+|---|---|---|
+|---|---|---|
+| Split the fake GitHub fixture into 2 concatenated parts at 1 test location on `swarm/Tb559r-capt09`; 0 literal fixture strings in the repo; 0 allowlists | ADR-0013 | SECSPLIT-01..02, AC-86..AC-88 |
+| Merge PR 256 once via the ultrathink ship flow with squash from the 354f00a line (5 docs files) after local + CI green; the PR body records 1 Greptile absence note and 0 claims of 5 of 5 (Greptile absence is the user-accepted substitute — merge with local + CI green is an explicit human decision, and faking a review would be a lie) | ADR-0014 | MERGE256-01..02, AC-89..AC-91 |
+| Run 7 r3/release plans on merged main and 9-of-9 W3 checks on the ultrathink stack; verify STATE `29bc314a` / ROADMAP `4b26403c` with 0 edits; close the 4 Linear sub-issues only with passing gates; final report names PR #255 and PR #259 states | ADR-0015 | R3-01, W3M-01, HASH-02, LIN-02, REP-01, AC-92..AC-96 |
+
+All three are L2: catalog-pattern, non-breaking, 0 novel infrastructure, 0 new first-party dependency, 0 breaking contract change, 0 security-risk acceptance. None supersedes another; ADR-0009..0012 remain the live Tb559r decisions.
+
+### 20.5 Contract position (changes: none)
+
+No runtime contract changes in this task: `API-UltrathinkCompletionGate` stays at **1.1.0 (5 operations)**, and the 4-contract scan (`arch_contract_check` python + bun) reports 4 contracts (5/7/4/5 operations), **0 breaking, 0 findings, verdict pass**. `arch_contract_ops` on the completion-gate document returns `operations=5`. `arch_field_breaks` on the unchanged `AdvisoryResponse` side returns `breaking_change=false`, `breaking=[]`, `additive=[]`. `arch_semver_bump` 1.1.0 → 1.1.0 returns `bump=none`, `required_bump=none`, `compliant=true`. The SEC split, conditional merge and r3/W3 ordering bind verification evidence (scanner report, local/CI verdicts, ship record, hash prefixes, Linear refs), not OpenAPI surface, so no new contract file is introduced and no consumer re-pin is needed. Any future breaking change needs a major bump + migration plan + consumer acks → L3 → BLOCKED.
+
+### 20.6 NFR bindings (no new NFR in §14.4)
+
+Spec §14.4 adds **0 new NFRs**; NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1, NFR-P2, NFR-S3 carry forward. Measured by `arch_nfr_allocation`: `nfr_count=7`, `allocated=[NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1, NFR-P2, NFR-S3]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`. The SEC split strengthens NFR-S1 (0 literal fixture strings, scanner 0 secrets) and NFR-C1 (0 redaction regressions, 0 literal fixture copies in specs/handover); the conditional merge and r3/W3 ordering are correctness bindings verified by A08/A10/A12 suites, not new load budgets. Detail in `nfr-allocation.md` §20 addendum. `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, revalidation_s max 5, release_read_s max 10} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, revalidation_s, release_read_s]` — the honest fail-closed reading: measurements are pending A08 (UNVERIFIED, not a pass).
+
+### 20.7 Fitness functions (CI, resume slice)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` (§20.3) | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` (§20.3) | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` (§20.2) | fan-out ≤ 8; 0 isolated (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` (§20.6) | 100% allocated (measured pass) |
+| F5 | NFR budget | `arch_nfr_budget` vs live measurements | within budget or named skip (skip ≠ pass; currently UNVERIFIED) |
+| F6 | Contract conformance | `arch_contract_check` + `arch_contract_ops` + `arch_field_breaks` + `arch_semver_bump` | 4 contracts pass, 0 breaking, semver-compliant (measured pass) |
+| F7 | ADR lifecycle | `arch_adr.py --list` | 15 ADRs, 0 findings (measured pass; supersession heads include ADR-0013..0015) |
+| F10 | Scanner + split | literal-fixture grep count + scanner report (A05/A08 runs) | 0 literals, 0 secrets, compiled boot-report exit 0 (UNVERIFIED here — no product run under this task) |
+| F11 | Merge evidence | local + CI green record, ship merge record, PR-body absence note (A05/A12 runs) | 1 squash merge, 0 fake 5-of-5 claims, `check:docs` exit 0 on main (UNVERIFIED here — no merge under this task) |
+| F12 | Gate + tracking close-out | r3/W3 verdicts, hash prefixes, Linear refs, PR #255/#259 states (A08/A01 runs) | 7 plans + 9 W3 green, hashes `29bc314a`/`4b26403c` with 0 edits, 4 sub-issues close only with gates (UNVERIFIED here) |
+
+Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5, F10, F11, F12 are `UNVERIFIED`, not passes, until the owning suite, scanner, merge or tracker operation reports.
+
+### 20.8 Tech stack (changes: none)
+
+The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:test`, `fast-check`), rootless Podman 5.x digest-pinned, OpenShell 0.1.5 + Realm compute driver, GitHub Actions attested release. The split, conditional merge and gate ordering introduce **no new first-party dependency, no new infrastructure, no licence change**. Any future pick outside §10 remains an ADR; infrastructure or dependency picks are L3.
+
+### 20.9 What was decided vs UNVERIFIED (§20)
+
+Decided (L2): in-test split with 0 allowlists; conditional merge through the ship flow with the Greptile absence recorded as the user-accepted substitute and 0 fake verdicts; gate-then-close ordering over 2 trees (merged main for r3, ultrathink stack for W3) with read-only hash verification; 100% NFR allocation; 0 new containers in the Realm runtime; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F10/F11/F12 evidence (scanner, local/CI, merge, r3/W3, Linear, PR #255/#259 states — A05/A08/A12/A01 own those runs), live NFR measurements, A10 co-sign of the §20 threat deltas.

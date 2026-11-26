@@ -209,3 +209,69 @@ Addendum. The toggle is one optional field on the existing persisted manifest re
 - **ERD.** `PluginBoot` is an embedded block of the host plugin manifest record (`src/host/types.ts`, parsed by `src/host/manifest.ts`, resolved by `src/host/boot.ts`); it references no other entity by id and is referenced by none.
 - **Retention / deletion.** The block lives with the manifest/settings document; removing the document removes the toggle. Rollback of M-2026-006 carries no retention entry; the off value does not survive rollback.
 - **Paint and diagnose (no new persisted fields).** Status paint (US-113) and the named `workspaceRoot` diagnostic (US-116) persist nothing new: paint is an in-memory funnel over the daemon snapshot state (`active`, `disconnected`, `error`, `connecting` — 4 of 4 truthful) with 0 under-bar paints (ADR-0002); the diagnostic is operator-local stderr/doctor output only, never audit or log content (ADR-0003).
+
+## 14. Persisted Ultrathink proceed answer — SessionAnswer (ADR-0006, US-123)
+
+Addendum. W2 persists the proceed answer before kickoff step 1 completes, so a reload restores it under 1 session identity with 0 re-asks (AC-68..AC-70). This is a new record kind in the session store, not a change to any existing entity; the §0 ERD gains 1 node (`SessionAnswer *──1 SessionRecord` by `sessionId`) and no new relation crosses a partition boundary.
+
+### `SessionAnswer` (1 per session; the ANSWER envelope)
+
+| Field | Type | Rule |
+|---|---|---|
+| `sessionId` | string | Partition key; joins the record to its `SessionRecord` |
+| `correlationId` | string | Per-operation join key (existing convention) |
+| `answers` | array of 3 `SettledAnswer { questionId, answer }` | The 3 settled clarifications (Q1 both transcripts, Q2 shared-state equivalence, Q3 pause-until-completed); never re-asked |
+| `kickedOff` | boolean | `true` once persisted, before kickoff step 1 completes (ordering record kept for AC-69) |
+| `persistedAt` | RFC3339 | Write time of the record |
+| `stepBeforeKickoff` | integer | `1` — the kickoff step the persistence precedes |
+
+- **Write path.** Written atomically (temp file → fsync file → rename → fsync directory, mode `0600`) by the host before kickoff, under the session lock where one exists. Restore reads by `sessionId` (keyed lookup, no scan; no index and no query is added, so the EXPLAIN budget is vacuous for this step).
+- **Fail-closed.** A record failing schema validation (unknown keys rejected, closed keys) is refused, never coerced; restore of a torn file follows the existing `readSession` quarantine pattern.
+- **Secrets.** The persisted record carries 0 secrets and 0 chat-only content (NFR-S3). `answers` is classified `PII-indirect` (user-supplied choice text): persisted only in the session store (0600), never copied into audit, log, evidence, or release bundles; non-prod masking follows the `contracts.md` rule (sessionId-derived pseudonym in exported bundles).
+- **Retention / deletion.** Lives with the session store; removing the session record set removes the answer. Rollback of M-2026-007 is additive-only (stop emitting the record kind) and carries no backfill.
+
+## 15. Advisory observability (W3 matrix, ADR-0012, US-124)
+
+Addendum. The W3 verification matrix (AC-78..AC-81) extends the advisory incomplete-plan notice with 4 optional transient fields. This section is a design assertion that no new persisted entity is introduced: the §0 ERD gains 0 nodes and 0 new relations, and the SessionAnswer node of §14 is unchanged. Waiver and split (ADR-0009, ADR-0010) and the host-suite extension (ADR-0011) likewise introduce 0 persisted fields — they are git/governance and test-scope decisions, not storage changes.
+
+### `AdvisoryNotice` (transient response, not persisted)
+
+| Field | Type | Rule |
+|---|---|---|
+| `note` | string, required | Advisory text naming the pending count; 0 banned STOP/proceed/confirm strings (UTR-05) |
+| `pendingRows` | integer >=0, required | Pending tracker row count; metrics stay visible (UTR-06) |
+| `continues` | boolean, required | `true`; the request continues with 0 manual proceed steps |
+| `warningLines` | integer >=0, required | `1` warning line; 0 warnings suppressed wholesale |
+| `correlationId` | string, required | Per-operation join key (existing convention) |
+| `graphId` | string, optional | Tracker graph id named when applicable (AC-79); empty when no graph applies |
+| `unblockingAction` | string, optional | One unblocking action named in the advisory (AC-79) |
+| `renderCount` | integer >=0, optional | Advisory renders so far on unchanged state; stays `1` across polls (AC-80) |
+| `failure.code` | string, optional | Named failure code for malformed or missing plan state (AC-81); never silently dropped |
+| `failure.detail` | string, optional | Human-readable detail naming the missing or malformed state (AC-81) |
+
+- **Derivation (no storage).** All 10 fields are derived at render time from the live `GateVerdict` (`validateArtifacts` / `release()` against current tracker rows) plus in-memory render state keyed by `(correlationId, state-hash)`. No record is written; no file is created; `renderCount` is not persisted across reload — reload silence for a complete plan (AC-78) follows from the fresh verdict being `ready` (0 advisories), not from a stored counter. AC-80 (0 second prompt on unchanged state) is an in-memory idempotence keyed by the verdict hash, so a process restart resets the counter to `0` and the next poll renders `1` — the matrix's 2-poll window is within one process.
+- **Fail-closed.** Malformed or missing plan state yields 1 named `failure{code,detail}` with 0 silent drops (AC-81); fatal verdicts keep the host's unusable-plan notice and are not advisory. Complete plans yield 0 advisories in 2 of 2 renders (AC-78). Unknown keys are rejected (D-12) — a renderer emitting an unknown field is a bug.
+- **ERD / FK.** The advisory surface adds no foreign key and no edge: `data_fk_cycle_check` on the existing edges (`SessionAnswer -> SessionRecord`, `AuditLine -> AuditAnchor`, `CheckpointManifest -> ManifestEntry`) returns `has_cycle=false`. No new index is created; no query is added, so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: advisory-render baseline 1 vs shadow 1, max 0%, within 20%).
+- **Host-suite design (omp.test.ts, ADR-0011).** The line 454 partial-plan test converts from the silence expectation (`sent` empty) to the W3 advisory expectation modeled on `omp-flight.test.ts`: 1 advisory aside naming the shortfall, 0 banned strings, `continues=true`, and a later prompt preserving the same advisory (no release). Fatal-path silence is unchanged — a failed planner still yields 1 advisory note and never an injected plan. The 6th target file keeps the `src/host` suite at 119 of 119 (AC-77); the test asserts transient fields only and persists nothing.
+- **Retention / deletion.** N/A — transient response, never written to disk. Rollback of M-2026-008 is additive-only (stop emitting the 4 optional fields) and carries no backfill and no retention entry.
+
+## 16. Resume-pipeline verification evidence (Tcffd1 §20, ADR-0013..0015)
+
+Addendum. The resume pipeline (SEC fixture split, conditional PR 256 merge via the ultrathink ship flow, round-3 gates + W3 matrix over the two trees) introduces no new persisted entity: the §0 ERD gains 0 nodes and 0 new relations, and the `SessionAnswer` node of §14 and the `AdvisoryNotice` node of §15 are unchanged (M-2026-009). The runtime contract stays at `API-UltrathinkCompletionGate` 1.1.0 (5 operations) with `required` unchanged; verification evidence (scanner verdict, local/CI verdicts, ship record, planning-hash prefixes `29bc314a`/`4b26403c`, Linear refs SPE-36512/13/15/16, PR #255/#259 states) is doc-retained prose, not a state-directory record.
+
+### `ResumeEvidence` (doc-retained, not persisted)
+
+| Field | Type | Rule |
+|---|---|---|
+| `scannerVerdict` | string, optional | Secret-scanner verdict after the fixture split; 0 literal fixture strings, 0 secrets (ADR-0013) |
+| `localGates` | string, optional | Local-gate evidence (`check:docs`, `test:scripts`, `build`, `lint`, compiled boot-report) |
+| `ciVerdicts` | string, optional | CI verdicts on Node 22.x/24.x, docs site, breaking-change, audit |
+| `shipRecord` | string, optional | Ship-flow merge record; the Greptile absence is recorded as the user-accepted substitute with 0 fake 5-of-5 claims (ADR-0014) |
+| `hashPrefixes` | string, optional | `.planning` hash prefixes `29bc314a` (STATE) / `4b26403c` (ROADMAP) with 0 edits (ADR-0015) |
+| `linearRefs` | string, optional | Linear sub-issue refs SPE-36512/13/15/16, closed only with passing gates |
+| `prStates` | string, optional | PR #255/#259 states at close-out |
+
+- **Derivation (no storage).** All 7 fields are transcribed at close-out from the owning run (A05 scanner/local/CI, A12 ship merge, A08 r3/W3, A01 Linear) into the repo docs history. No record is written to the state directory; no file is created by this step; no persisted shape exists for old readers to consume. Greptile absence is recorded as the user-accepted substitute (ADR-0014) — this evidence class never carries a review verdict and a transcribed verdict would be a fabricated claim.
+- **Fail-closed.** A missing run (scanner, local, CI, merge, r3/W3) leaves the corresponding field absent, never asserted. The SEC split asserts 0 literal fixture strings in the repo; a transcribed `scannerVerdict` that cites a scan never run is a bug, not a pass.
+- **ERD / FK.** The resume slice adds no foreign key and no edge: `data_fk_cycle_check` over the resume-slice edges (`BootReportTest -> SecretScanner`, `LocalGates -> CIPipeline`, `PRShipFlow -> MergedMain`, `PRShipFlow -> LocalGates`, `PRShipFlow -> CIPipeline`, `MergedMain -> LinearTracker`, `UltrathinkStack -> LinearTracker`) returns `has_cycle=false`. No new index is created; no query is added, so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: no query added, baseline 1 vs shadow 1, max 0%, within 20%).
+- **Retention / deletion.** Retained with the repo docs history; superseded by a newer evidence string, never edited in place. Rollback of M-2026-009 is additive-only (stop recording the evidence strings) and carries no backfill and no retention entry.
