@@ -81,8 +81,11 @@ void test("OMP-01: createRealmHandle starts unbound with reason no workspace and
   assert.equal(outcome.value.snapshot.state, "unbound");
   assert.deepEqual(outcome.value.display, displayStatus(outcome.value.snapshot));
 
-  // Downcasts: the options held the fakes from construction, so the reads are exact.
-  const exec = options.exec as FakeExecutionService;
+  // The options held the fake from construction, so the reads are exact.
+  const exec = options.exec;
+  if (!(exec instanceof FakeExecutionService)) {
+    assert.fail("expected FakeExecutionService");
+  }
   assert.deepEqual(exec.calls(), [], "no execution call was made");
   assert.deepEqual(exec.resources(), [], "no container was created");
 });
@@ -136,8 +139,11 @@ void test("OMP-01: close() stops the session without starting a process and is s
   const second = await handle.close();
   assert.equal(second.state, "unbound");
 
-  // Downcasts: the options held the fakes from construction, so the reads are exact.
-  const exec = options.exec as FakeExecutionService;
+  // The options held the fake from construction, so the reads are exact.
+  const exec = options.exec;
+  if (!(exec instanceof FakeExecutionService)) {
+    assert.fail("expected FakeExecutionService");
+  }
   assert.deepEqual(exec.calls(), [], "close started no execution call");
   assert.deepEqual(exec.resources(), [], "close created no container");
 });
