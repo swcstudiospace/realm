@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v9.0
-milestone_name: Doctor health and concurrent binding (Starting)
+milestone_name: Doctor health and concurrent binding
 status: Starting
 stopped_at: Milestone v9.0 started, phases 55 to 59 planned
-last_updated: "2026-11-20T09:00:00.000Z"
-last_activity: 2026-11-20
-last_activity_desc: Milestone v9.0 started
+last_updated: "2026-11-25T00:00:00.000Z"
+last_activity: 2026-11-25
+last_activity_desc: Milestone v9.0 close-out running (55/59 verified; 56-58 carried — see phase VERIFICATIONs)
 state_head: 63bbc7e
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
-current_phase: 55
+  completed_phases: 2
+  total_plans: 2
+  completed_plans: 2
+  percent: 40
+current_phase: 56
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-20)
 
 ## Current Position
 
-Phase: 55 (Omp plugin health check), not started
-Plan: —
-Status: Starting milestone v9.0 (phases 55 to 59, release line 0.9.x)
-Last activity: 2026-11-20 — Milestone v9.0 started
+Phase: 56 (F-51-1 cause) — carried, verification recorded (gaps_found); next: phase 57 verification recorded (passed-with-gaps), phase 58 (passed-with-gaps); milestone audit pending
+Plan: 56-PLAN (b37b94c hermetic landed; live window blocked, CARRIED)
+Status: Milestone v9.0 close-out running (55/59 verified 2026-11-22; 55/59 complete, 56/57/58 carried 2026-11-23..25)
+Last activity: 2026-11-25 — Milestone v9.0 close-out; A1/A3 decisions recorded (repo-keyed APPROVED, keep hosted APPROVED)
 
 ## Current Recovery Boundaries
 

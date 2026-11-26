@@ -911,6 +911,81 @@
       "file": "src/tools/dispatch.ts",
       "name": "TOOL_CALL_TIMEOUT_MS",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "ADVISORY_WIDGET_KEY",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "AdvisoryPlanState",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "AdvisoryResponse",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "CONTINUES_LINE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "MATRIX_VERIFIED_LINE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "WARNING_LINE",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderAdvisory",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderAdvisoryResponse",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderFreshPlanLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderMatrixVerifiedLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderPollingLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderRestoreFailedLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderRestoringLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderResumeLine",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "renderStateFailure",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     }
   ]
 }

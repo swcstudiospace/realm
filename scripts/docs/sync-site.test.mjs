@@ -119,6 +119,16 @@ const FIXTURE_TEXT = {
     'Describe {{ the bug }}.',
   ),
   'CONTRIBUTING.md': lines('---', 'title: Contributing guide', '---', '', '# Ignored heading', '', 'Read the rules.'),
+  '.planning/phases/57-htier-01-attribution-retest/57-VERIFICATION.md': lines(
+    '---',
+    'phase: 57-htier-01-attribution-retest',
+    'verified: 2026-11-25',
+    'head: 404da2b',
+    'status: passed-with-gaps',
+    '---',
+    '',
+    '# Phase 57 Verification',
+  ),
   'src/index.ts': lines('export {};'),
   'assets/brand/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n',
   'node_modules/pkg/README.md': lines('# Vendored'),
@@ -229,6 +239,12 @@ describe('syncSite', () => {
     const contributing = await readContent('contributing.md');
     assert.ok(contributing.startsWith('---\ntitle: Contributing guide\n---\n'));
     assert.equal((contributing.match(/^title:/gm) ?? []).length, 1);
+  });
+
+  it('renames the reserved frontmatter key head to head_sha', async () => {
+    const verification = await readContent('planning/phases/57-htier-01-attribution-retest/57-VERIFICATION.md');
+    assert.ok(verification.includes('\nhead_sha: 404da2b\n'));
+    assert.equal((verification.match(/^head:/gm) ?? []).length, 0);
   });
 
   it('generates a sorted index for a nested directory and links children by route', async () => {

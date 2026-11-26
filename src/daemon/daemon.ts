@@ -563,9 +563,9 @@ export async function startDaemon(options: StartDaemonOptions): Promise<StartedD
     downRequested = true;
     draining = true;
     await drainOthers();
-    const { failure, failedTeardowns } = await stopSessions(registry.values(), teardownBoundMs);
+    const { failure, causeCode, failedTeardowns } = await stopSessions(registry.values(), teardownBoundMs);
     // Written after the teardown attempt, whether it finished or was refused, and before the socket is removed.
-    logger.info("daemon.stopped", { ...(failure === undefined ? {} : { code: failure }), failedTeardowns });
+    logger.info("daemon.stopped", { ...(failure === undefined ? {} : { code: failure }), ...(causeCode === undefined ? {} : { causeCode }), failedTeardowns });
     server.close();
     // A socket file that cannot be removed is the stop's refusal, never a silent loss. The daemon stops either way.
     const removal = removeSocketFile(socketPath);

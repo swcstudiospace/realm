@@ -25,3 +25,32 @@ Already present (reused, not changed): `stopRecordsOf`, `stoppedVerdictOf`, `cla
 ## 4. Checks
 
 Gates, formatters, tests and builds were skipped per the assignment; the orchestrator verifies. No `src/` file was edited.
+
+---
+
+# Phase 56 closure (2026-11-22): emission added, window blocked, F-51-1 carried
+
+**Scope of this section:** the v9.0 closure run. The hermetic record above stands; this section records the closure attempt's outcome. **F-51-1's cause is not established; STOP-05 and STOP-06 are carried, not met; no pass, clean run or fix is claimed.**
+
+## 1. Product emission added (the capture gap closed in code)
+
+Read-only check of the pre-change product confirmed the gap: `src/daemon/teardown.ts` kept only the first primary code (`codeOf`) and `src/daemon/daemon.ts` logged `daemon.stopped` with that `code` plus `failedTeardowns`. The in-process cause code computed by `throwIfStopFailed` (`src/runtime/session-execution.ts`) never reached the row.
+
+Minimal additive change, confined to the two files the assignment allows:
+
+- `src/daemon/teardown.ts`: `StopSessionsResult` carries `causeCode` — the first failed session's own `RealmError.causeCode` (the catalogue code the primary failure rests on, e.g. the failed step's code carried by `AGENTOS_STOP_FAILED`), `undefined` when the first failure carried no cause (the Phase 51 shape).
+- `src/daemon/daemon.ts` (`closeEverything`): logs `causeCode` on `daemon.stopped` when present.
+
+Bounds and guarantees unchanged: every wait stays under the same teardown bound, the no-orphan guarantee is untouched, the `failedTeardowns` count and the first failure code are unchanged, the error catalogue is unchanged. No failed-step *name* is emitted — the product records none, and this phase may edit only these two daemon files; `stopCauseOf` counts a row carrying `causeCode` as captured.
+
+Contract check (read-only): `test/daemon/stop-bounds.test.ts` D1 asserts the exact key set of a clean `daemon.stopped` row; the emission adds a key only on failure with a cause, so D1 is unaffected. `daemon.test.ts` T2 reads only `code`/`failedTeardowns`. Orchestrator verifies by build/test.
+
+## 2. Live capture window — blocked, not run (see 56-WINDOW.md)
+
+Attempted 2026-11-22T18:58Z as `realmlive` under the shared live lock (free). The production gate cannot open: the account's `podman.socket` and `openshell-gateway.service` are inactive, `/run/user/5002/podman/podman.sock` is absent, no compute-driver unit exists for the account, and the running realm stack is root's under a mode-0700 state directory. No dirty stop was observed; no step or cause was captured. The window is recorded as **not run**, never as a pass.
+
+## 3. Consequences
+
+- `docs/integration/runtime-decision.md`: the F-51-1 note now records the emission, the blocked window, and the carry (Phase 51 inference still stands, not replaced).
+- No fix in an owning module and no 20-iteration variant-c clean run: the cause is not established, so plan steps 3 (establish) and 4 (fix + clean run) remain open for a future window once the account's stack is up.
+- F-51-1 (and STOP-05/STOP-06) stay carried outside this milestone's done set; F-41-1 and GAP-43-03/GAP-40-01 are untouched by this phase.
