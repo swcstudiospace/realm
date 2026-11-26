@@ -4,6 +4,25 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-11-26
+
+### Added
+- feat(omp): render ultrathink advisory and reload-resume surfaces (W3 matrix) (4f379da)
+
+### Changed
+- phase56: emit daemon.stopped causeCode; window blocked, F-51-1 carried (b37b94c)
+
+### Fixed
+- fix(ci): export seams allowlist and docs reserved-frontmatter key (8c22206)
+
+### Documentation
+- docs(phase-56-58): phase records, v9 audit, STATE sync and docs-hygiene fixes (c2d3b66)
+- docs(unity): n1-n7 ground truth, decomposition, comparison, design and wave plan records (404da2b)
+- docs(verify): phases 44+55 re-verified at main 7ae9afc (c7d3f04)
+- docs(verify): re-verify phases 20-43 at main 7ae9afc (full suite 5849 pass) (b7002a5)
+- docs(19): re-verify resume and checkpoint at main 7ae9afc (61eb01d)
+- docs(17): re-verify observability phase at main 7ae9afc (a8fda88)
+
 ## [0.9.6] - 2026-11-22
 
 ### Added
