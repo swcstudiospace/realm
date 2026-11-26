@@ -111,3 +111,42 @@ AC-30, AC-32. Components: `ds/IssueHeader@1.0 { oneLineTitle: true }`, `ds/Agent
 Props: `{ phaseId: string; title: string; planIds: string[]; requirementIds: string[]; acCount: number; subIssues: { id: string; title: string }[]; blocked?: BlockedNoticeProps }`.
 States: `default`, `loading` ("loading issue…"), `error.duplicate` (existing id stated; creation refused), `error.validation`, `empty.no-match`, `success` (1 issue per phase, 8 issues; sub-issue per plan/requirement when >4 ids).
 `+++ Agent notes` is a labelled disclosure; phase order stated as counts (Omp 12→16; runtime 14→17→18→19; pipeline 13→20). Focus: `issue-title`, `agent-notes`, `sub-issue-list`, `state-roadmap`.
+
+## Tcffd1 addendum — SEC split / Merge256 / R3W3 close-out (AC-86..AC-96, tokens 1.2.0)
+
+**Bound:** `design.system.tokens@1.2.0` (`docs/ux/tokens.json`), `API-UltrathinkCompletionGate@1.1.0`
+(`api-ultrathink-completion-gate.yaml`; advisory precedent — these three docs-view boards display text
+evidence and make no new API call). Zero new components — reuse `ds/GateBoard@1.0`,
+`ds/CheckList@1.0`, `ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0`. Copy bans: never the fixture
+literal (`REDACTED` only), never a fake Greptile verdict, never Linear closes before gates.
+Engineering execution is downstream; this section states display and forbidden copy only.
+
+## SCR-SecSplitFixture — boot-report fixture split and scanner evidence (docs view)
+AC-86, AC-87, AC-88. Components: `ds/GateBoard@1.0 { rows: ["split", "tests", "scanner"] }`,
+`ds/CheckList@1.0 { rows: ["split", "refusals", "scanner"] }`,
+`ds/NoticeBanner@1.0 { redacted: true, neverSilent: true }`.
+Props: `{ fixturePartCount: 2; literalCount: number; refusalEchoes: number; secretCount: number; phase: "split-clean" | "verifying" | "literal-found" | "validation" | "no-run" | "success" }`.
+States: `default.split-clean`, `loading.verifying`, `error.literal-found`, `error.validation`,
+`empty.no-run`, `success`. Fixture row counts literal strings (value redacted); test row counts
+failures and echoes; scanner row counts secrets. Focus: `gate-row-link`, `scanner-report-link`.
+Links 24x24 (SC 2.5.8); notes non-interactive `role="status"` `aria-live="polite"`.
+
+## SCR-Merge256Gate — conditional PR #256 merge board (docs view)
+AC-89, AC-90, AC-91. Components: `ds/GateBoard@1.0 { gates: ["check:docs", "test:scripts", "build", "lint", "boot-report", "Verify-22", "Verify-24", "docs-site", "breaking-change", "audit"] }`,
+`ds/StatusReadout@1.0 { labels: ["ready to merge", "merged"] }`,
+`ds/NoticeBanner@1.0 { greptile: "offline-absence-recorded", neverSilent: true }`.
+Props: `{ localVerdicts: CheckVerdict[]; ciVerdicts: CheckVerdict[]; mergeLabel: "ready to merge" | "merged"; greptileState: "offline-absence-recorded" }`.
+States: `default.gates-green`, `loading.running`, `error.gate-fail`, `error.greptile-offline`,
+`empty.no-run`, `success.merged`. Local 5 + CI 5 rows in text; merge label stays ready until all
+pass; the absence note is the default offline state. Focus: `gate-row-link`, `pr-commit-link`.
+Links 24x24.
+
+## SCR-R3W3Closeout — round-3 gates, W3 matrix and Linear close-out (docs view)
+AC-92, AC-93, AC-94, AC-95, AC-96. Components: `ds/GateBoard@1.0 { plans: ["qa.r3", "rev.r3", "sec.r3", "build", "rel", "obs", "docs"], w3Checks: 9 }`,
+`ds/CheckList@1.0 { rows: ["hashes", "linear", "final-report"] }`,
+`ds/NoticeBanner@1.0 { advisory: true, neverSilent: true, live: "polite" }`.
+Props: `{ planVerdicts: CheckVerdict[]; w3Passing: number; w3Total: number; stateHash: string; roadmapHash: string; linearClosed: number; reportStates: "listed" | "not yet listed"; phase: "gates-running" | "running" | "gate-fail" | "validation" | "no-run" | "success" }`.
+States: `default.gates-running`, `loading.running`, `error.gate-fail`, `error.validation`,
+`empty.no-run`, `success`. 7 plans + W3 9; hash read-only promise; Linear closed only after gates
+pass; unread PR states read `not yet listed`. Focus: `gate-row-link`, `pr-commit-link`,
+`linear-fix-link`. Links 24x24 / 44x44; advisory non-interactive.

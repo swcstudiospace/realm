@@ -169,3 +169,82 @@ As a maintainer, I want the change to merge to main through 1 pull request with 
 - Requirement IDs: SHIP-01 (11 template checks exit 0), SHIP-02 (5 of 5 Greptile, 0 open), SHIP-03 (1 squash merge, 0 version edits).
 - Plan IDs: per-phase ship steps on branch gsd/close-harn03-crash04-next (no separate plan IDs).
 - Estimate: 3 points. Dependencies: none.
+## US-122 — Ultrathink W1: stale verdict retires on tracker completion
+
+As an autonomous planner operator, I want a finished tracker to retire the stale incomplete verdict on its own, so that the completion signal always matches the settled plan state.
+
+- Requirement IDs: UTR-01 (stale-verdict retirement on completion), UTR-02 (not_ready preserved at 1 pending row).
+- Plan IDs: W1, graph n4 SPE-36513 (ordered plan n7 SPE-36516).
+- Estimate: 5 points. Dependencies: none.
+
+## US-123 — Ultrathink W2: proceed answer survives reload
+
+As an operator, I want a proceed answer to survive a session reload, so that a reloaded session continues without asking settled questions again.
+
+- Requirement IDs: UTR-03 (ANSWER persistence before kickoff), UTR-04 (reload recovery with 0 re-asks).
+- Plan IDs: W2, graph n4 SPE-36513 (ordered plan n7 SPE-36516).
+- Estimate: 5 points. Dependencies: none.
+
+## US-124 — Ultrathink W3: incomplete notice advises and continues
+
+As an autonomous planner operator, I want an incomplete-plan notice that advises and continues, so that work moves forward with autonomy intact while the warning stays visible.
+
+- Requirement IDs: UTR-05 (advisory notice, 0 manual proceed steps), UTR-06 (warning stays visible).
+- Plan IDs: W3, graph n4 SPE-36513 (ordered plan n7 SPE-36516).
+- Estimate: 3 points. Dependencies: none.
+
+## US-125 — Tb559-be resume: signing waiver for BE and FE commits
+
+As a maintainer, I want commits 90b18ce and 0d5032f to carry 1 recorded signing waiver each, so that the signed-commit check reports 0 failures from missing signatures.
+
+- Requirement IDs: SIGN-01 (waiver per commit, 0 keys provisioned).
+- Plan IDs: Tb559-be resume, Tb559-fe.
+- Estimate: 3 points. Dependencies: none.
+
+## US-126 — Tb559-be resume: preserve think commit and split pull requests
+
+As a maintainer, I want commit c53a15c preserved on 1 branch and pull request 259 to hold 1 commit only, so that each pull request shows 1 change set.
+
+- Requirement IDs: SPLIT-01 (c53a15c preserved on 1 branch), SPLIT-02 (pull request 259 holds 1 commit).
+- Plan IDs: Tb559-be resume, Tb559-fe.
+- Estimate: 3 points. Dependencies: none.
+
+## US-127 — Tb559-be resume: extend host suite to 119 of 119
+
+As a maintainer, I want the host suite to hold 119 of 119 tests passing with the partial-plan test converted to 1 advisory expectation, so that the suite proves the advisory path with 0 failures.
+
+- Requirement IDs: TEST-01 (6th target file, line 454 conversion, fatal-path silence unchanged).
+- Plan IDs: Tb559-be resume.
+- Estimate: 5 points. Dependencies: none.
+
+## US-128 — Tb559-be resume: gates, Linear, planning hashes, CAPT-09 record
+
+As a maintainer, I want gate evidence, Linear updates, and hash checks to record 0 open gaps, so that the resume lands with 0 silent gaps.
+
+- Requirement IDs: GATE-01 (named gate plans exit 0), LIN-01 (4 Linear issues updated), HASH-01 (2 planning hashes verified), CAPT-01 (CAPT-09 routed to A08).
+- Plan IDs: Tb559-data, Tb559-fe, Tb559-be, Tb559-qa, Tb559-rev, Tb559-sec, build, rel, obs, docs.
+- Estimate: 5 points. Dependencies: none.
+
+## US-129 — SEC canary split in the boot-report test fixture
+
+As a maintainer, I want the fake GitHub fixture in the boot report test to be assembled from 2 parts with 0 literal fixture strings, so that the scanner reports 0 secrets while the refusal tests keep passing.
+
+- Requirement IDs: SECSPLIT-01 (fixture split into 2 concatenated parts at 1 test location), SECSPLIT-02 (scanner reports 0 literal fixture occurrences and the refusal tests report 0 echoes).
+- Plan IDs: cffd9419 step 1, branch swarm/Tb559r-capt09.
+- Estimate: 3 points. Dependencies: none.
+
+## US-130 — Conditional merge of pull request 256
+
+As a maintainer, I want pull request 256 to merge to main with local and CI green recorded and 0 fake review verdicts, so that main carries 1 docs change with 1 honest review record.
+
+- Requirement IDs: MERGE256-01 (local gates and CI green recorded before merge), MERGE256-02 (1 merge to main 354f00a line through the ship flow with Greptile absence recorded and 0 fake 5 of 5 claims).
+- Plan IDs: cffd9419 steps 2 and 3, branch swarm/Tb559r-capt09.
+- Estimate: 3 points. Dependencies: none.
+
+## US-131 — Round 3 gates, W3 matrix and Linear close-out
+
+As a maintainer, I want round 3 gates and the W3 matrix to pass on the merged main tree, so that the resumed swarm task closes with 1 evidence trail and 4 closed Linear sub-issues.
+
+- Requirement IDs: R3-01 (3 round 3 gates plus build, rel, obs, docs exit 0), W3M-01 (9 of 9 W3 checks green on the ultrathink stack), HASH-02 (2 planning hashes verified with 0 edits), LIN-02 (4 sub-issues closed only with passing gates), REP-01 (1 final report naming 2 ultrathink pull request states).
+- Plan IDs: cffd9419 steps 4 and 5.
+- Estimate: 5 points. Dependencies: none.

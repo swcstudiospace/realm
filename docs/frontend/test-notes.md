@@ -69,3 +69,19 @@ as passes. The main agent verifies.
   cleanly. No L3 action (no new dependency, pattern, or token change) was needed.
 - `provisional: true` still applies (no brand guide). If A04 supplies brand tokens, the token
   table in `README.md` is the single sync point — re-run contrast measurements then.
+
+## Tcffd1 addendum — test plan for A08 (AC-86..AC-96)
+
+| Screen | Must-assert cases (counts; A08 verifies, A06 does not claim) |
+|---|---|
+| SCR-SecSplitFixture | 1 location (boot-report), 2 parts concatenated, 0 literal fixture strings, compiled run 0 failures, refusal 0 echoes, scanner 0 secrets; error names `<path>:<line>` + `REDACTED` (0 literals rendered) |
+| SCR-Merge256Gate | local 5 pass + CI 5 pass, 0 failures; check:docs on merged main exit 0; 1 merge (squash, ship flow), 1 absence note, 0 claims of 5 of 5; pending rows read `running…`, never green |
+| SCR-R3W3Closeout | 7 plans exit 0, W3 9 of 9 green (stack a519184 + 0d5032f), STATE prefix 29bc314a + ROADMAP 4b26403c with 0 planning edits, 4 of 4 Linear closed after gates (0 before), 2 of 2 PR states listed |
+
+Mono/no-colour + pipe-order + parity regression anchor apply as before; `fe_state_parity_check`
+input uses the spec states in the `component-spec.md` addendum (dotted sub-states count separately).
+`fe_token_literal_scan` / `fe_client_security_scan` apply only when style or HTML-injection code
+changes (none in this docs-view addendum — no `src/` change). Axe remains the authority; no axe run
+in this repo (no axe dependency, A08 runs per story) — do not report axe `critical` as 0 from static
+checks. CLI/daemon boards ship no web bundle (no browser JS), so no bundle bytes / Lighthouse /
+CWV numbers are claimed here (UNVERIFIED unless a docs build is measured downstream).

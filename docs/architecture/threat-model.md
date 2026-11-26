@@ -120,3 +120,31 @@ No new threat-model text is invented beyond the containers already in the bluepr
 | STRIDE | Threat + mitigation |
 |---|---|
 | Information disclosure | Missing-directory naming leaks a path. **M:** naming is operator-local only (stderr/doctor); audit and request logs keep fixed text with 0 values; no telemetry. Owner: daemon/fs. Test: audit redaction suite (NFR-C1) + log-shape check |
+
+## 6. Swarm task cffd9419 resume addendum (Tcffd1-arch) — SEC split, conditional merge, gate close-out
+
+**Status:** proposed deltas, A10 co-sign pending. **Containers measured:** `arch_c4_fanout` (budget 100 for inventory): 8 containers, 7 relations, max fan-out 3, over budget none, isolated none (same set as blueprint §20.2 — confirming every crossing below is inside the inventoried model). No risk is marked accepted by A03.
+
+### X8 — BootReportTest → SecretScanner (test fixture disclosure)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+|---|---|
+| Spoofing | A reassembled literal slipping back into source and being waved through by an allowlist. **M:** the human decision is 0 allowlists; the split assembles the fixture from 2 concatenated parts at 1 test location, and the gate is a grep count 0 over the repo, not an exception list. Owner: A03/A10. Test: AC-86 literal count + AC-88 scanner 0 secrets |
+| Information disclosure | The fake fixture leaking as if it were a real secret (or a real secret hiding behind it). **M:** the fixture is sequential, fake and documented as such; after the split no literal form exists anywhere (spec, handover, test source) to leak, while the assembled value is still rejected with `SCHEMA_INVALID` and 0 echoes. Owner: A03. Test: AC-87 compiled run exit 0 with 0 echoes |
+
+### X9 — PRShipFlow → CIPipeline / MergedMain (conditional merge without independent review)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+|---|---|
+| Repudiation | A merge that claims Greptile coverage it never received. **M:** the PR body records 1 Greptile absence note with offline evidence and 0 claims of 5 of 5; the merge substitutes 1 local verdict set (`check:docs`, `test:scripts`, `build`, `lint`, compiled boot-report) + 1 CI verdict set (Verify 22.x/24.x, docs, breaking-change, audit). Offline evidence, not a forged verdict, is the record. Owner: A12/A01. Test: AC-91 merge count + absence-note count + 5-of-5 claim count |
+| Tampering | A docs change landing on main through a non-ship path while framed as shipped. **M:** 1 squash merge, 1 time, through the ultrathink ship flow only; `gh pr merge` from a shell is forbidden (spec §4.10). Owner: A12. Test: merge commit count + ship record, AC-90 `check:docs` exit 0 on main |
+| Elevation of privilege | Merging on a red CI or a missing local gate. **M:** the ADR-0014 condition is fail-closed — every local gate exits 0 and every CI job is green before the ship flow may run. Owner: A12. Test: AC-89 local exit codes + CI job verdicts |
+
+### X10 — MergedMain / UltrathinkStack → LinearTracker (premature close-out)
+
+| STRIDE | Threat + mitigation |
+|---|---|
+|---|---|
+| Repudiation | Sub-issues closed without the gate evidence they cite. **M:** the close order is gate-then-close over 2 named trees (merged main for the 7 r3/release plans, ultrathink stack `a519184 + 0d5032f` for the 9 W3 checks) with STATE `29bc314a` / ROADMAP `4b26403c` verified read-only at 0 edits; each closed sub-issue carries 1 commit ref. Owner: A08/A01. Test: AC-92..AC-96 |

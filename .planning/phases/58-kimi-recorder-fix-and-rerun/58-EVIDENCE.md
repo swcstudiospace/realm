@@ -1,6 +1,6 @@
 # Evidence 58: KIMV-02 recorder fix (hermetic)
 
-**Date:** 2026-11-21 · **Requirement:** KIMV-02 (GAP-43-03) · **Plan:** `58-PLAN.md` step 1 · **Status:** hermetic fix landed; the deciding live rerun (58-PLAN step 3) is human-blocking (see §3). GAP-43-03 is not closed.
+**Date:** 2026-11-21 (hermetic), updated 2026-11-22 (window attempted, blocked) · **Requirement:** KIMV-02 (GAP-43-03) · **Plan:** `58-PLAN.md` steps 1 and 3 · **Status:** hermetic fix landed; the deciding live rerun (58-PLAN step 3) was attempted 2026-11-22 and is BLOCKED — production stack down on this host (see §3 and 58-WINDOW.md). GAP-43-03 is not closed.
 
 ## 1. Fix description
 
@@ -23,8 +23,8 @@ A log write error is swallowed before the forward (was: after). EOF still ends t
 
 Local run (2026-11-21): the new file plus the existing suites that exercise the recorder — 53 passed, 0 failed (`dist/test/support/host-live-recorder.test.js`, `dist/test/integration/host-live-session-helpers.test.js`, `dist/test/support/wire-timeline.test.js`). Note: a repo-wide `tsc` currently fails on pre-existing errors in `src/doctor/checks.ts` (a peer's in-flight edit, not this phase); the test run above used the emitted `dist` output and did not touch `src/`.
 
-## 3. Deciding live rerun — human-blocking
+## 3. Deciding live rerun — attempted 2026-11-22, BLOCKED (see 58-WINDOW.md)
 
-Not run. Per 58-PLAN step 3 it needs a live window on the production stack: kimi-cli 1.51.0 from a scratch install outside the repository, the fixed recorder, the wire log and the full `kimi mcp test realm` output kept outside the repository, version and date recorded. If the response appears in the log, the recorder was the cause; otherwise the client's close-after-response race is the narrowed cause. Until then GAP-43-03 stays `narrowed` (never closed by inference) and the recorder fix is hermetic evidence only. No `src/` change: the rerun has not indicted `realm mcp`, so per the plan there is none.
+58-PLAN step 3 was attempted on 2026-11-22 under the shared live lock (which was free) as the live account. The preflight found the production stack down on this host: OpenShell has no gateway configured, the realm gateway/compute-driver user units are absent and inactive, the rootless Podman image list is empty (no digest-pinned image), and no driver config, driver socket or runtime directory exists for the live account. The production tier's gate variables have no values on this host, so no cold production run was made and no wire log or `kimi mcp test realm` output exists. The recorder fix (§1), the red-first row (§2) and the kimi-cli 1.51.0 scratch install (verified 2026-11-22 outside the repository, removed after) are the window's evidence; the component stays NOT-ESTABLISHED with the narrowed bounds stated in 58-WINDOW §4. GAP-43-03 stays `narrowed` (never closed by inference) and the recorder fix is hermetic evidence only. No `src/` change: the rerun never indicted `realm mcp`, so per the plan there is none. KIMV-02 is carried, narrowed — not met.
 
 Phase 57 (HTIER-01) live retest is likewise human-blocking (needs a Grok Build live window); recorded docs-only in `docs/integration/host-plugin-gaps.md`, no result claimed, GAP-40-01 wording intact.

@@ -207,3 +207,168 @@ NFR-P1, NFR-S1, NFR-A1, NFR-I1 and NFR-C1 are carried forward unchanged. Two add
 1. **Live windows are human-blocking.** Phases 56, 57 and 58 live criteria and Phase 59 ratification are not proven in this spec task; their criteria stay provisional until the owner runs the live windows. Hermetic criteria alone never pass a live gate.
 2. **WSJF scatter is provisional.** Backlog order uses MOSCOW because stakeholder WSJF scores are unavailable. No score was guessed.
 3. **Configuration repair is a runtime action.** Pointing `workspaceRoot` at an existing directory (or removing the stale config) is an operator action outside A02 scope; this spec only demands the clean-start outcome and the named diagnostic.
+## 12. Ultrathink Stale-Verdict Loop — Minimal Fix (Tb559-req, 2026-11-22)
+
+**Scope.** US-122 through US-124 and the criteria in `docs/acceptance.md` fix 1 loop that blocks autonomous planning across session reload. The fix lands in the `claude-ultrathink` planner-host repo (`src/host/completion-gate.ts`, host `omp.ts`). This spec writes 0 product code and changes 0 agent-realm `.planning` files beyond read-only verification.
+
+### 12.1 Problem statement (evidence)
+
+The loop has 4 proven steps. Session `01a20495`: the hook at 19:00:11Z stages 48 tracker rows with `status="pending"`, verdict `partial_failure` (`rows_pending`, `tracking_incomplete`), and the host renders a blocking STOP/proceed prompt. The user answers `proceed` at 19:10:41Z in chat only. An OMP SIGTERM at 19:11:06Z ends the session mid-kickoff with `kickedOff` false, so the answer never persists. Session `01a204ab` (graph `ut-003d46eb79-79a08046`) shows the tracker at `tracking.status=complete` with 7 nodes and 48 steps and the spec at 0 pending, yet the staged verdict never re-validates, so the blocking prompt repeats on reload. `kickedOff` now reads true after kickoff persist. `src/host/completion-gate.ts` `validateArtifacts` uses `PENDING_ROW_RE` and `release()` returns `not_ready`; the host calls `gate.release()` near line 3135 of `omp.ts`. `planAdvisoryNote` exists but the blocking STOP path violates `design/ux.spec.json` AC-32/33, which ban blocking STOP/proceed/confirm: the notice is advisory and the request continues. Note: the cited AC-32/33 belong to the Ultrathink design spec, distinct from `docs/acceptance.md` AC-32 (Linear dedup).
+
+### 12.2 Settled clarifications (persisted ANSWER, no re-ask)
+
+Q1: settle across both transcripts (sessions `01a20495` and `01a204ab`). Q2: prove equivalence through shared state. Q3: pause until tracker completion with autonomous remediation and 0 re-asks. All 3 answers persist as ANSWER in the session `01a204ab` spec file and 0 remain open.
+
+### 12.3 Graph waves and W1/W2/W3 mapping
+
+Ordered plan `n7` (`SPE-36516`) sequences 3 waves. W1 (minimal fix part 1, `n4` `SPE-36513`): retire the staged incomplete verdict when tracker completion lands, and recompute release readiness from the current tracker status. W2 (minimal fix part 2): persist the proceed answer with settled answers before kickoff, and restore it on reload with 0 re-asks. W3 (minimal fix part 3): render the incomplete notice as an advisory that continues the request under `gsd-autonomous` autonomy with 0 manual proceed steps, while 1 warning line stays visible. Evidence waves: `n1` `SPE-36510` (done evidence), `n2` `SPE-36511` (gate trace), `n3` `SPE-36512` (reproduce), `n6` `SPE-36515` (verify).
+
+### 12.4 Requirements UTR-01 through UTR-06
+
+- UTR-01: tracker completion with 0 pending rows retires 1 staged `partial_failure` verdict, and release readiness reflects the current tracker status with 0 stale verdicts.
+- UTR-02: a tracker state at 1 pending row keeps release readiness at `not_ready` with 1 pending row named, so the warning never suppresses wholesale.
+- UTR-03: a proceed answer persists as ANSWER with settled answers and `kickedOff=true` before kickoff step 1 completes, with 1 persisted record.
+- UTR-04: a reload after SIGTERM restores 3 of 3 settled answers with `kickedOff=true`, 0 settled questions re-asked, and 0 blocking proceed prompts rendered.
+- UTR-05: the incomplete notice renders 1 advisory note naming the pending count with 0 banned STOP/proceed/confirm strings, and the request continues under `gsd-autonomous` autonomy with 0 manual proceed steps.
+- UTR-06: incomplete-plan metrics (pending count, incomplete verdict) stay visible with 1 warning line under the advisory path.
+
+Prioritization: MoSCoW for 3 stories, all Must, in wave order W1 → W2 → W3. WSJF does not apply at 3 items, and no stakeholder WSJF score exists in the brief, so no score is invented.
+
+### 12.5 Non-functional requirements (additive)
+
+- NFR-P2 (perf): verdict revalidation after tracker completion finishes within 5 s on the planner host, and 1 release query returns within 10 s; verified by A08.
+- NFR-S3 (security): the persisted proceed record contains 0 secrets and 0 chat-only answers after persistence; verified by A08/A10.
+- Carried unchanged: NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1 (a11y, i18n, compliance cover the required categories).
+
+### 12.6 Constraints
+
+`gsd-autonomous` autonomy stays intact with 0 manual proceed steps. Warnings are never suppressed wholesale. No edit lands in agent-realm `.planning` STATE/ROADMAP contents. Live phases 56–58 stay blocked on the realmlive stack and are recorded as a blocker, not fixed here.
+
+### 12.7 Traceability
+
+| Story | Wave | Requirements | Criteria |
+|---|---|---|---|
+| US-122 | W1 | UTR-01, UTR-02 | AC-65, AC-66, AC-67 |
+| US-123 | W2 | UTR-03, UTR-04 | AC-68, AC-69, AC-70 |
+| US-124 | W3 | UTR-05, UTR-06 | AC-71, AC-72, AC-73 |
+
+NFR-P2 traces to AC-66; NFR-S3 traces to AC-68. Each story carries 3 automated criteria with 0 manual-only criteria.
+
+### 12.8 Assumptions and blockers
+
+1. W1/W2/W3 map to the 3 fix waves in ordered plan `n7`; the brief names the loop and the waves, and the mapping follows wave order.
+2. Session evidence (timestamps, graph `ut-003d46eb79-79a08046` state, spec pending count, `kickedOff` values) is taken as given from the brief; this spec runs 0 verification against the planner host's session-directory files.
+3. The fix is minimal: 3 waves with the boundaries in 12.6; provider-lane recovery and unrelated host work stay out of scope.
+4. Blocker (separate): agent-realm live phases 56–58 are blocked on the realmlive stack; this spec records the blocker and schedules 0 live windows.
+
+## 13. Tb559-be Resume — Waiver, Split, Host Suite Extension (Tb559r-req, 2026-11-22)
+
+**Scope.** US-125 through US-128 plus the W3 verification-matrix extension on US-124. Human decisions from the brief apply and remain final: signing waiver for 2 commits, split with preservation of the think commit, and extension of the host suite to 119 of 119. This spec writes 0 product code, provisions 0 keys, force-pushes 0 commits on main, and edits 0 planning files.
+
+### 13.1 Signing waiver (US-125, SIGN-01)
+
+- 2 commits 90b18ce (BE) and 0d5032f (FE) each carry 1 recorded waiver record. Repo evidence: every origin/main commit reports `%G?=N`, with 0 `user.signingkey` entries and 0 `commit.gpgsign` settings. 0 keys are provisioned in this work.
+- The signed-commit check reports 0 failures from missing signatures once both waiver records land.
+
+### 13.2 Pull request split (US-126, SPLIT-01, SPLIT-02)
+
+- Commit c53a15c (`feat(think)`) stays preserved on 1 branch, `swarm/Tb559-think` at c53a15c. 0 loss is allowed. Local FE and BE trees both contain c53a15c today, while remote FE and PR #258 lack c53a15c.
+- Pull request #259 holds 1 commit, 90b18ce only, after rebase onto remote `swarm/Tb559-fe` at 0d5032f. Force-with-lease applies to the swarm branch and never to main. Pull requests #258 and #259 stay Draft until gates turn green, and merge runs 1 time through the ultrathink ship flow only.
+
+### 13.3 Host suite extension (US-127, TEST-01)
+
+- `src/host/omp.test.ts` becomes the 6th target file. The partial-plan test at line 454 converts to 1 advisory expectation modeled on the flight test. Fatal-path silence stays unchanged.
+- The `src/host` suite reports 119 of 119 passed with 0 failures after conversion.
+
+### 13.4 W3 verification matrix extension (US-124, UTR-05, UTR-06)
+
+- Complete plan: 0 advisories render in 2 of 2 renders, live plus after reload in herdr.
+- Incomplete plan: 1 advisory renders 1 time and names graph id, row count, and 1 unblocking action, with 0 banned strings.
+- No second prompt on unchanged state: prompt count stays at 1 across 2 polls.
+- Malformed or missing state: 1 named failure renders with 0 silent drops.
+
+### 13.5 Gates, Linear, planning hashes, CAPT-09 (US-128, GATE-01, LIN-01, HASH-01, CAPT-01)
+
+- 10 named gate plans exit 0 with 0 failures: Tb559-data, Tb559-fe, Tb559-be, Tb559-qa, Tb559-rev, Tb559-sec, plus build, rel, obs, docs.
+- 4 Linear issues SPE-36512, SPE-36513, SPE-36515, SPE-36516 update per completion, with 1 commit ref each (`Refs SPE-3651x`) and 1 PR-body fix ref each (`Fixes SPE-3651x`).
+- Planning hashes verify read-only with 0 planning edits: STATE.md sha256 starts `29bc314a`, ROADMAP.md sha256 starts `4b26403c`.
+- CAPT-09 at `docs/integration/runtime-decision.md` line 753, commit b37b94c, records as pre-existing and unrelated, routes to A08, receives 0 fixes in this scope, and blocks 0 scoped DONE outcomes. The routing statement appears explicitly in the verdict.
+
+### 13.6 Non-functional requirements (additive)
+
+NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1, NFR-P2 and NFR-S3 carry forward unchanged. This section adds 0 new NFRs. Perf, security, a11y, i18n and compliance each keep 1 carried NFR with a numeric target in `docs/requirements/nfr.md` and section 6.
+
+### 13.7 Prioritization
+
+MoSCoW applies for 4 new stories at or below the 20-story WSJF threshold in the new-story set. All 4 stories rank Must in brief order: waiver, split, suite extension, then gates and tracking. WSJF does not rank the set, and 0 stakeholder WSJF scores exist in the brief, so 0 scores were guessed.
+
+### 13.8 Traceability
+
+| Story | Requirements | Criteria count |
+|---|---|---|
+| US-125 | SIGN-01 | 1 |
+| US-126 | SPLIT-01, SPLIT-02 | 2 |
+| US-127 | TEST-01 | 1 |
+| US-124 (matrix extension) | UTR-05, UTR-06 | 4 |
+| US-128 | GATE-01, LIN-01, HASH-01, CAPT-01 | 4 |
+
+Each new criterion is automated. Manual-only count across the new set equals 0. Every new requirement links to 1 or more criteria in `docs/acceptance.md` via the story field. NFR linkage stays unchanged from sections 6, 11.9 and 12.5.
+
+### 13.9 Assumptions and open questions
+
+1. Gate evidence, W3 matrix evidence, Linear updates and PR states execute in downstream tasks, not in this spec task. This spec records 0 gate outcomes as observed facts.
+2. Pull requests #258 and #259 remain OPEN at spec time, and neither repo holds signing keys. Both facts come from the brief and repo evidence cited in 13.1.
+3. Planning hashes were verified read-only at spec time from the working tree, with 0 `.planning` edits made by this task.
+4. Prior scoped verification of 147 of 147 is carried as brief evidence. This spec re-proves 0 of those checks.
+
+## 14. Swarm Task cffd9419 Resume — SEC Split, Conditional Merge 256, Round 3 Gates and W3 Matrix (Tcffd1-req, 2026-11-22)
+
+**Scope.** US-129 through US-131 and the matching criteria in `docs/acceptance.md`. This section resumes correlation `cffd9419-11d3-47d0-a760-9b04c94cc7d5` with 2 human decisions applied: the security verdict splits the canary in-test with 0 allowlists, and merge of pull request 256 proceeds once local tests pass and CI is green with Greptile absence recorded as the accepted substitute. This spec writes 0 product code, runs 0 merge operations and edits 0 `.planning` files.
+
+### 14.1 SEC canary split (US-129, SECSPLIT-01, SECSPLIT-02)
+
+- 1 test file `test/host/boot-report.test.ts` at line 177 holds 1 literal 40-character fixture that is sequential and fake. The split assembles the fixture from 2 concatenated parts at 1 test location, committed on `swarm/Tb559r-capt09`.
+- After the split, the repository holds 0 literal fixture strings and the secret scanner reports 0 secrets.
+- The compiled boot-report test run exits 0 with 0 failures, and refusal assertions report 0 echoes of the fixture.
+- The literal fixture text is redacted in this spec and in the task record; this spec carries 0 copies of the literal text.
+
+### 14.2 Conditional merge of pull request 256 (US-130, MERGE256-01, MERGE256-02)
+
+- Local proof on the split commit runs `check:docs`, `test:scripts`, `build`, `lint` and 1 compiled boot-report run. Each local gate exits 0.
+- CI reruns on the split commit report green on Verify for Node 22.x and 24.x, the docs site, the breaking-change check and the audit, with 0 failures.
+- Pull request 256 merges 1 time with squash through the ship flow. Main holds 1 merge commit from the 354f00a line with 5 docs files.
+- The pull request body records 1 Greptile absence note with offline evidence. The body carries 0 claims of 5 of 5 reviews, and no task fakes a Greptile verdict.
+- `npm run check:docs` on the merged main tree exits 0 with 0 failures.
+
+### 14.3 Round 3 gates, W3 matrix, hashes, Linear and report (US-131, R3-01, W3M-01, HASH-02, LIN-02, REP-01)
+
+- 7 plans run on the merged main tree: `qa.r3`, `rev.r3`, `sec.r3`, `build`, `rel`, `obs` and `docs`. Each plan exits 0 with 0 failures.
+- The W3 matrix for the 3 ultrathink waves runs on the stack with commits `a519184` and `0d5032f`. The matrix reports 9 of 9 checks green with 0 failures.
+- After the merge, `STATE.md` sha256 starts `29bc314a` and `ROADMAP.md` sha256 starts `4b26403c`, with 0 planning files changed.
+- 4 Linear sub-issues `n3` `SPE-36512`, `n4` `SPE-36513`, `n6` `SPE-36515` and `n7` `SPE-36516` close only after the round 3 gates and the W3 matrix pass. Each closed sub-issue carries 1 commit ref. The close count before gates pass equals 0.
+- The final resume report names 1 state for pull request 255 and 1 state for pull request 259, with 2 of 2 states listed.
+
+### 14.4 Non-functional requirements (additive)
+
+Carried unchanged: NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1, NFR-P2 and NFR-S3. This section adds 0 new NFRs. Perf, security, a11y, i18n and compliance each keep 1 carried NFR with a numeric target in `docs/requirements/nfr.md` and section 6. The SEC split strengthens NFR-S1 and NFR-C1 with 0 literal fixture strings and 0 redaction regressions.
+
+### 14.5 Prioritization
+
+MoSCoW applies for 3 new stories at or below the 20-story WSJF threshold in the new-story set. All 3 stories rank Must in task order: SEC split, then conditional merge, then round 3 gates with W3 matrix. WSJF does not rank the set, and 0 stakeholder WSJF scores exist in the brief, so 0 scores were guessed.
+
+### 14.6 Traceability
+
+| Story | Requirements | Criteria count |
+|---|---|---|
+| US-129 | SECSPLIT-01, SECSPLIT-02 | 3 |
+| US-130 | MERGE256-01, MERGE256-02 | 3 |
+| US-131 | R3-01, W3M-01, HASH-02, LIN-02, REP-01 | 5 |
+
+Each new criterion is automated. Manual-only count across the new set equals 0. Every new requirement links to 1 or more criteria in `docs/acceptance.md` via the story field. NFR linkage stays unchanged from sections 6, 11.9 and 12.5.
+
+### 14.7 Assumptions and open questions
+
+1. Gate evidence, W3 matrix evidence, Linear updates and pull request states execute in downstream tasks, not in this spec task. This spec records 0 gate outcomes as observed facts.
+2. The Greptile offline signal and the split-commit CI results come from the parent task as brief evidence. This spec re-proves 0 of those checks.
+3. Planning hash prefixes in 14.3 come from the brief and from section 13.5; this task edits 0 `.planning` files and reads 0 hash values as its own evidence.
+4. The literal canary text is redacted everywhere in this spec task; downstream verification reads the test file directly for the literal count.

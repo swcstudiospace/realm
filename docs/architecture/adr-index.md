@@ -58,3 +58,29 @@ Status convention: **accepted** = A03 may record it (L2); **proposed** = awaitin
 ## v9.0 swarm series (Ta08e-arch)
 
 The four v9.0 decisions are recorded as MADR files under `docs/adr/` by `scripts/arch_adr.py` with swarm-series ids ADR-0001..ADR-0004 (accepted, index verdict pass, `arch_adr_supersession` valid). These ids live in a different series from the Tc8fd-arch ADR-0001..ADR-0007 above and must be cited with their file path to avoid collision. Full bodies: `docs/adr/0001-optional-omp-plugin-toggle-defaults-on.md`, `docs/adr/0002-merge-realm-status-into-the-additional-ui-widget.md`, `docs/adr/0003-name-the-missing-workspaceroot-in-the-start-diagnostic.md`, `docs/adr/0004-publish-the-omp-plugin-contract-before-implementation-tasks.md`. A future series renumbering must supersede, never renumber, existing ids.
+
+## Ultrathink stale-verdict swarm series (Tb559-arch)
+
+Recorded via `scripts/arch_adr.py` with swarm-series ids ADR-0005..ADR-0008 (accepted, `arch_adr_supersession` `valid=true`, heads ADR-0005..ADR-0008). These ids live in the same `docs/adr/` series as the v9.0 ADR-0001..ADR-0004 above and are distinct from the Tc8fd-arch ADR-0001..ADR-0007 series; cite with file path.
+
+- **ADR-0005** — `docs/adr/0005-revalidate-completion-gate-verdict-on-tracker-completion.md` — W1: `release()` revalidates staged artifacts against current tracker rows; stale `partial_failure` retires at 0 pending rows, 1 pending row keeps `not_ready` naming the count.
+- **ADR-0006** — `docs/adr/0006-persist-proceed-answer-before-kickoff-and-restore-on-reload.md` — W2: ANSWER + `kickedOff=true` persist before kickoff step 1; reload restores 3 of 3 answers with 0 re-asks.
+- **ADR-0007** — `docs/adr/0007-render-incomplete-plan-notice-as-advisory-and-continue.md` — W3: incomplete verdict renders `planAdvisoryNote` advisory and continues; 0 STOP/proceed/confirm strings, 0 manual proceed steps, 1 warning line stays visible.
+- **ADR-0008** — `docs/adr/0008-publish-ultrathink-completion-gate-contract-before-implement.md` — contract-first: `API-UltrathinkCompletionGate` 1.0.0 (5 operations) before A05 claims.
+
+## Tb559-be resume swarm series (Tb559r-arch)
+
+Recorded via `scripts/arch_adr.py` with swarm-series ids ADR-0009..ADR-0012 (accepted, `arch_adr.py --list` PASS 12 ADRs 0 findings, `arch_adr_supersession` `valid=true` heads ADR-0005..ADR-0012). Same `docs/adr/` series as ADR-0001..ADR-0008; cite with file path.
+
+- **ADR-0009** — `docs/adr/0009-record-signing-waiver-for-unsigned-be-and-fe-commits-without.md` — waiver for 90b18ce and 0d5032f with 0 keys provisioned (SIGN-01, AC-74).
+- **ADR-0010** — `docs/adr/0010-preserve-think-commit-and-split-be-pull-request-to-one-commi.md` — preserve c53a15c on `swarm/Tb559-think`, PR 259 = 90b18ce only on 0d5032f, force-with-lease on swarm branches only (SPLIT-01..02, AC-75..AC-76).
+- **ADR-0011** — `docs/adr/0011-extend-host-suite-to-119-and-convert-partial-plan-test-to-ad.md` — `src/host/omp.test.ts` as 6th target, line 454 test becomes W3 advisory, fatal silence unchanged, 119/119 (TEST-01, AC-77).
+- **ADR-0012** — `docs/adr/0012-extend-w3-verification-matrix-in-ultrathink-completion-gate-.md` — additive `API-UltrathinkCompletionGate` 1.1.0: optional graphId/unblockingAction/renderCount/failure on `AdvisoryResponse` (UTR-05..06, AC-78..AC-81).
+
+## Swarm task cffd9419 resume swarm series (Tcffd1-arch)
+
+Recorded via `scripts/arch_adr.py` with swarm-series ids ADR-0013..ADR-0015 (accepted, `arch_adr.py --list` PASS 15 ADRs 0 findings). Same `docs/adr/` series as ADR-0001..ADR-0012; cite with file path. `arch_adr_transition {proposed → accepted}`: `allowed=true` ("proposed -> accepted is allowed").
+
+- **ADR-0013** — `docs/adr/0013-split-fake-github-fixture-in-boot-report-test-into-two-conca.md` — split the fake GitHub fixture in `test/host/boot-report.test.ts` into 2 concatenated parts on `swarm/Tb559r-capt09`; 0 literal fixture strings, 0 allowlists, refusal assertions keep 0 echoes (SECSPLIT-01..02, AC-86..AC-88).
+- **ADR-0014** — `docs/adr/0014-merge-pull-request-256-conditionally-on-local-and-ci-green-w.md` — merge PR 256 once via the ultrathink ship flow with squash from the 354f00a line after local + CI green; the PR body records 1 Greptile absence note with 0 fake 5-of-5 claims; Greptile absence is the user-accepted substitute (MERGE256-01..02, AC-89..AC-91).
+- **ADR-0015** — `docs/adr/0015-run-round-3-gates-and-w3-matrix-on-merged-main-before-linear.md` — 7 r3/release plans on merged main + 9-of-9 W3 on the ultrathink stack `a519184 + 0d5032f`, read-only hash verification, and gate-then-close for `SPE-36512`, `SPE-36513`, `SPE-36515`, `SPE-36516` (R3-01, W3M-01, HASH-02, LIN-02, REP-01, AC-92..AC-96).
