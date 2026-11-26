@@ -45,8 +45,11 @@ Default, loading, error, empty, success — specified per screen below as dotted
 | SCR-SecSplitFixture | AC-86, AC-87, AC-88 |
 | SCR-Merge256Gate | AC-89, AC-90, AC-91 |
 | SCR-R3W3Closeout | AC-92, AC-93, AC-94, AC-95, AC-96 |
+| SCR-QualityBaselineBoard | AC-97, AC-98, AC-99, AC-100, AC-101, AC-102 |
+| SCR-LinearContinuationBoard | AC-103, AC-104, AC-105 |
+| SCR-GateEnforcementBoard | AC-106, AC-107, AC-108 |
 
-Coverage: AC-1..AC-96 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
+Coverage: AC-1..AC-108 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
 
 ## SCR-RealmStatus — `realm status`
 
@@ -713,3 +716,114 @@ Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). T
 | r3-closeout-swap | 0 ms | instant text replace (no transition; paint happens on change only) |
 
 Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `pr-commit-link` 24x24, `scanner-report-link` 24x24, `linear-fix-link` 44x44 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Board and advisory notes are non-interactive and have no target.
+
+## T5471 quality upgrade addendum (T5471-ux, 2026-11-26; tokens 1.2.0 unchanged)
+
+**Scope.** US-132..US-135 (AC-97..AC-108) from `docs/requirements/spec.md` section 15: measured quality baseline, programming-pattern ratchet with zero gate regressions, Linear blocker continuation with zero silent gaps, and gate enforcement per risk class. Zero new components — all three screens reuse `ds/GateBoard`, `ds/CheckList`, `ds/StatusReadout`, `ds/NoticeBanner`, `ds/MetricTable` (L2). No brand change, no token bump (tokens 1.2.0 unchanged; `ux_token_semver_impact` requested with identical maps, L3 not triggered). Fidelity: lofi (ASCII wireframes; no Figma). Provisional: true (no brand guide; system default theme). This design records 0 gate outcomes as observed facts: every number on these boards is an A08-recorded observation; a missing number reads `unknown — not measured`, never a guess, never 0, never pass.
+
+## SCR-QualityBaselineBoard — measured baseline + ratchet (US-132, US-133)
+
+**Question:** what is the measured quality bar on this branch, and did the pattern ratchet hold it without regressions?
+**Flows:** record-baseline, read-coverage, read-audit, verify-ratchet, compare-to-baseline.
+**Layout (operator evidence board, docs view):**
+
+```
+┌─ [ds/GateBoard] quality baseline — fix/stdio-host-shutdown-log ┐
+│ gates: typecheck · lint · test · build · check:docs ·         │
+│   check:gates · check:pack · check:mcp (1 exit code each)     │
+│ coverage: src/fs <n> · src/core <n> · src/tools <n>           │
+│ audit: exit <n> · dependencies <n> · scanner 0 secrets        │
+│ ratchet: suppression 0 · silent-catch 0/10 · deps 0 · modules 0│
+│ [gate-row-link 24x24] [baseline-detail-link 24x24]             │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- `default.baseline`: 8 gate rows each read 1 recorded exit code (`typecheck exit 0` etc., AC-97); coverage rows each read 1 measured floor value for `src/fs`, `src/core`, `src/tools` (AC-98); audit row reads 1 exit code + 1 dependency count (AC-99). A row not yet measured reads `unknown — not measured` on the advisory surface (`color.surface.advisory`, `color.text.primary` 15.93 and `color.status.warning` 6.36 this run) and never reads pass.
+- `loading`: `baseline: running 8 gates…` with elapsed and NFR-P3 budget note (1800 s wall); the board never reads recorded while any gate is running.
+- `error.gate-fail`: the regressing gate named with its exit code and 1 remedy (`<gate> exit 1 — revert or carry with 1 tested reason`); other rows keep last truthful verdicts, never erased (AC-101).
+- `error.validation`: usage line + code; an unknown gate name or coverage directory reads `not run`, never pass.
+- `empty.no-run`: `no baseline recorded for this branch` (not pass). Pattern rows read `suppression comments 0 · silent catches beyond the 10 named QUAL-01 exceptions 0 · new dependencies without justification 0` (AC-100) and `0 modules over the size ratchet, 1 size recorded per module` (AC-102); an unmeasured pattern row reads `unknown — not measured`.
+- `success.recorded`: 8 of 8 gate exit codes recorded + 3 of 3 coverage floors measured + audit exit and dependency count recorded + ratchet counts 0, with `0 frozen catalogue codes changed · 0 shims added` stated in text.
+
+**Copy bans (design rule):** never invent an exit code, floor, or count; never call `unknown` green; never name a catalogue change without its code. No dark pattern: counts stated as facts, never as urgency or praise.
+**Components:** `ds/GateBoard@1.0` (props: gates ["typecheck","lint","test","build","check:docs","check:gates","check:pack","check:mcp"]), `ds/MetricTable@1.0` (props: rows ["coverage","audit","ratchet"]), `ds/NoticeBanner@1.0` (props: advisory true, neverSilent true, live polite, unknown-only).
+**Focus order:** `gate-row-link`, `baseline-detail-link`. Advisory note is non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white this run). Links meet SC 2.5.8 (24x24, `ux_target_size_check` compliant true). Focus ring `#2563eb` lowest 4.64 across white/advisory/widget/secondary, `ux_focus_contrast_check` meets true (SC 1.4.11 needs 3).
+
+```json
+{ "screen_id": "SCR-QualityBaselineBoard", "flows": ["record-baseline", "read-coverage", "read-audit", "verify-ratchet", "compare-to-baseline"], "states": ["default.baseline", "loading.running", "error.gate-fail", "error.validation", "empty.no-run", "success.recorded"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "gates": ["typecheck", "lint", "test", "build", "check:docs", "check:gates", "check:pack", "check:mcp"] } }, { "ref": "ds/MetricTable@1.0", "props": { "rows": ["coverage", "audit", "ratchet"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "advisory": true, "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "baseline-detail-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-97", "AC-98", "AC-99", "AC-100", "AC-101", "AC-102"] }
+```
+
+## SCR-LinearContinuationBoard — done-or-blocked tracker (US-134)
+
+**Question:** does every open Linear item carry a recorded state, and does every blocker name its owner action?
+**Flows:** list-open-items, read-item-state, check-duplicates, read-blocker, follow-owner-action.
+**Layout (tracking board, docs view):**
+
+```
+┌─ [ds/CheckList] Linear continuation ─────────────────────────┐
+│ item: <id> — done-with-evidence | blocked-with-named-cause   │
+│ BLOCKED — owner decision required                            │
+│ cause: <1> · owner action: <1> · next step: <1>              │
+│ duplicates: 0 per phase (reuse existing title)               │
+│ [linear-fix-link 44x44] [gate-row-link 24x24]                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- `default.listed`: each listed open issue/sub-issue reads exactly 1 state, either `done-with-evidence` or `blocked-with-named-cause`, with `0 items lack a state` stated as a count (AC-103). Duplicate row reads `duplicate phase titles 0, 1 count recorded per phase` (AC-104); a scan that finds a match states `reused existing <issue>` and creates nothing.
+- `loading`: `linear: listing open items…` with elapsed; the board never reads complete while listing.
+- `error.workspace-unreadable`: `Linear workspace unreadable — <named cause>; 0 items marked` with 1 remedy; no item is guessed done or blocked.
+- `error.validation`: usage line + code; an unknown issue id reads `not listed`, never silently absent.
+- `empty.no-open-items`: `0 open items — all items done-with-evidence` stated, never blank.
+- `success.blocked-named`: every blocked row reads `BLOCKED — owner decision required` + exactly 1 cause + exactly 1 owner action + exactly 1 next step (AC-105), including the carried live-phase blocker `phases 56-58 blocked on the realmlive stack, 0 live windows scheduled`. A done row reads `done-with-evidence` + its evidence ref, never a bare done.
+
+**Copy bans (design rule):** never mark an item done without an evidence ref; never leave a blocker without cause + owner action + next step; never create a duplicate phase title. No dark pattern: blocked stated as fact with a named next step, never as urgency.
+**Components:** `ds/CheckList@1.0` (props: states ["done-with-evidence","blocked-with-named-cause"]), `ds/NoticeBanner@1.0` (props: blocked true, neverSilent true), `ds/StatusReadout@1.0` (props: labels ["done-with-evidence","blocked-with-named-cause"]).
+**Focus order:** `linear-fix-link`, `gate-row-link`. Blocked notice is `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white this run). Links meet SC 2.5.8 (44x44 / 24x24, `ux_target_size_check` compliant true).
+
+```json
+{ "screen_id": "SCR-LinearContinuationBoard", "flows": ["list-open-items", "read-item-state", "check-duplicates", "read-blocker", "follow-owner-action"], "states": ["default.listed", "loading.listing", "error.workspace-unreadable", "error.validation", "empty.no-open-items", "success.blocked-named"], "components": [{ "ref": "ds/CheckList@1.0", "props": { "states": ["done-with-evidence", "blocked-with-named-cause"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "blocked": true, "neverSilent": true } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["done-with-evidence", "blocked-with-named-cause"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["linear-fix-link", "gate-row-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-103", "AC-104", "AC-105"] }
+```
+
+## SCR-GateEnforcementBoard — 4-gate release hold (US-135)
+
+**Question:** are all 4 gate verdicts present, and does a red verdict hold the release?
+**Flows:** read-verdicts, check-release-readiness, trace-stories, hold-release.
+**Layout (release gate board, docs view):**
+
+```
+┌─ [ds/GateBoard] gate enforcement — fix/stdio-host-shutdown-log ┐
+│ review: <verdict> · quality: <verdict> · security: <verdict>   │
+│ release: <verdict> · most-restrictive wins on conflict         │
+│ release readiness: held — <gate> red | ready — 4 of 4 green    │
+│ traceability: 4 of 4 stories, 0 uncovered requirements         │
+│ [gate-row-link 24x24] [release-readiness-link 24x24]           │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- `default.verdicts`: 4 rows each read 1 recorded verdict in text (`review pass · quality pass · security pass · release pass`), never a colour-only chip (AC-106). A missing verdict reads `not recorded — gate not run`, never pass.
+- `loading`: `gates: recording verdicts…` with elapsed; release readiness reads `held — verdicts incomplete`, never ready.
+- `error.red-gate`: the red gate named (`release readiness: held — <gate> red`) with the most-restrictive verdict winning on conflict; `0 releases land on a red verdict` stated as a count (AC-107). Other verdicts keep their recorded values, never repainted.
+- `error.validation`: usage line + code; an unknown gate name reads `not run`, never pass.
+- `empty.no-verdicts`: `0 verdicts recorded for this branch` (not pass; release held).
+- `success.ready`: `4 of 4 verdicts present · most-restrictive wins · release ready` only when all 4 are pass, plus traceability row `100 percent of 4 stories trace to 1 or more criteria, 0 uncovered requirements` (AC-108). Status text uses the NFR-A3 colour-independent cue: exactly 1 of 2 text labels (`held` / `ready`) with a shape cue, distinguishable without colour.
+
+**Copy bans (design rule):** never assert a verdict that was not recorded; never show `ready` while any verdict is missing or red; never land a release on red. No dark pattern: the hold is stated as a gate fact, never as urgency.
+**Components:** `ds/GateBoard@1.0` (props: gates ["review","quality","security","release"]), `ds/StatusReadout@1.0` (props: labels ["held","ready"]), `ds/CheckList@1.0` (props: rows ["verdicts","readiness","traceability"]).
+**Focus order:** `gate-row-link`, `release-readiness-link`.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.47 (error-on-white this run). Links meet SC 2.5.8 (24x24, `ux_target_size_check` compliant true). Focus ring `#2563eb` lowest 4.64, `ux_focus_contrast_check` meets true.
+
+```json
+{ "screen_id": "SCR-GateEnforcementBoard", "flows": ["read-verdicts", "check-release-readiness", "trace-stories", "hold-release"], "states": ["default.verdicts", "loading.recording", "error.red-gate", "error.validation", "empty.no-verdicts", "success.ready"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "gates": ["review", "quality", "security", "release"] } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["held", "ready"] } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["verdicts", "readiness", "traceability"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "release-readiness-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-106", "AC-107", "AC-108"] }
+```
+
+## T5471 motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| quality-board-swap | 0 ms | instant text replace (no transition) |
+| linear-board-swap | 0 ms | instant text replace (no transition; paint happens on change only) |
+| gate-board-swap | 0 ms | instant text replace (no transition) |
+
+Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `baseline-detail-link` 24x24, `linear-fix-link` 44x44, `release-readiness-link` 24x24 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Advisory, blocked and verdict notes are non-interactive and have no target.

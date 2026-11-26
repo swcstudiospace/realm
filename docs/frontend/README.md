@@ -94,3 +94,13 @@ Screens (docs-view boards, details in `component-spec.md` addendum): `SCR-SecSpl
 change (`design.system.tokens@1.2.0`; `API-UltrathinkCompletionGate@1.1.0` advisory precedent, no
 new API call). Execution (split commit, local + CI runs, merge, round-3 / W3 runs, Linear closes)
 is downstream (A05 / A08 / A12 / A01); this catalog states display + forbidden copy only.
+
+## T5471 addendum — AC-97..AC-108 (tokens 1.2.0, contract API-QualityGates@1.0.0)
+
+Screens (docs-view boards, details in `component-spec.md` T5471 addendum): `SCR-QualityBaselineBoard`,
+`SCR-LinearContinuationBoard`, `SCR-GateEnforcementBoard`. Zero new component — reuse `ds/GateBoard@1.0`,
+`ds/CheckList@1.0`, `ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0`, `ds/MetricTable@1.0`; zero new
+dependency; zero token change (`design.system.tokens@1.2.0`; `API-QualityGates@1.0.0` — boards
+display recorded evidence and make no new API call). Execution (recording 8 gate exit codes,
+coverage floors, 4 verdicts, Linear states) is downstream (A05 / A08 / A01); this catalog states
+display + forbidden copy only.

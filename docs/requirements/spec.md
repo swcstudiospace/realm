@@ -372,3 +372,66 @@ Each new criterion is automated. Manual-only count across the new set equals 0. 
 2. The Greptile offline signal and the split-commit CI results come from the parent task as brief evidence. This spec re-proves 0 of those checks.
 3. Planning hash prefixes in 14.3 come from the brief and from section 13.5; this task edits 0 `.planning` files and reads 0 hash values as its own evidence.
 4. The literal canary text is redacted everywhere in this spec task; downstream verification reads the test file directly for the literal count.
+## 15. T5471 Quality Upgrade and Linear Continuation (2026-11-26)
+
+**Scope.** US-132 through US-135 and AC-97 through AC-108. Stories US-101 through US-131 and criteria AC-1 through AC-96 are carried unchanged. This section operationalizes the brief phrase "State-of-the-Art, Best-in-Class, Production-Grade, Enterprise-Ready" as the measurable bar in section 15.1. This spec writes 0 product code, runs 0 gate commands, and creates 0 Linear issues; downstream A08/A01 own those executions.
+
+### 15.1 Quality bar (measurable definition)
+
+- 8 standard gates each exit 0 with 0 failures on the change branch: typecheck, lint, test, build, check:docs, check:gates, check:pack, check:mcp.
+- CI is green on 2 of 2 Node versions (22 and 24) with 0 failed jobs.
+- The vulnerability audit exits 0 with 0 dependency drift from the recorded baseline count.
+- Strict pattern checks report 0 suppression comments, 0 silent catches beyond the 10 named QUAL-01 exceptions, 0 new dependencies without justification, and 0 modules over the size ratchet.
+- Coverage floors carry 1 measured number per directory for src/fs, src/core and src/tools.
+
+### 15.2 Baseline (US-132, QUALB-01..03)
+
+- The 8 gate exit codes are recorded for branch `fix/stdio-host-shutdown-log` with 0 unmeasured claims. No exit code is claimed in this spec task; A08 records the observed values downstream.
+- Coverage floors and the audit exit plus dependency count each carry 1 recorded number. A missing number is recorded as unknown, never guessed.
+
+### 15.3 Pattern ratchet (US-133, RATCHET-01..03)
+
+- Pattern changes hold at the recorded bar with 0 gate regressions: 8 of 8 gates exit 0 against the baseline from section 15.2.
+- The ratchet changes 0 frozen catalogue codes and adds 0 shims. Any pattern that fails a gate is reverted or carried with 1 tested reason.
+
+### 15.4 Linear continuation (US-134, LINB-01..03)
+
+- Every open Linear issue and sub-issue carries 1 recorded state: done-with-evidence or blocked-with-named-cause. The count of items without a state equals 0.
+- A duplicate scan runs before any creation; the duplicate phase-title count equals 0 and an existing issue is reused when a phase title already exists.
+- Every blocked item names 1 cause, 1 owner action and 1 next step. Live phases 56–58 stay blocked on the realmlive stack under this rule; this section records the blocker and schedules 0 live windows.
+- A01 owns the Linear writes. This spec is the routing record, not the tracker state.
+
+### 15.5 Gate enforcement (US-135, GATEE-01..03)
+
+- Review, quality, security and release gate verdicts are each present (4 of 4). On conflict the most-restrictive verdict wins.
+- 0 releases land on a red verdict. A red verdict names 1 gate and holds release.
+- Traceability for US-132 to US-135 is 100%: every story traces to 1 or more criteria in `docs/acceptance.md` through the `story:` field.
+
+### 15.6 Non-functional requirements (additive)
+
+- NFR-P3 (perf): the 8-gate baseline run finishes within 1800 s wall on the current branch with 1 exit code per gate; verified by A08.
+- NFR-S4 (security): the secret scan over the change reports 0 secrets with 0 literal fixture occurrences; verified by A08/A10.
+- NFR-A3 (a11y): the status shows 1 of 2 text labels with a color-independent cue, carried from NFR-A1; verified by A08.
+- NFR-I1 and NFR-C1 are carried unchanged and cover the i18n and compliance categories with numeric targets.
+
+### 15.7 Prioritization
+
+MoSCoW applies for 4 new stories at or below the 20-story WSJF threshold in the new-story set. All 4 stories rank Must in task order: baseline, ratchet, Linear continuation, then gate enforcement. WSJF does not rank the set, and 0 stakeholder WSJF scores exist in the brief, so 0 scores were guessed.
+
+### 15.8 Traceability
+
+| Story | Requirements | Criteria count |
+|---|---|---|
+| US-132 | QUALB-01, QUALB-02, QUALB-03 | 3 |
+| US-133 | RATCHET-01, RATCHET-02, RATCHET-03 | 3 |
+| US-134 | LINB-01, LINB-02, LINB-03 | 3 |
+| US-135 | GATEE-01, GATEE-02, GATEE-03 | 3 |
+
+Each new criterion is automated. Manual-only count across the new set equals 0. Every new requirement links to 1 or more criteria in `docs/acceptance.md` via the story field.
+
+### 15.9 Assumptions and open questions
+
+1. Gate exit codes, coverage numbers and audit counts execute in downstream tasks, not in this spec task. This spec records 0 gate outcomes as observed facts.
+2. The Linear workspace state at spec time is unknown (Q1 in `docs/requirements/brief-T5471-req.md`); LINB counts are a downstream obligation, not an observed state.
+3. The current branch head evidence for the 8 gates has not been run in this spec task (Q2 in the same brief file).
+4. Scope growth is 4 stories added to 31 existing (11.4% of the prior committed set counting stories, and 4 of 35 after adding). This stays below the 20% human-approval ceiling, so no BLOCKED is raised.

@@ -112,6 +112,7 @@ interface Finished {
 interface Started {
   readonly child: ChildProcess;
   readonly done: Promise<Finished>;
+  readonly exited: Promise<Finished>;
 }
 
 function randomMark(): string {
@@ -247,7 +248,16 @@ function runWrapper(t: TestContext, workload: readonly string[], options: RunOpt
       resolve({ code, signal, stdout, stderr, elapsedMs: performance.now() - startedAt });
     });
   });
-  return { child, done };
+  // Resolves when the wrapper process itself has exited, whether or not its output pipes have closed. A tree process that
+  // outlives the sweep still holds the pipes open, so the close event can lag far behind the exit under load; the tree test
+  // proves the sweep with the exit and the process table, not with the pipes (the pipes-close test below still uses `done`).
+  const exited = new Promise<Finished>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal, stdout, stderr, elapsedMs: performance.now() - startedAt });
+    });
+  });
+  return { child, done, exited };
 }
 
 async function allGone(what: string, pids: () => readonly number[]): Promise<void> {
@@ -275,10 +285,10 @@ void test("a deadline ends a whole tree: background sleeps, a nested subshell, a
   t.after(() => {
     cleanUp(TREE_SECONDS, mark);
   });
-  const { done } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 4000, env: denyGroupKillEnv() });
+  const { exited } = runWrapper(t, ["bash", "-c", TREE_SCRIPT, mark], { deadlineMs: 4000, env: denyGroupKillEnv() });
   await pollUntil(treeRunning, "the whole tree is running", { timeoutMs: WAIT_MS, intervalMs: POLL_MS });
   assert.ok(processesHolding(mark).length >= 3, "the inner shells carry the mark while the tree runs");
-  const finished = await boundedWait(done, "the wrapper ends the tree", WAIT_MS);
+  const finished = await boundedWait(exited, "the wrapper ends the tree", WAIT_MS);
   assert.equal(finished.code, 124, `the wrapper's own deadline is exit 124: ${JSON.stringify(finished)}`);
   await allGone("the marked shells", () => processesHolding(mark));
   await allGone("the tree's sleeps", () => TREE_SECONDS.flatMap((seconds) => processesWithArgv(["sleep", seconds])));

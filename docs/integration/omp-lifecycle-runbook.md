@@ -1,5 +1,15 @@
 # Omp lifecycle runbook: watch the plugin attach, and check what survives an abrupt end
 
+Runbook registry entry (A13 executable schema; this file is the single-writer `runbook` artifact for RB-omp-lifecycle):
+
+- runbook_id: RB-omp-lifecycle
+- title: Omp lifecycle runbook: watch the plugin attach, and check what survives an abrupt end
+- trigger: Omp plugin attach, watchdog, and realm lifecycle verification during integration testing
+- tier: 1
+- last_verified: 2026-11-26
+- steps: attach-check (reversible: true), write-guard-check (reversible: true), abrupt-end-check (reversible: true), cleanup (reversible: true)
+
+
 Purpose. The manual sections A–D preserve the historical checks recorded in `.planning/quick/261029-g7m-lifecycle-and-persistence-findings/LIVE-VERIFICATION.md`: attach, the original native-tool guard, and abrupt process endings. Their recorded expectations predate Realm's registered `read`/`write` shadowing; they are not a current four-case pass. For the current registered-write and native-edit checks, use "The gated guard suite" below.
 
 Scope. A disconnected registered Realm `write` is refused in both policy modes, without a host fallback or host advisory notice. The retained native `edit` is a separate advisory host path, exercised by C4 below. The hermetic suite uses a real Omp process and a fake-backed daemon, not the production sandbox; it cannot establish OMPX-05's real `/workspace` and paired-audit acceptance. A scripted provider is not an LLM-driven run. Guard results, production containment/audit evidence and HARN-03 network evidence must remain distinct (`docs/integration/omp.md`).

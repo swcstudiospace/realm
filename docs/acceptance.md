@@ -734,3 +734,94 @@ When the report is read 1 time
 Then the report names 1 state for pull request 255 and 1 state for pull request 259 with 2 of 2 states listed
 check: named state counts for 2 pull requests
 automated: true
+## US-132 — Measured quality baseline for the current branch
+
+AC-97 story: US-132
+Given the current branch fix/stdio-host-shutdown-log
+When the 8 standard gate commands run
+Then 8 exit codes are recorded with 0 unmeasured quality claims
+check: gate exit codes
+automated: true
+
+AC-98 story: US-132
+Given the baseline record
+When coverage floors are read for 3 directories src/fs, src/core and src/tools
+Then each of 3 directories shows 1 measured floor value with 1 number recorded per directory
+check: coverage floor values
+automated: true
+
+AC-99 story: US-132
+Given the baseline record
+When the vulnerability audit runs 1 time
+Then 1 audit exit code and 1 dependency count are recorded with 0 unknowns
+check: audit exit code and dependency count
+automated: true
+
+## US-133 — Programming-pattern ratchet with zero gate regressions
+
+AC-100 story: US-133
+Given the current branch
+When strict pattern checks run 1 time
+Then suppression comments equal 0, silent catches beyond the 10 named exceptions equal 0, and new dependencies without justification equal 0
+check: pattern check counts
+automated: true
+
+AC-101 story: US-133
+Given the quality baseline recorded for the current branch
+When the 8 standard gates rerun 1 time
+Then 8 of 8 gates exit 0 with 0 regressions against the baseline
+check: gate exit codes vs baseline
+automated: true
+
+AC-102 story: US-133
+Given the module size ratchet
+When module sizes are read 1 time
+Then 0 modules exceed the recorded size limit with 1 size recorded per module
+check: module size exceedance count
+automated: true
+
+## US-134 — Linear blocker continuation with zero silent gaps
+
+AC-103 story: US-134
+Given the Linear workspace
+When open issues and sub-issues are listed 1 time
+Then each listed item shows 1 state among done-with-evidence or blocked-with-named-cause, and 0 items lack a state
+check: listed item state count
+automated: true
+
+AC-104 story: US-134
+Given the Linear workspace list
+When duplicate phase titles are counted 1 time
+Then duplicate count equals 0 with 1 count recorded per phase
+check: duplicate title count
+automated: true
+
+AC-105 story: US-134
+Given 1 blocked Linear item
+When the blocker record is read 1 time
+Then 1 cause, 1 owner action and 1 next step are named with 0 silent blockers
+check: blocker field presence
+automated: true
+
+## US-135 — Gate enforcement per risk class on the current branch
+
+AC-106 story: US-135
+Given the current branch
+When review, quality, security and release verdicts are recorded 1 time
+Then 4 of 4 verdicts are present and the most-restrictive verdict wins on conflict
+check: verdict presence count
+automated: true
+
+AC-107 story: US-135
+Given 1 red gate verdict
+When release readiness is checked 1 time
+Then release waits with 1 gate name recorded and 0 releases land on a red verdict
+check: release readiness state
+automated: true
+
+AC-108 story: US-135
+Given the traceability matrix for US-132 to US-135
+When requirements and criteria are counted 1 time
+Then 100 percent of the 4 stories trace to 1 or more criteria with 0 uncovered requirements
+check: traceability coverage ratio
+automated: true

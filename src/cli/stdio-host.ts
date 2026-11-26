@@ -280,7 +280,7 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
       try {
         await driver.shutdown();
       } catch {
-        // Shutdown makes no daemon call; a failure here changes nothing.
+        logger.warn("stdio host: driver shutdown failed; exiting anyway");
       }
       await observer.flush(FLUSH_MS);
     })();

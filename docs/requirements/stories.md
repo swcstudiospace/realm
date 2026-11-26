@@ -248,3 +248,34 @@ As a maintainer, I want round 3 gates and the W3 matrix to pass on the merged ma
 - Requirement IDs: R3-01 (3 round 3 gates plus build, rel, obs, docs exit 0), W3M-01 (9 of 9 W3 checks green on the ultrathink stack), HASH-02 (2 planning hashes verified with 0 edits), LIN-02 (4 sub-issues closed only with passing gates), REP-01 (1 final report naming 2 ultrathink pull request states).
 - Plan IDs: cffd9419 steps 4 and 5.
 - Estimate: 5 points. Dependencies: none.
+## US-132 — Measured quality baseline for the current branch
+
+As a maintainer, I want a measured quality baseline recorded for the current branch, so that every quality claim traces to 1 gate result.
+
+- Requirement IDs: QUALB-01 (8 gate exit codes recorded), QUALB-02 (3 coverage floors measured), QUALB-03 (audit exit plus dependency count recorded).
+- Plan IDs: T5471 quality baseline (no separate plan IDs).
+- Estimate: 5 points. Dependencies: none.
+
+## US-133 — Programming-pattern ratchet with zero gate regressions
+
+As a maintainer, I want programming patterns ratcheted to the recorded bar with 0 gate regressions, so that the codebase stays maintainable across releases.
+
+- Requirement IDs: RATCHET-01 (0 suppression comments, 0 silent catches beyond 10 named exceptions), RATCHET-02 (8 of 8 gates exit 0 vs baseline), RATCHET-03 (0 modules over size ratchet).
+- Plan IDs: T5471 quality ratchet (no separate plan IDs).
+- Estimate: 8 points. Dependencies: none.
+
+## US-134 — Linear blocker continuation with zero silent gaps
+
+As a maintainer, I want every open Linear issue and sub-issue marked done with evidence or blocked with a named cause, so that programming continues with 0 silent gaps.
+
+- Requirement IDs: LINB-01 (every open item carries 1 recorded state), LINB-02 (0 duplicate phase titles), LINB-03 (every blocked item names 1 cause, 1 owner action, 1 next step).
+- Plan IDs: T5471 Linear continuation (no separate plan IDs).
+- Estimate: 8 points. Dependencies: none.
+
+## US-135 — Gate enforcement per risk class on the current branch
+
+As a maintainer, I want review, quality, security and release gates enforced on the current branch, so that a release lands only on 4 green gate verdicts.
+
+- Requirement IDs: GATEE-01 (4 of 4 gate verdicts present, most-restrictive wins), GATEE-02 (0 releases land on a red verdict), GATEE-03 (100% traceability for US-132 to US-135).
+- Plan IDs: T5471 gate enforcement (no separate plan IDs).
+- Estimate: 5 points. Dependencies: none.

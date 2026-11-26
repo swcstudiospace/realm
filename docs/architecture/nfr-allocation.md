@@ -71,3 +71,17 @@ Measured by `arch_nfr_allocation`: `nfr_count=7`, `allocated=[NFR-P1, NFR-S1, NF
 | NFR-S3 | quantitative | clause | SessionStore answer record | 0 | secrets | `API-UltrathinkCompletionGate /session/answer` |
 
 **Budgets vs measurements:** `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, revalidation_s max 5, release_read_s max 10} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, revalidation_s, release_read_s]`. Measurements are pending A08. UNVERIFIED, not a pass.
+
+## T5471 quality upgrade addendum (T5471-arch)
+
+**Inputs:** `docs/requirements/spec.md` §15.6 (NFR-P3, NFR-S4, NFR-A3) over US-132..US-135, AC-97..AC-108. NFR-P1/S1/A1/I1/C1/P2/S3/S2/A2 are carried forward unchanged.
+
+Measured by `arch_nfr_allocation`: `nfr_count=3`, `allocated=[NFR-P3, NFR-S4, NFR-A3]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`.
+
+| NFR id | Kind | Target kind | Target ref | Limit | Unit | Clause in contract |
+|---|---|---|---|---|---|---|
+| NFR-P3 | quantitative | component_budget | 8-gate baseline run wall clock | 1800 | s | `8-gate baseline` |
+| NFR-S4 | quantitative | clause | Secret scan over the change | 0 | secrets | `secret scan` |
+| NFR-A3 | qualitative | clause | `/status` label enum carried from NFR-A1 | 1 | label | `status label` |
+
+**Budgets vs measurements:** `arch_nfr_budget` with budgets {baseline_wall_s max 1800} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[baseline_wall_s]`. Measurements are pending A08. UNVERIFIED, not a pass.
