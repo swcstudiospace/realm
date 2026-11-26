@@ -4,6 +4,12 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-11-26
+
+### Documentation
+- docs: ship Tb559r blueprint, specs, and ADRs 0005-0015 with v9 closeout records (6b3c2d4)
+- docs: strip host-local paths and ship v9 closeout traceability for Tb559r (907cd4e)
+
 ## [0.9.7] - 2026-11-26
 
 ### Added
