@@ -347,11 +347,20 @@ function headingTitle(body) {
   return firstHeading(lines, markFencedLines(lines));
 }
 
+// VuePress/VitePress reserves the frontmatter key `head` (a tag list); planning
+// files record the commit sha there, which reaches VitePress as a plain string
+// and crashes the site build with `head.find is not a function`. Rename it so a
+// future verifier file with `head: <sha>` cannot break the build again.
+function renameReservedHead(block) {
+  return block.replace(/^head\s*:/gm, 'head_sha:');
+}
+
 function frontmatterWithTitle(block, titleLine) {
-  if (/^title\s*:/m.test(block)) {
-    return `---\n${block}\n---\n`;
+  const normalized = renameReservedHead(block);
+  if (/^title\s*:/m.test(normalized)) {
+    return `---\n${normalized}\n---\n`;
   }
-  const fields = block === '' ? titleLine : `${block}\n${titleLine}`;
+  const fields = normalized === '' ? titleLine : `${normalized}\n${titleLine}`;
   return `---\n${fields}\n---\n`;
 }
 
