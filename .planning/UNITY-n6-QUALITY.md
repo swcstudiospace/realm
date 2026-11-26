@@ -39,7 +39,7 @@ typecheck exit 0, lint exit 0, build exit 0, test **5867 pass / 1 fail /
 97 skip** (5965 tests), test:scripts 538 pass. **This baseline is
 dirty-tree-contaminated by 1**: the single failure is CAPT-09
 (`dist/test/docs/capability-token-doc.test.js:190`, matching `/\/root\//`),
-root-caused to absolute `/root/src/repos/claude-ultrathink` strings in
+root-caused to absolute `<host-absolute-path>/repos/claude-ultrathink` strings in
 UNCOMMITTED docs (`docs/requirements/spec.md`,
 `docs/architecture/blueprint.md` diffs); committed tree has none
 (prior re-verify b7002a5: 5849 pass at 7ae9afc). The 97 skips are

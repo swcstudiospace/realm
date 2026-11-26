@@ -4,7 +4,7 @@
 
 ## What was attempted (OBSERVED, 2026-11-22T18:58Z)
 
-The window was attempted as `realmlive` (uid 5002) under the shared live lock (`/tmp/realm-live.lock`, free: no holder). The production gate (`productionSkipReason` in `test/support/production-live.ts`) cannot open for the account:
+The window was attempted as `realmlive` (uid 5002) under the shared live lock (`the realm-live lock file`, free: no holder). The production gate (`productionSkipReason` in `test/support/production-live.ts`) cannot open for the account:
 
 | Gate prerequisite | Observed (as realmlive, XDG_RUNTIME_DIR=/run/user/5002) |
 | --- | --- |
@@ -12,7 +12,7 @@ The window was attempted as `realmlive` (uid 5002) under the shared live lock (`
 | Rootless Podman API socket under XDG_RUNTIME_DIR | **Absent**: `podman.socket` inactive (dead); `/run/user/5002/podman/podman.sock` does not exist |
 | OpenShell gateway running | **Down**: `openshell-gateway.service` inactive (dead) |
 | Compute driver running (socket + config + pinned image) | **No compute-driver unit exists for the account** (`systemctl --user list-unit-files` shows no realm/compute unit); nothing to point `REALM_DRIVER_SOCKET` / `REALM_LIVE_DRIVER_CONFIG` / `REALM_LIVE_IMAGE` at |
-| The running realm stack | Is **root's**: `realm-root-compute-driver`, `realm-root-openshell-gateway` (`--config /root/.local/state/realm/gateway/gateway.toml`), `realm-root-podman` (Podman 5.7.1). `/root/.local/state/realm` and `/root/.local/state/realm/gateway` are mode 0700 and `driver.sock` mode 0600, owned by root — unreachable as `realmlive` |
+| The running realm stack | Is **root's**: `realm-root-compute-driver`, `realm-root-openshell-gateway` (`--config <realm-state-dir>/gateway/gateway.toml`), `realm-root-podman` (Podman 5.7.1). `<realm-state-dir>` and `<realm-state-dir>/gateway` are mode 0700 and `driver.sock` mode 0600, owned by root — unreachable as `realmlive` |
 
 Host facts (read-only): Podman 5.7.1 (`/usr/local/bin/podman --version`), OpenShell 0.1.5, node available to the account. Bringing up the account's stack (podman socket, gateway, compute driver with pinned image and driver config) is an operator action outside this assignment; it was not improvised.
 

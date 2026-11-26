@@ -53,8 +53,8 @@ exit 0 (72s), build exit 0 (32s), test 5867 pass / 1 fail / 97 skip
 
 The one failure is CAPT-09
 (`dist/test/docs/capability-token-doc.test.js:190`) matching
-`/\/root\//`, root-caused to absolute `/root/src/repos/claude-ultrathink`
-and `/root/.omp/agent/ultrathink/sessions/` strings in UNCOMMITTED
+`/\/root\//`, root-caused to absolute `<host-absolute-path>/repos/claude-ultrathink`
+and `<host-absolute-path>/agent/ultrathink/sessions/` strings in UNCOMMITTED
 docs (`docs/requirements/spec.md`, `docs/architecture/blueprint.md`
 diffs) — the committed tree has none (prior re-verify b7002a5: full
 suite 5849 pass at 7ae9afc). The 97 skips are Podman-gated/live.
