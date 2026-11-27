@@ -36,7 +36,7 @@ function directory(mode: number, uid?: number, symbolicLink = false): PathReadin
       isSymbolicLink: () => symbolicLink,
       isSocket: () => false,
       mode,
-      uid: uid ?? 0,
+      uid: uid ?? process.getuid?.() ?? 0,
     },
   };
 }
@@ -49,7 +49,7 @@ function socket(mode: number): PathReading {
       isSymbolicLink: () => false,
       isSocket: () => true,
       mode,
-      uid: 0,
+      uid: process.getuid?.() ?? 0,
     },
   };
 }
