@@ -578,3 +578,98 @@ Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5, F1
 ### 21.11 What was decided vs UNVERIFIED (§21)
 
 Decided (L2): measurable quality bar per spec §15.1 wired through the 8 npm gates and CI (spec §15.1); baseline-then-ratchet with 0 regressions; Linear dedup-then-state with 0 unstated items; 4-of-4 gate verdicts with most-restrictive wins; 100% NFR allocation; 0 new containers and 0 new dependencies in the Realm runtime; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F5/F10/F11/F12 evidence (8 gate exit codes, coverage numbers, audit count, Linear states, gate verdicts — A08/A01/A09/A10/A12 own those runs), live NFR measurements, A10 co-sign of the §9 threat crossings.
+
+## 22. T8345 docs-only ship — window addenda, GAP-43-03, Greptile billing waiver (T8345-arch)
+
+**Sources:** `docs/requirements/spec.md` §16 (US-136, SHIPDOC-01..04), `docs/acceptance.md` AC-109..AC-113, `docs/requirements/stories.md` US-136, branch `fix/stdio-host-shutdown-log`, correlation `8345f9e5-8a56-40a5-9967-0368d907cca7`, task `T8345-arch`, capability `design.blueprint`. **Status:** IN_REVIEW. Provisional for A05/A08 ship runs (commit, PR, CI, squash) and A10 noting the waiver is governance, not security acceptance. No product code is written or committed under this task.
+
+### 22.1 System context (C4 Level 1 — docs-ship slice)
+
+```mermaid
+flowchart TB
+  DocsAuthor[DocsAuthor] --> WindowEvidence[WindowEvidence<br/>3 WINDOW addenda]
+  DocsAuthor --> VerificationRecords[VerificationRecords<br/>3 VERIFICATION-UPDATE]
+  DocsAuthor --> GapRegister[GapRegister<br/>host-plugin-gaps GAP-43-03]
+  PRShipFlow[PRShipFlow<br/>ultrathink ship squash] --> WindowEvidence
+  PRShipFlow --> VerificationRecords
+  PRShipFlow --> GapRegister
+  PRShipFlow --> CIPipeline[CIPipeline<br/>verify site audit guard]
+  PRShipFlow --> MainBranch[MainBranch<br/>main after squash]
+```
+
+Trust zones: **authoring** (DocsAuthor) · **evidence** (WindowEvidence, VerificationRecords, GapRegister) · **pipeline** (PRShipFlow, CIPipeline) · **release core** (MainBranch). State crosses zones only through the evidence trail per step (window + verification + gap closure → green CI → ship-flow merge to main), never by direct mutation. No trust boundary is added by this ship; the Greptile billing-waiver line in the PR body is process governance, not a security control, and A10 acceptance of any §9 residual risk is unchanged.
+
+### 22.2 Container model and coupling budget (docs-ship slice)
+
+`arch_c4_fanout`: `container_count=7`, `relation_count=8`, `max_fan_out=5`, `over_budget=[]`, `isolated=[]` against fan-out budget **8**. Containers: DocsAuthor, WindowEvidence, VerificationRecords, GapRegister, CIPipeline, PRShipFlow, MainBranch. PRShipFlow fans out to 5 (WindowEvidence, VerificationRecords, GapRegister, CIPipeline, MainBranch); DocsAuthor fans out to 3; every other container fans out ≤ 0 with incoming only. 0 containers are isolated (each evidence container has a named producer and ship consumer). No Realm runtime container is introduced; this slice is documentation and planning only.
+
+### 22.3 Module layering and cycles (docs-ship slice)
+
+`layer_order`: `pipeline → evidence → platform` (outermost → innermost; a module may depend on its own layer or any later one). `arch_layer_violations`: `violation_count=0`, `checked_edges=8`, `unassigned=[]` (PRShipFlow/DocsAuthor in pipeline; WindowEvidence/VerificationRecords/GapRegister in evidence; CIPipeline/MainBranch in platform). `arch_cycle_check`: `has_cycle=false`, `node_count=7`, `cyclic_node_count=0`, `cyclic_components=[]`. Any new edge into the docs-ship slice enters the fitness set; an upward edge or a cycle blocks downstream CLAIMED tasks.
+
+### 22.4 Decisions (L2, recorded as ADR-0018)
+
+| Decision | ADR | Acceptance |
+|---|---|---|
+| Ship the 7-file evidence set docs-only on `fix/stdio-host-shutdown-log` with 1 recorded Greptile billing-waiver line in the PR body, 0 silent skip | ADR-0018 (`docs/adr/0018-ship-7-file-docs-update-with-gap-43-03-closed-and-greptile-w.md`, accepted; `arch_adr_transition` proposed→accepted `allowed=true`) | SHIPDOC-01..04, AC-109..AC-113 |
+
+L2: catalog PR/ship pattern carried forward, non-breaking, 0 novel infrastructure, 0 new first-party dependency, 0 security-risk acceptance. ADR-0018 supersedes nothing; ADR-0001..0017 remain live. `arch_adr.py --list`: verdict pass. `arch_adr_supersession` on ADR-0018 alone: `valid=true`, `heads=[ADR-0018]`, no dangling/forks/cycles.
+
+### 22.5 Contract position (changes: none)
+
+No runtime contract changes in this task: `API-RealmControl` stays at **1.0.0 (7 operations)**, `API-GsdLinear` 1.0.0 (5), `API-RealmOmpPlugin` 1.0.0 (4), `API-UltrathinkCompletionGate` 1.1.0 (5). `arch_contract_ops` on the RealmControl document returns `operations=7`. `arch_contract_check` (python, `--root` scan): 4 contracts, **0 breaking, 0 findings, verdict pass**. `shared_verdict` on 0 severities returns `pass`. `arch_field_breaks` on the unchanged `StatusResponse` side (`label`, `code`, `correlationId` required): `breaking_change=false`, `breaking=[]`, `additive=[]`. `arch_semver_bump` 1.0.0→1.0.0: `bump=none`, `required_bump=none`, `compliant=true`. The evidence and waiver bind verification/governance facts (window dates 2026-11-27, verification records, GAP-43-03 closed, CI 5 green, 1 waiver line), not OpenAPI surface, so no new contract file is introduced and no version bump applies.
+
+### 22.6 NFR bindings (carried: 5 NFRs in spec §16.3)
+
+`arch_nfr_allocation`: `nfr_count=5`, `allocated=[NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`.
+
+| NFR | Kind | Binding (contract clause / component budget) | Limit |
+|---|---|---|---|
+| NFR-P1 (perf) | quantitative | Component budget: `realm up` → active | 200 s on 5.7.1 stack |
+| NFR-S1 (security) | quantitative | Clause: `API-RealmControl /tools/write` fail-closed refusal | 0 successes while disconnected |
+| NFR-A1 (a11y) | qualitative | Clause: `API-RealmControl /status` 1 of 2 labels + color-independent cue | 1 label per paint |
+| NFR-I1 (i18n) | quantitative | Clause: `API-ToolResult` frozen catalogue codes C + en_US, English text | 0 locale parses |
+| NFR-C1 (compliance) | qualitative | Clause: `API-AuditLine` redaction sentinel, AGPL-3.0-only | 0 telemetry; 0 PII fields |
+
+`arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, disconnect_successes max 0} and 0 measurements: `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, disconnect_successes]` — honest fail-closed reading; measurements are pending A08 (live proof on realm account; checkout host Podman 4.9.3). UNVERIFIED, not a pass. Detail in `nfr-allocation.md` §22 addendum. F-51-1, HTIER-01 and KIMV-02 remain carried exactly as the three verification updates record; only GAP-43-03 changes status to closed.
+
+### 22.7 Threat model delta (STRIDE: none)
+
+No new boundary crossing: WindowEvidence, VerificationRecords and GapRegister are committed text viewed in the PR; PRShipFlow and CIPipeline are CI already in §3; MainBranch is reached only via the squash merge. The billing-waiver line adds no executable, secret or network surface. Spoof/tamper of a window record is detectable in the PR diff and CI; information disclosure is bounded by the docs-only set (0 secrets, 0 PII by A02 scan). A10 co-sign of the carried §9 high-risk crossings remains pending; this blueprint accepts no security risk.
+
+### 22.8 Supply-chain rows (embedded)
+
+| Row | Rule |
+|---|---|
+|---|---|
+|---|---|
+| SBOM requirement | Release attests tarball + SHA256SUMS + SBOM via `gh attestation verify`; this docs ship changes 0 artifacts, so no new attestation row is owed |
+| Dependency allowlist | 0 new dependencies; `npm audit --omit=dev --audit-level=high` stays green in the audit job; Dependabot `github-actions`+`npm` root+`site/` unchanged |
+| Licence matrix | AGPL-3.0-only preserved; 0 new licence surface in the 7-file evidence set plus this blueprint/ADR (docs only) |
+
+### 22.9 Tech stack (changes: none)
+
+The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:test`, `fast-check`), rootless Podman 5.x digest-pinned, OpenShell 0.1.5 + Realm compute driver, GitHub Actions attested release. This docs ship introduces **no new first-party dependency, no new infrastructure, no licence change**. Any future pick outside §10 remains an ADR; infrastructure or dependency picks are L3.
+
+### 22.10 Fitness functions (CI, docs-ship slice)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` (§22.3) | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` (§22.3) | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` (§22.2) | fan-out ≤ 8; 0 isolated (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` (§22.6) | 100% allocated (measured pass) |
+| F5 | NFR budget | `arch_nfr_budget` vs A08 measurements | within budget or named skip (skip ≠ pass; currently UNVERIFIED) |
+| F6 | Contract conformance | `arch_contract_check` + `arch_contract_ops` + `arch_field_breaks` + `arch_semver_bump` | 4 contracts pass, 0 breaking, semver-compliant (measured pass) |
+| F7 | ADR lifecycle | `arch_adr.py --list` + `arch_adr_supersession` | 18 ADRs, 0 findings; ADR-0018 valid head (measured pass) |
+| F10 | Ship evidence | 7-file commit, PR to main, 5 CI green, 1 squash, 1 waiver line (A05/A08/A12 runs) | 0 `src/`/`test/` files; 5/5 CI success; waiver verbatim, 0 fake 5-of-5 (UNVERIFIED here — no commit/PR/merge under this task) |
+
+Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5, F10 are `UNVERIFIED`, not passes, until the owning suite, ship or tracker operation reports.
+
+### 22.11 File scope (docs and planning only)
+
+Normative evidence set: 3 `WINDOW.md` addenda dated 2026-11-27 (phases 56, 57, 58) + 3 `VERIFICATION-UPDATE-20261127.md` records + 1 `host-plugin-gaps.md` GAP-43-03 closure = **7 files**, 0 files under `src/` or `test/`. Architecture governance for this task adds 3 docs files: this blueprint §22 (`docs/architecture/blueprint.md`), the §22 allocation (`docs/architecture/nfr-allocation.md`), and ADR-0018 — also docs-only, still 0 `src/`/`test/` edits, still within the docs/planning boundary. The A02 requirements files (`docs/requirements/spec.md` §16, `stories.md` US-136, `acceptance.md` AC-109..113, `traceability.md`, `brief-T8345-req.md`) are A02-owned supporting docs for the same PR; they carry 0 product-code content. No `CHANGELOG.md` or version-field edit is introduced here; the release job owns them.
+
+### 22.12 What was decided vs UNVERIFIED (§22)
+
+Decided (L2): docs-only 7-file evidence ship with 1 recorded billing-waiver line; 0 runtime topology, 0 contract, 0 NFR deltas; 100% NFR allocation; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F5/F10 evidence (A08 NFR measurements; A05 commit + PR + CI + squash records; A12 ship-flow merge) — no commit, PR, merge or gate run under this task; live NFR measurements; A10 noting of the waiver as governance.

@@ -110,3 +110,17 @@ No cold production run, no wire log, no `kimi mcp test realm` output.
 One CLI version (1.51.0) re-verified at install only. No model turn, no
 tool call, no credential. The 25000 ms cold-connect bound remains
 unmeasured for the fixed recorder.
+
+## 2026-11-27 re-attempt (realmlive, HEAD 7517be6)
+
+Provisioning advanced (podman 5.7.1, driver/daemon/gateway running, gateway id `openshell` aligned with `gateway.toml` lacking `gateway_id`). Deciding live rerun not run: pinned image absent (store has base images only; `openshell-sandbox` runtime not in any local image), so no create reaches start. One create passed `launch.gateway_id` (no refusal) and failed on image/start. GAP-43-03 stays `narrowed`, KIMV-02 carried/narrowed. A rebuilt sandbox image with the runtime present is the lift blocker.
+
+## 2026-11-27 final live run (realmlive, HEAD 7517be6, image sha256:6272a3ac..., kimi-cli 1.51.0)
+
+Stack fully provisioned as in 57 (podman 5.7.1, driver/gateway running, gateway id `openshell`, policy at stateDir/policy.json, rebuilt sandbox image, `check:image-digests` ok, manual up/down smoke active). kimi-cli 1.51.0 installed in scratch via uv (`/dev/shm/kimi-scratch/.venv`); `REALM_KIMI_BIN` points at it. Deciding cold rerun under shared lock (TMPDIR=/dev/shm, evidence `z58-20261127`, fixed log-before-forward recorder):
+
+- Wire log (`02-all/wire.log`): `tools/list` request at t=1586, `realm-to-host response id=1 toolNames=[exec read write list status retry]` at t=1587. The response the log-after-forward recorder could lose is IN the log (second run `04-all` identical with six tools on the wire).
+- Host output (`command-stdout.txt`): `kimi mcp test realm` prints Connected + the six tools, exit 0, elapsed ~9-10 s, catalogueCodes [].
+- Whole-test verdict: the production case fails only at cleanup -- `realm down: exit 1 TOOL_TIMEOUT` ("A tool call did not finish within its queue timeout") twice identically (whole production test 37-42 s, under sustained host load 20-46), so TOOL_TIMEOUT came from the daemon-side control/queue bound, well before the harness's 120 s down bound. Teardown completes (zero containers, daemon absent after); the six-tools substance passes.
+
+Per D-58-3 the rerun shows the response: recorder was the cause; GAP-43-03 closes on this evidence (wire log + full output kept, version/date recorded: kimi 1.51.0, 2026-11-27). KIMV-02 met on the cause; the cleanup-down TOOL_TIMEOUT under load is a separate teardown-bound observation (cf. 56 row-absent stops), not the recorder question.

@@ -37,3 +37,14 @@ Rule: every requirement above carries at least 1 link, and every link names a re
 | US-135 | AC-106, AC-107, AC-108 | `docs/acceptance.md` |
 | NFR-P3 | A08 | `docs/requirements/nfr.md` |
 | NFR-S4 | A08/A10 | `docs/requirements/nfr.md` |
+
+## T8345 (2026-11-27)
+
+| Requirement | Criteria / Checker | Artifact |
+|---|---|---|
+| US-136 | AC-109, AC-110, AC-111, AC-112, AC-113 | `docs/acceptance.md` |
+| NFR-P1 | A08.live | `docs/requirements/nfr.md` |
+| NFR-S1 | A08.security | `docs/requirements/nfr.md` |
+| NFR-A1 | A08 | `docs/requirements/nfr.md` |
+| NFR-I1 | A08 | `docs/requirements/nfr.md` |
+| NFR-C1 | A08/A10 | `docs/requirements/nfr.md` |

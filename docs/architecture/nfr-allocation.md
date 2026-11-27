@@ -85,3 +85,19 @@ Measured by `arch_nfr_allocation`: `nfr_count=3`, `allocated=[NFR-P3, NFR-S4, NF
 | NFR-A3 | qualitative | clause | `/status` label enum carried from NFR-A1 | 1 | label | `status label` |
 
 **Budgets vs measurements:** `arch_nfr_budget` with budgets {baseline_wall_s max 1800} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[baseline_wall_s]`. Measurements are pending A08. UNVERIFIED, not a pass.
+
+## T8345 docs-only ship addendum (T8345-arch)
+
+**Inputs:** `docs/requirements/spec.md` §16.3 (NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1) over US-136, AC-109..AC-113. No new NFR is introduced by the docs ship; the 5 NFRs are carried forward unchanged.
+
+Measured by `arch_nfr_allocation`: `nfr_count=5`, `allocated=[NFR-P1, NFR-S1, NFR-A1, NFR-I1, NFR-C1]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`.
+
+| NFR id | Kind | Target kind | Target ref | Limit | Unit | Clause in contract |
+|---|---|---|---|---|---|---|
+| NFR-P1 | quantitative | component_budget | ControlSocket `/up` startupBudgetMs | 200 | s | `API-RealmControl /up` |
+| NFR-S1 | quantitative | clause | `/tools/write` fail-closed refusal | 0 | successes | `API-RealmControl /tools/write` |
+| NFR-A1 | qualitative | clause | `/status` label enum + color-independent cue | 1 | label | `API-RealmControl /status` |
+| NFR-I1 | quantitative | clause | Frozen catalogue codes C + en_US | 0 | locale parses | `API-ToolResult` |
+| NFR-C1 | qualitative | clause | Redaction sentinel, AGPL-3.0-only | 0 | telemetry | `API-RealmControl /audit/verify` |
+
+**Budgets vs measurements:** `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, disconnect_successes max 0} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, disconnect_successes]`. Measurements are pending A08 on the 5.7.1 realm account. UNVERIFIED, not a pass.
