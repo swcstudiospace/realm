@@ -93,3 +93,29 @@ never a chip; Linear rows read `open` until gates pass.
 | SCR-R3W3Closeout.error.gate-fail | `<plan or W3 id>: fail` + count; Linear rows stay `open`; report row names `not yet listed` |
 | SCR-R3W3Closeout.empty.no-run | `no round-3 or W3 run on merged main`; exit 1, not pass |
 | SCR-R3W3Closeout.success | `7 of 7 plans exit 0; W3 9 of 9 green on stack a519184 + 0d5032f; STATE prefix 29bc314a and ROADMAP prefix 4b26403c with 0 planning files changed; 4 of 4 sub-issues n3 SPE-36512 · n4 SPE-36513 · n6 SPE-36515 · n7 SPE-36516 closed with 1 commit ref each; PR #255: <state> · PR #259: <state>` |
+
+## T5471 boards — exact board copy (AC-97..AC-108)
+
+Text verdicts only, never colour-only. No exit code, floor, count or verdict is invented; an
+unmeasured row reads `unknown — not measured` and is never green. Blocked rows are never green.
+
+| Screen.state | Board row text |
+|---|---|
+| SCR-QualityBaselineBoard.default.baseline | `typecheck exit 0 · lint exit 0 · test exit 0 · build exit 0 · check:docs exit 0 · check:gates exit 0 · check:pack exit 0 · check:mcp exit 0` (each row reads its recorded exit; unmeasured reads `unknown — not measured`); `src/fs <n> · src/core <n> · src/tools <n>`; `audit exit <n> · dependencies <n> · scanner 0 secrets` |
+| SCR-QualityBaselineBoard.loading.running | `baseline: running 8 gates…` (board never reads recorded while any gate is running) |
+| SCR-QualityBaselineBoard.error.gate-fail | `<gate> exit 1 — revert or carry with 1 tested reason`; other rows keep last truthful verdicts, never erased |
+| SCR-QualityBaselineBoard.error.validation | usage line + code; unknown gate name or coverage directory reads `not run`, never pass |
+| SCR-QualityBaselineBoard.empty.no-run | `no baseline recorded for this branch` (not pass); `suppression comments 0 · silent catches beyond the 10 named QUAL-01 exceptions 0 · new dependencies without justification 0`; `0 modules over the size ratchet, 1 size recorded per module` |
+| SCR-QualityBaselineBoard.success.recorded | `8 of 8 gate exit codes recorded · 3 of 3 coverage floors measured · audit exit and dependency count recorded · ratchet counts 0 · 0 frozen catalogue codes changed · 0 shims added` |
+| SCR-LinearContinuationBoard.default.listed | `<id> — done-with-evidence · <evidence ref>` or `<id> — blocked-with-named-cause`; `0 items lack a state`; `duplicate phase titles 0, 1 count recorded per phase`; match reads `reused existing <issue>`, nothing created |
+| SCR-LinearContinuationBoard.loading.listing | `linear: listing open items…` (board never reads complete while listing) |
+| SCR-LinearContinuationBoard.error.workspace-unreadable | `Linear workspace unreadable — <named cause>; 0 items marked` + 1 remedy; no item guessed done or blocked |
+| SCR-LinearContinuationBoard.error.validation | usage line + code; unknown issue id reads `not listed`, never silently absent |
+| SCR-LinearContinuationBoard.empty.no-open-items | `0 open items — all items done-with-evidence` (never blank) |
+| SCR-LinearContinuationBoard.success.blocked-named | `BLOCKED — owner decision required` + exactly 1 cause + exactly 1 owner action + exactly 1 next step; carried blocker `phases 56-58 blocked on the realmlive stack, 0 live windows scheduled` |
+| SCR-GateEnforcementBoard.default.verdicts | `review pass · quality pass · security pass · release pass` (text, never a colour-only chip); missing reads `not recorded — gate not run`, never pass |
+| SCR-GateEnforcementBoard.loading.recording | `gates: recording verdicts…`; release readiness reads `held — verdicts incomplete`, never ready |
+| SCR-GateEnforcementBoard.error.red-gate | `release readiness: held — <gate> red`; `0 releases land on a red verdict`; most-restrictive verdict wins on conflict; other verdicts keep recorded values |
+| SCR-GateEnforcementBoard.error.validation | usage line + code; unknown gate name reads `not run`, never pass |
+| SCR-GateEnforcementBoard.empty.no-verdicts | `0 verdicts recorded for this branch` (not pass; release held) |
+| SCR-GateEnforcementBoard.success.ready | `4 of 4 verdicts present · most-restrictive wins · release ready`; `100 percent of 4 stories trace to 1 or more criteria, 0 uncovered requirements` (label `held`/`ready` + shape cue, NFR-A3) |

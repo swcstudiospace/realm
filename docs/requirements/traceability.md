@@ -26,3 +26,14 @@ Each story traces to its criteria in `docs/acceptance.md` through the `story:` f
 | NFR-C1 | A08/A10 | `docs/requirements/nfr.md` |
 
 Rule: every requirement above carries at least 1 link, and every link names a real artifact in the repo. No requirement is left uncovered.
+
+## T5471 (2026-11-26)
+
+| Requirement | Criteria / Checker | Artifact |
+|---|---|---|
+| US-132 | AC-97, AC-98, AC-99 | `docs/acceptance.md` |
+| US-133 | AC-100, AC-101, AC-102 | `docs/acceptance.md` |
+| US-134 | AC-103, AC-104, AC-105 | `docs/acceptance.md` |
+| US-135 | AC-106, AC-107, AC-108 | `docs/acceptance.md` |
+| NFR-P3 | A08 | `docs/requirements/nfr.md` |
+| NFR-S4 | A08/A10 | `docs/requirements/nfr.md` |

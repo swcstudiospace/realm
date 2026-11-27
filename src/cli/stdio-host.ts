@@ -279,8 +279,11 @@ export async function runStdioHost(input: StdioHostInput): Promise<StdioHostResu
     tornDown ??= (async (): Promise<void> => {
       try {
         await driver.shutdown();
-      } catch {
-        // Shutdown makes no daemon call; a failure here changes nothing.
+      } catch (error: unknown) {
+        logger.error(
+          "stdio.shutdown_failed",
+          error instanceof RealmError ? { code: error.code } : {},
+        );
       }
       await observer.flush(FLUSH_MS);
     })();

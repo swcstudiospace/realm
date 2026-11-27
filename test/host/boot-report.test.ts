@@ -174,7 +174,9 @@ void test("BOOT-06: an accessor, a symbol key and a prototype-carrying object ar
 });
 
 void test("BOOT-06: a refusal never echoes the offending input", () => {
-  const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+  // Constructed at runtime so the source carries no token-shaped literal (SEC-369e6581); the parsed input still holds a
+  // token-shaped value, which is what the refusal-echo check below needs.
+  const secret = `ghp_${"x".repeat(36)}`;
   for (const over of [{ bootId: `${secret} ${secret}` }, { hostId: secret }, { phase: secret }, { transport: secret }, { state: secret }]) {
     try {
       parseHostBootReport(report(over));

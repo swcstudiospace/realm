@@ -84,3 +84,10 @@ Recorded via `scripts/arch_adr.py` with swarm-series ids ADR-0013..ADR-0015 (acc
 - **ADR-0013** — `docs/adr/0013-split-fake-github-fixture-in-boot-report-test-into-two-conca.md` — split the fake GitHub fixture in `test/host/boot-report.test.ts` into 2 concatenated parts on `swarm/Tb559r-capt09`; 0 literal fixture strings, 0 allowlists, refusal assertions keep 0 echoes (SECSPLIT-01..02, AC-86..AC-88).
 - **ADR-0014** — `docs/adr/0014-merge-pull-request-256-conditionally-on-local-and-ci-green-w.md` — merge PR 256 once via the ultrathink ship flow with squash from the 354f00a line after local + CI green; the PR body records 1 Greptile absence note with 0 fake 5-of-5 claims; Greptile absence is the user-accepted substitute (MERGE256-01..02, AC-89..AC-91).
 - **ADR-0015** — `docs/adr/0015-run-round-3-gates-and-w3-matrix-on-merged-main-before-linear.md` — 7 r3/release plans on merged main + 9-of-9 W3 on the ultrathink stack `a519184 + 0d5032f`, read-only hash verification, and gate-then-close for `SPE-36512`, `SPE-36513`, `SPE-36515`, `SPE-36516` (R3-01, W3M-01, HASH-02, LIN-02, REP-01, AC-92..AC-96).
+
+## T5471 quality upgrade swarm series (T5471-arch)
+
+Recorded via `scripts/arch_adr.py` with task id and correlation id; `arch_adr.py --list` PASS 17 ADRs 0 findings. Same `docs/adr/` series as ADR-0001..ADR-0015; cite with file path. `arch_adr_transition {proposed → accepted}`: `allowed=true` ("proposed -> accepted is allowed").
+
+- **ADR-0016** — `docs/adr/0016-quality-baseline-and-pattern-ratchet-for-t5471.md` — record the 8-gate baseline on `fix/stdio-host-shutdown-log`, then ratchet patterns with 0 regressions and 0 frozen catalogue changes (US-132, US-133; QUALB-01..03, RATCHET-01..03).
+- **ADR-0017** — `docs/adr/0017-linear-continuation-and-gate-enforcement-for-t5471.md` — every open Linear item carries done-with-evidence or blocked-with-named-cause, and 4 of 4 gate verdicts gate every release with most-restrictive wins (US-134, US-135; LINB-01..03, GATEE-01..03).

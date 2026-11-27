@@ -85,3 +85,20 @@ changes (none in this docs-view addendum — no `src/` change). Axe remains the 
 in this repo (no axe dependency, A08 runs per story) — do not report axe `critical` as 0 from static
 checks. CLI/daemon boards ship no web bundle (no browser JS), so no bundle bytes / Lighthouse /
 CWV numbers are claimed here (UNVERIFIED unless a docs build is measured downstream).
+
+## T5471 addendum — test plan for A08 (AC-97..AC-108)
+
+| Screen | Must-assert cases (counts; A08 verifies, A06 does not claim) |
+|---|---|
+| SCR-QualityBaselineBoard | 8 gate rows each read 1 recorded exit code (same names as `ds/GateBoard` props in `component-spec.md` addendum); 3 of 3 coverage floors measured (`src/fs`, `src/core`, `src/tools`); audit row reads 1 exit + 1 dependency count; ratchet 0 suppression · 0 silent catches beyond 10 QUAL-01 exceptions · 0 unjustified deps · 0 oversized modules; unmeasured rows read `unknown — not measured` on the advisory surface, never pass; gate-fail names the gate + 1 remedy and preserves sibling verdicts |
+| SCR-LinearContinuationBoard | every open item reads exactly 1 state (`done-with-evidence` with evidence ref, or `blocked-with-named-cause`); `0 items lack a state`; `duplicate phase titles 0, 1 count recorded per phase`; blocked rows read `BLOCKED — owner decision required` + 1 cause + 1 owner action + 1 next step; carried `phases 56-58 blocked on the realmlive stack, 0 live windows scheduled`; workspace-unreadable marks 0 items |
+| SCR-GateEnforcementBoard | 4 verdict rows in text (`review`, `quality`, `security`, `release`); missing reads `not recorded — gate not run`; red gate holds release (`held — <gate> red`); `0 releases land on a red verdict`; most-restrictive wins; `ready` only at 4 of 4 green; traceability `100 percent of 4 stories trace…, 0 uncovered requirements` |
+
+Mono/no-colour + pipe-order + parity regression anchor apply as before; `fe_state_parity_check`
+input uses the spec states in the `component-spec.md` T5471 addendum (dotted sub-states count
+separately). `fe_token_literal_scan` / `fe_client_security_scan` apply only when style or
+HTML-injection code changes (none in this docs-view addendum — no `src/` change). Axe remains the
+authority; no axe run in this repo (no axe dependency, A08 runs per story) — do not report axe
+`critical` as 0 from static checks. CLI/daemon boards ship no web bundle (no browser JS), so no
+bundle bytes / Lighthouse / CWV numbers are claimed here (UNVERIFIED unless a docs build is
+measured downstream).

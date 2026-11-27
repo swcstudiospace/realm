@@ -25,3 +25,15 @@ NFR-P1, NFR-S1, NFR-A1, NFR-I1 and NFR-C1 are carried forward unchanged from `do
 ## Compliance
 
 - **NFR-C1** (compliance): off-machine telemetry calls equal 0, audit and log PII fields equal 0 with 1 redaction sentinel present, and AGPL-3.0-only licensing is preserved. verified_by: A08/A10.
+
+## T5471 additive NFRs (2026-11-26)
+
+Carried unchanged: NFR-P1, NFR-S1, NFR-S2, NFR-A1, NFR-A2, NFR-I1, NFR-C1. The additions below cover perf and security for the quality-baseline scope; a11y, i18n and compliance each keep 1 carried NFR above.
+
+## Perf
+
+- **NFR-P3** (perf): the 8-gate baseline run finishes within 1800 s wall on the current branch with 1 exit code recorded per gate. verified_by: A08.
+
+## Security
+
+- **NFR-S4** (security): the secret scan over the change reports 0 secrets with 0 literal fixture occurrences. verified_by: A08/A10.

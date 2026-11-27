@@ -150,3 +150,54 @@ States: `default.gates-running`, `loading.running`, `error.gate-fail`, `error.va
 `empty.no-run`, `success`. 7 plans + W3 9; hash read-only promise; Linear closed only after gates
 pass; unread PR states read `not yet listed`. Focus: `gate-row-link`, `pr-commit-link`,
 `linear-fix-link`. Links 24x24 / 44x44; advisory non-interactive.
+
+## T5471 addendum — quality baseline / Linear continuation / gate enforcement (AC-97..AC-108, tokens 1.2.0)
+
+**Bound:** `design.system.tokens@1.2.0` (`docs/ux/tokens.json`); quality bar measured by the 8 npm gates and CI (spec §15.1); no board UI in this task. Zero new components — reuse `ds/GateBoard@1.0`, `ds/CheckList@1.0`,
+`ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0`, `ds/MetricTable@1.0`. Copy bans: never invent an
+exit code, floor, count or verdict; never call `unknown — not measured` green; never name a
+catalogue change without its code; blocked is never green. Engineering execution (recording the
+8 gates, coverage floors, verdicts, Linear states) is downstream (A05 / A08 / A01); this section
+states display and forbidden copy only.
+
+## SCR-QualityBaselineBoard — measured baseline + ratchet (docs view)
+AC-97, AC-98, AC-99, AC-100, AC-101, AC-102. Components: `ds/GateBoard@1.0 { gates:
+["typecheck","lint","test","build","check:docs","check:gates","check:pack","check:mcp"] }`,
+`ds/MetricTable@1.0 { rows: ["coverage","audit","ratchet"] }`, `ds/NoticeBanner@1.0 { advisory:
+true, neverSilent: true, live: "polite", unknownOnly: true }`.
+Props: `{ gateExitCodes: Partial<Record<Gate, 0 | 1>>; coverageFloors: Partial<Record<"src/fs" |
+"src/core" | "src/tools", number>>; auditExit?: number; dependencyCount?: number; ratchet:
+{ suppressionComments: number; silentCatches: number; unjustifiedDeps: number; oversizedModules:
+number }; branch: string }`. Deferred: no UI in this task; evidence is CI exit codes. Quality bar measured by the 8 npm gates and CI (spec §15.1); no board UI in this task. A row not yet measured reads
+`unknown — not measured` on the advisory surface and never reads pass.
+States: `default.baseline`, `loading.running`, `error.gate-fail`, `error.validation`,
+`empty.no-run`, `success.recorded`. Focus: `gate-row-link`, `baseline-detail-link`; advisory note
+non-interactive, never in tab order. Links 24x24 (SC 2.5.8).
+
+## SCR-LinearContinuationBoard — done-or-blocked tracker (docs view)
+AC-103, AC-104, AC-105. Components: `ds/CheckList@1.0 { states: ["done-with-evidence",
+"blocked-with-named-cause"] }`, `ds/NoticeBanner@1.0 { blocked: true, neverSilent: true }`,
+`ds/StatusReadout@1.0 { labels: ["done-with-evidence","blocked-with-named-cause"] }`.
+Props: `{ items: { ref: string; state: "done-with-evidence" | "blocked-with-named-cause";
+evidenceRef?: string; cause?: string; ownerAction?: string; nextStep?: string }[]; unstatedCount:
+number; duplicatePhaseTitles: number }`. Quality bar measured by the 8 npm gates and CI (spec §15.1); no board UI in this task. Every listed item reads exactly 1 state; a blocked row reads
+`BLOCKED — owner decision required` + exactly 1 cause + exactly 1 owner action + exactly 1 next
+step; a done row reads its evidence ref, never a bare done.
+States: `default.listed`, `loading.listing`, `error.workspace-unreadable`, `error.validation`,
+`empty.no-open-items`, `success.blocked-named`. Focus: `linear-fix-link`, `gate-row-link`;
+blocked notice `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+Links 44x44 / 24x24 (SC 2.5.8).
+
+## SCR-GateEnforcementBoard — 4-gate release hold (docs view)
+AC-106, AC-107, AC-108. Components: `ds/GateBoard@1.0 { gates: ["review","quality","security",
+"release"] }`, `ds/StatusReadout@1.0 { labels: ["held","ready"] }`, `ds/CheckList@1.0 { rows:
+["verdicts","readiness","traceability"] }`.
+Props: `{ verdicts: Partial<Record<"review" | "quality" | "security" | "release", "green" |
+"red">>; releasesOnRed: number; coveredStories: number; totalStories: number;
+uncoveredRequirements: number }`. Deferred: no UI in this task; evidence is CI exit codes. Quality bar measured by the 8 npm gates and CI (spec §15.1); no board UI in this task. A missing verdict reads
+`not recorded — gate not run`, never pass. Release reads `held` or `ready` (NFR-A3 text label +
+shape cue, exactly 1 of 2); `ready` only when all 4 verdicts are green; most-restrictive verdict
+wins on conflict.
+States: `default.verdicts`, `loading.recording`, `error.red-gate`, `error.validation`,
+`empty.no-verdicts`, `success.ready`. Focus: `gate-row-link`, `release-readiness-link`.
+Links 24x24 (SC 2.5.8).

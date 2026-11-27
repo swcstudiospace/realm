@@ -275,3 +275,45 @@ Addendum. The resume pipeline (SEC fixture split, conditional PR 256 merge via t
 - **Fail-closed.** A missing run (scanner, local, CI, merge, r3/W3) leaves the corresponding field absent, never asserted. The SEC split asserts 0 literal fixture strings in the repo; a transcribed `scannerVerdict` that cites a scan never run is a bug, not a pass.
 - **ERD / FK.** The resume slice adds no foreign key and no edge: `data_fk_cycle_check` over the resume-slice edges (`BootReportTest -> SecretScanner`, `LocalGates -> CIPipeline`, `PRShipFlow -> MergedMain`, `PRShipFlow -> LocalGates`, `PRShipFlow -> CIPipeline`, `MergedMain -> LinearTracker`, `UltrathinkStack -> LinearTracker`) returns `has_cycle=false`. No new index is created; no query is added, so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: no query added, baseline 1 vs shadow 1, max 0%, within 20%).
 - **Retention / deletion.** Retained with the repo docs history; superseded by a newer evidence string, never edited in place. Rollback of M-2026-009 is additive-only (stop recording the evidence strings) and carries no backfill and no retention entry.
+
+## 17. Quality-gate state (T5471, ADR-0016/0017, M-2026-010)
+
+Addendum. The T5471 quality bar (8-gate baseline then ratchet, Linear continuation, 4-of-4 gate verdicts) extends the Phase 13 quality-ratchet model (§2) with 4 new doc-retained record kinds. Existing `GateRun` and `CoverageFloor` (§2) already carry the per-gate and per-directory rows, so they are unchanged and not duplicated. The §0 ERD gains 4 nodes (one per record kind below) and 0 new relations: every record is a leaf keyed by `correlationId` (supplied on every quality-gate record), so no foreign key and no edge is introduced.
+
+### `GateBaseline` (1 per (branch, correlationId); the aggregate behind ShipRecord-style evidence)
+
+| Field | Type | Rule |
+|---|---|---|
+| `branch` | string, optional | Change branch under measurement (`fix/stdio-host-shutdown-log`) |
+| `gateExitCodes` | object (8 standard gates → int), optional | 1 exit code per gate (typecheck, lint, test, build, check:docs, check:gates, check:pack, check:mcp); an unknown gate is omitted, never guessed (ADR-0016) |
+| `correlationId` | string, optional | Per-operation join key (existing convention) |
+
+### `GateVerdict` (1 per (gate, correlationId))
+
+| Field | Type | Rule |
+|---|---|---|
+| `gate` | `review`/`quality`/`security`/`release`, optional | Closed enum — adding a gate value is a minor bump, removing one is major (ADR-0017) |
+| `verdict` | `green`/`red`, optional | Most-restrictive of the 4 wins on conflict; 0 releases land on a red verdict |
+| `correlationId` | string, optional | Join key |
+
+### `LinearState` (1 per (issueRef, correlationId))
+
+| Field | Type | Rule |
+|---|---|---|
+| `issueRef` | string, optional | Linear issue or sub-issue reference (SPE-* or SEAT-* Linear id); a public tracking id |
+| `state` | `done-with-evidence`/`blocked-with-named-cause`, optional | Closed enum; 0 open items without a state |
+| `cause` | string, optional | Required when blocked: 1 cause, 1 owner action, 1 next step; 0 personal data (writer rule) |
+| `correlationId` | string, optional | Join key |
+
+### `SecretScan` (1 per correlationId)
+
+| Field | Type | Rule |
+|---|---|---|
+| `secrets` | integer ≥0, optional | 0 secrets reported over the change (NFR-S4) |
+| `literalOccurrences` | integer ≥0, optional | 0 literal fixture occurrences |
+| `correlationId` | string, optional | Join key |
+
+- **Derivation (no status aggregate).** The status aggregate (`verdictsPresent`, `releasesOnRed`, SC-QualityGateState v1.0.0) is derived at read time from the 4 `GateVerdict` rows; no status record is written. Re-running an operation overwrites its own keyed row only (idempotency as in `GateRun`, §2).
+- **Fail-closed.** A missing gate number is absent, never asserted: a transcribed baseline citing an exit code never recorded is a bug, not a pass (ADR-0016). A missing or red gate keeps the release blocked; a blocked `LinearState` without `cause` is `SCHEMA_INVALID`, not silent.
+- **ERD / FK.** The quality-gate slice adds no foreign key and no edge: `data_fk_cycle_check` over the existing edges (`SessionAnswer -> SessionRecord`, `AuditLine -> AuditAnchor`, `CheckpointManifest -> ManifestEntry`) returns `has_cycle=false`. No new index is created; no query is added, so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: gate-state-render baseline 1 vs shadow 1, max 0%, within 20%).
+- **Retention / deletion.** Retained with the repo docs history; superseded by a newer record on the same key, never edited in place. Rollback of M-2026-010 is additive-only (stop emitting the 4 record kinds) and carries no backfill and no retention entry.

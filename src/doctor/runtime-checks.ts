@@ -2,7 +2,7 @@
 // A missing or unloadable config is one item with first-time setup guidance. Configured root failures
 // require manual recovery, not reinitialization. This module reads no process environment: the caller hands env in.
 
-import { lstatSync, readFileSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { connect as tlsConnect } from "node:tls";
 import { isAbsolute, dirname } from "node:path";
 import { dialWithin } from "../core/timeout.js";
@@ -20,10 +20,18 @@ export interface RuntimeCheckResult {
   readonly fix: string | null;
 }
 
+export interface PathStats {
+  readonly isDirectory: () => boolean;
+  readonly isSymbolicLink: () => boolean;
+  readonly isSocket: () => boolean;
+  readonly mode: number;
+  readonly uid: number;
+}
+
 export type PathReading =
   | { readonly state: "absent" }
   | { readonly state: "unreadable" }
-  | { readonly state: "found"; readonly stats: Stats };
+  | { readonly state: "found"; readonly stats: PathStats };
 
 export interface RuntimeCheckOptions {
   // Absent, or a config the loader refused, produces the one-item report.

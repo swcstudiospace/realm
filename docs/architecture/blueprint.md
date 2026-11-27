@@ -506,3 +506,75 @@ The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:t
 ### 20.9 What was decided vs UNVERIFIED (§20)
 
 Decided (L2): in-test split with 0 allowlists; conditional merge through the ship flow with the Greptile absence recorded as the user-accepted substitute and 0 fake verdicts; gate-then-close ordering over 2 trees (merged main for r3, ultrathink stack for W3) with read-only hash verification; 100% NFR allocation; 0 new containers in the Realm runtime; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F10/F11/F12 evidence (scanner, local/CI, merge, r3/W3, Linear, PR #255/#259 states — A05/A08/A12/A01 own those runs), live NFR measurements, A10 co-sign of the §20 threat deltas.
+## 21. T5471 quality upgrade and Linear continuation (T5471-arch)
+
+**Sources:** `docs/requirements/spec.md` §15 (US-132..US-135, AC-97..AC-108), `docs/acceptance.md` (AC-97..AC-108), branch `fix/stdio-host-shutdown-log`.
+**Status:** IN_REVIEW. Provisional for A08 gate runs (8 exit codes, coverage, audit count) and A01 Linear writes; no exit code is claimed here.
+
+### 21.1 Quality bar implemented as measurable gates
+
+The brief phrase (State-of-the-Art, Best-in-Class, Production-Grade, Enterprise-Ready) is operationalized exactly as spec §15.1: 8 standard gates each exit 0 (typecheck, lint, test, build, check:docs, check:gates, check:pack, check:mcp), CI green on 2 of 2 Node versions (22 and 24) with 0 failed jobs, audit exit 0 with 0 dependency drift, 0 suppression comments, 0 silent catches beyond the 10 QUAL-01 exceptions, 0 unjustified dependencies, 0 modules over the size ratchet, and 1 measured coverage number per directory for src/fs, src/core, src/tools.
+
+### 21.2 C4 delta (containers unchanged in the Realm runtime)
+
+`arch_c4_fanout`: `container_count=5`, `relation_count=5`, `max_fan_out=3`, `over_budget=[]`, `isolated=[Operator]` (expected — the operator is the external actor). Containers: Operator, RealmDaemon, CIPipeline, GSDPipeline, LinearTracker. Fan-out budget stays 8; no new Realm container is introduced, so no ADR-level infrastructure change occurs (L2, catalog pattern carried forward).
+
+### 21.3 Module layering (quality gate reporter)
+
+`arch_layer_violations` over `surface → orchestration → runtime → domain → platform`: `violation_count=0`, `checked_edges=2`, `unassigned=[]` (quality-gate-reporter in surface; core-errors and observe-metrics in platform). `arch_cycle_check`: `has_cycle=false`, `node_count=3`, `cyclic_node_count=0`. The reporter calls the control socket only and never writes product code.
+
+### 21.4 Contracts
+
+Quality bar is enforced by the 8 npm gates and CI (spec §15.1); no new contract is introduced in this task. Existing RealmControl 1.0.0, OmpPlugin and UltrathinkCompletionGate contracts are unchanged; no contract in this task is breaking. Versioned N-1 compatibility and digest pinning are carried forward from §12.
+
+### 21.5 ADRs
+
+- **ADR-0016** — `docs/adr/0016-quality-baseline-and-pattern-ratchet-for-t5471.md` — record the 8-gate baseline on `fix/stdio-host-shutdown-log`, then ratchet patterns against it with 0 regressions and 0 frozen catalogue changes (US-132, US-133; QUALB-01..03, RATCHET-01..03).
+- **ADR-0017** — `docs/adr/0017-linear-continuation-and-gate-enforcement-for-t5471.md` — every open Linear item carries done-with-evidence or blocked-with-named-cause, and 4 of 4 gate verdicts gate every release with the most-restrictive verdict winning (US-134, US-135; LINB-01..03, GATEE-01..03).
+
+Recorded via `python3 scripts/arch_adr.py` with task id and correlation id; `arch_adr.py --list`: `verdict=pass`, 17 ADRs, 0 findings. `arch_adr_transition {proposed → accepted}`: `allowed=true`. `arch_semver_bump` 0.0.1 → 1.0.0 additive: `bump=major`, `required_bump=minor`, `compliant=true` (initial contract publication).
+
+### 21.6 NFR bindings (additive: NFR-P3, NFR-S4, NFR-A3)
+
+`arch_nfr_allocation`: `nfr_count=3`, `coverage_pct=100`, `fully_allocated=true`, `unallocated=[]`, `unmeasurable=[]`. NFR-P1/S1/A1/I1/C1/P2/S3/S2/A2 are carried forward unchanged (see `nfr-allocation.md`). Detail: §21.6 table below and `nfr-allocation.md` §T5471.
+
+| NFR | Kind | Binding | Limit |
+|---|---|---|---|
+| NFR-P3 (perf) | quantitative | Component budget: 8-gate baseline run (`npm run` sequence) wall clock | 1800 s, 1 exit code per gate |
+| NFR-S4 (security) | quantitative | Clause: `secret scan` over the change | 0 secrets, 0 literal fixture occurrences |
+| NFR-A3 (a11y) | qualitative | Clause: `status label` enum carried from NFR-A1 | 1 of 2 text labels, distinguishable without color |
+
+`arch_nfr_budget` with budgets {baseline_wall_s max 1800} and 0 measurements: `checked=0`, `within_budget=false`, `unmeasured=[baseline_wall_s]`. Measurements are pending A08; this is UNVERIFIED, not a pass.
+
+### 21.7 Threat model delta
+
+The quality gate reporter crosses 2 trust boundaries: Reporter → ControlSocket (authenticated by the 0700/0600 directory boundary, same as §9) and CI → Release (provenance via SBOM + attestation, unchanged). No new attack surface is introduced; the reporter holds no secrets and writes no product code. A10 co-sign remains pending for the carried §9 high-risk crossings; residual-risk acceptance is A10-only and is not claimed here.
+
+### 21.8 Tech stack (changes: none)
+
+The §10 table is unchanged: Node 22.13+ / strict TS ESM single package (`node:test`, `fast-check`), rootless Podman 5.x digest-pinned, OpenShell 0.1.5 + Realm compute driver, GitHub Actions attested release. This task introduces **no new first-party dependency, no new infrastructure, no licence change**. Any future pick outside §10 remains an ADR; infrastructure or dependency picks are L3.
+
+### 21.9 Blockers carried forward (never faked)
+
+HARN-03 stays provisional pending the owner ruling (port 9931 allowlisting; whether the lever counts as passing). Live phases 56–58 stay blocked on the realmlive stack with 0 live windows scheduled. Podman 4.9.3 on this checkout host cannot produce live proof; live-gated criteria remain verified only on the 5.7.1 realm account. The Linear workspace state at spec time is unknown (Q1); LINB counts are a downstream A01 obligation.
+
+### 21.10 Fitness functions (CI, T5471 slice)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` (§21.3) | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` (§21.3) | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` (§21.2) | fan-out ≤ 8; 0 isolated except Operator (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` (§21.6) | 100% allocated (measured pass) |
+| F5 | NFR budget | `arch_nfr_budget` vs A08 measurements | within budget or named skip (skip ≠ pass; currently UNVERIFIED) |
+| F6 | Contract conformance | `arch_contract_check` + `arch_contract_ops` | 1 contract pass, 0 breaking (measured pass) |
+| F7 | ADR lifecycle | `arch_adr.py --list` | 17 ADRs, 0 findings (measured pass; heads ADR-0016, ADR-0017) |
+| F10 | Gate evidence | 8 exit codes + coverage + audit (A08 runs) | 8 of 8 exit 0 (UNVERIFIED here — no gate run under this task) |
+| F11 | Linear close-out | duplicate scan + per-item states (A01 runs) | 0 duplicates, 0 unstated items (UNVERIFIED here) |
+| F12 | Release gate | 4 of 4 verdicts (A08/A09/A10/A12 runs) | 4 of 4 present, 0 releases on red (UNVERIFIED here) |
+
+Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5, F10, F11, F12 are `UNVERIFIED`, not passes, until the owning suite, tracker or gate operation reports.
+
+### 21.11 What was decided vs UNVERIFIED (§21)
+
+Decided (L2): measurable quality bar per spec §15.1 wired through the 8 npm gates and CI (spec §15.1); baseline-then-ratchet with 0 regressions; Linear dedup-then-state with 0 unstated items; 4-of-4 gate verdicts with most-restrictive wins; 100% NFR allocation; 0 new containers and 0 new dependencies in the Realm runtime; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F5/F10/F11/F12 evidence (8 gate exit codes, coverage numbers, audit count, Linear states, gate verdicts — A08/A01/A09/A10/A12 own those runs), live NFR measurements, A10 co-sign of the §9 threat crossings.
