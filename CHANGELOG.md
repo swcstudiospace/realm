@@ -4,6 +4,17 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-11-27
+
+### Changed
+- refactor(doctor): narrow PathReading stats to consumed members; revert duplicate dep bump (a72b30a)
+
+### Fixed
+- fix(tests): default fake uid to current account so ownership check passes on CI runners (7517be6)
+- fix(cli): surface stdio shutdown failure at error level with typed code (fd8bf65)
+- fix(tests): satisfy typescript-eslint 8.74 unsafe-assignment in test fakes (b76de88)
+- fix(cli): log stdio driver shutdown failure; docs: coherent quality bar without HTTP surface (8d6c7be)
+
 ## [0.9.8] - 2026-11-26
 
 ### Documentation
