@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-11-27
+
+### Changed
+- No user-facing changes recorded.
+
 ## [0.9.9] - 2026-11-27
 
 ### Changed
