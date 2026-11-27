@@ -1,7 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, Stats } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, type Server as TlsServer } from "node:tls";
@@ -29,26 +29,29 @@ function config() {
 }
 
 function directory(mode: number, uid?: number, symbolicLink = false): PathReading {
-  const stats = Object.create(Stats.prototype) as Stats;
-  Object.defineProperties(stats, {
-    isDirectory: { value: () => !symbolicLink },
-    isSymbolicLink: { value: () => symbolicLink },
-    isSocket: { value: () => false },
-    mode: { value: mode },
-    ...(uid === undefined ? {} : { uid: { value: uid } }),
-  });
-  return { state: "found", stats };
+  return {
+    state: "found",
+    stats: {
+      isDirectory: () => !symbolicLink,
+      isSymbolicLink: () => symbolicLink,
+      isSocket: () => false,
+      mode,
+      uid: uid ?? 0,
+    },
+  };
 }
 
 function socket(mode: number): PathReading {
-  const stats = Object.create(Stats.prototype) as Stats;
-  Object.defineProperties(stats, {
-    isDirectory: { value: () => false },
-    isSymbolicLink: { value: () => false },
-    isSocket: { value: () => true },
-    mode: { value: mode },
-  });
-  return { state: "found", stats };
+  return {
+    state: "found",
+    stats: {
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+      isSocket: () => true,
+      mode,
+      uid: 0,
+    },
+  };
 }
 
 function statFor(modes: Readonly<Record<string, PathReading>>): (path: string) => PathReading {
