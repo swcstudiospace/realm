@@ -279,3 +279,11 @@ As a maintainer, I want review, quality, security and release gates enforced on 
 - Requirement IDs: GATEE-01 (4 of 4 gate verdicts present, most-restrictive wins), GATEE-02 (0 releases land on a red verdict), GATEE-03 (100% traceability for US-132 to US-135).
 - Plan IDs: T5471 gate enforcement (no separate plan IDs).
 - Estimate: 5 points. Dependencies: none.
+
+## US-136 — Docs-only ship of window addenda and GAP-43-03 closure
+
+As a maintainer, I want the 7-file docs update on branch fix/stdio-host-shutdown-log to merge to main in 1 pull request with CI green and the Greptile check waived for billing, so that the window evidence and the GAP-43-03 closure reach main with 0 product-code edits.
+
+- Requirement IDs: SHIPDOC-01 (7 files committed, 0 product-code edits), SHIPDOC-02 (1 pull request to main), SHIPDOC-03 (5 CI runs green), SHIPDOC-04 (1 squash merge, 1 recorded Greptile waiver line).
+- Plan IDs: T8345 docs-only ship (no separate plan IDs).
+- Estimate: 3 points. Dependencies: none.

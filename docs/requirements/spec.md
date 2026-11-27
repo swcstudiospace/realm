@@ -435,3 +435,33 @@ Each new criterion is automated. Manual-only count across the new set equals 0. 
 2. The Linear workspace state at spec time is unknown (Q1 in `docs/requirements/brief-T5471-req.md`); LINB counts are a downstream obligation, not an observed state.
 3. The current branch head evidence for the 8 gates has not been run in this spec task (Q2 in the same brief file).
 4. Scope growth is 4 stories added to 31 existing (11.4% of the prior committed set counting stories, and 4 of 35 after adding). This stays below the 20% human-approval ceiling, so no BLOCKED is raised.
+
+## 16. T8345 docs-only ship — GAP-43-03 closure (addendum)
+
+**Task:** `T8345-req` · **Correlation:** `8345f9e5-8a56-40a5-9967-0368d907cca7` · **Capability:** `req.spec`
+**Status:** VALIDATED (publish gate: lint pass, GWT 5 of 5, testability 0% manual-only, traceability 100%, NFR coverage 5 of 5). **Scope:** 1 story with 5 criteria. No product code. No verdict signed in this task.
+
+### 16.1 What ships
+
+- Branch `fix/stdio-host-shutdown-log` carries 7 file changes: 3 `WINDOW.md` addenda dated 2026-11-27, 3 `VERIFICATION-UPDATE-20261127.md` records, and 1 `host-plugin-gaps.md` status change that closes GAP-43-03.
+- The pull request targets `main` from that branch with 1 head commit. The diff records 0 files under `src/` or `test/`.
+- CI records 5 successful runs (verify on Node 22.x, verify on Node 24.x, site, audit, Breaking-change guard) with 0 failed runs.
+- The merge lands on `main` as 1 squash merge through the ultrathink ship flow with 1 recorded waiver line for the Greptile 5/5 rule under the owner billing waiver.
+
+### 16.2 Stories
+
+- US-136 (SHIPDOC-01..04): the docs-only ship described in 16.1. INVEST score 6 of 6 with estimate 3 points and 0 dependencies. Duplicate scan over US-110, US-121, US-130 and US-136 reports 0 pairs at 0.6 similarity.
+
+### 16.3 NFRs (carried, numeric)
+
+- NFR-P1 (perf): realm up reaches active within 200 s on the 5.7.1 realm stack; verified by A08.live.
+- NFR-S1 (security): disconnected host edit and Realm write calls return 0 successes; verified by A08.security.
+- NFR-A1 (a11y): the status shows exactly 1 of 2 text labels with a color-independent cue; verified by A08.
+- NFR-I1 (i18n): every result code matches the frozen catalogue in C and en_US locales; verified by A08.
+- NFR-C1 (compliance): off-machine telemetry calls equal 0 and audit PII fields equal 0; verified by A08/A10.
+
+### 16.4 Assumptions
+
+1. The Greptile waiver is recorded as 1 verbatim line in the pull request body; the 5/5 check stays absent by waiver, not by pass.
+2. F-51-1, HTIER-01 and KIMV-02 remain carried exactly as the three verification updates record; only GAP-43-03 changes status to closed.
+3. Scope growth is 1 story added to 35 existing (2.9%); below the 20% human-approval ceiling, so no BLOCKED is raised.

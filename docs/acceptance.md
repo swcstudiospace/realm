@@ -825,3 +825,40 @@ When requirements and criteria are counted 1 time
 Then 100 percent of the 4 stories trace to 1 or more criteria with 0 uncovered requirements
 check: traceability coverage ratio
 automated: true
+
+## US-136 — Docs-only ship of window addenda and GAP-43-03 closure
+
+AC-109 story: US-136
+Given branch fix/stdio-host-shutdown-log with 7 pending files
+When the commit is inspected 1 time
+Then 7 files are committed (3 WINDOW.md addenda, 3 VERIFICATION-UPDATE-20261127.md, 1 host-plugin-gaps.md) with 0 files under src/ or test/ edited
+check: git show file count
+automated: true
+
+AC-110 story: US-136
+Given branch fix/stdio-host-shutdown-log
+When the pull request list is read 1 time
+Then 1 open pull request targets main from the branch with 1 head commit matching the 7-file commit
+check: gh pr list
+automated: true
+
+AC-111 story: US-136
+Given 1 pull request to main
+When CI status is read 1 time
+Then 5 check runs (verify 22.x, verify 24.x, site, audit, guard) report success with 0 failed runs
+check: gh pr checks
+automated: true
+
+AC-112 story: US-136
+Given 1 pull request with 5 green checks
+When merge is recorded 1 time
+Then 1 squash merge lands on main with 0 direct gh merge commands and 1 ship-flow record
+check: git log main
+automated: true
+
+AC-113 story: US-136
+Given 1 pull request to main
+When PR body and changed-file list are read 1 time
+Then 1 waiver line cites owner billing waiver for Greptile 5/5 with 0 Greptile gate required, and 0 files outside docs and planning are changed
+check: PR body and diff list
+automated: true

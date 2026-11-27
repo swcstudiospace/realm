@@ -48,8 +48,9 @@ Default, loading, error, empty, success — specified per screen below as dotted
 | SCR-QualityBaselineBoard | AC-97, AC-98, AC-99, AC-100, AC-101, AC-102 |
 | SCR-LinearContinuationBoard | AC-103, AC-104, AC-105 |
 | SCR-GateEnforcementBoard | AC-106, AC-107, AC-108 |
+| SCR-DocsShipBoard | AC-109, AC-110, AC-111, AC-112, AC-113 |
 
-Coverage: AC-1..AC-108 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
+Coverage: AC-1..AC-113 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
 
 ## SCR-RealmStatus — `realm status`
 
@@ -827,3 +828,46 @@ Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). T
 | gate-board-swap | 0 ms | instant text replace (no transition) |
 
 Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `baseline-detail-link` 24x24, `linear-fix-link` 44x44, `release-readiness-link` 24x24 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Advisory, blocked and verdict notes are non-interactive and have no target.
+## T8345 docs-only ship addendum (T8345-ux, 2026-11-27; tokens 1.2.0 unchanged)
+
+**Scope.** US-136 (AC-109..AC-113) from `docs/requirements/spec.md`: docs-only ship of window addenda and GAP-43-03 closure — 7 files (3 WINDOW.md addenda, 3 VERIFICATION-UPDATE-20261127.md, 1 host-plugin-gaps.md) committed on `fix/stdio-host-shutdown-log`, 1 PR to main with 5 CI checks green, 1 squash merge, and 1 recorded Greptile billing-waiver line. Zero new components — the board reuses `ds/GateBoard`, `ds/CheckList`, `ds/StatusReadout`, `ds/NoticeBanner` (L2). No brand change, no token bump (tokens 1.2.0 unchanged; `ux_token_semver_impact` diff_empty true, l3_required false). Fidelity: lofi (ASCII wireframes; no Figma). Provisional: true (no brand guide; system default theme). Engineering execution (commit, PR, squash merge) is downstream; this design states display and forbidden copy only.
+
+## SCR-DocsShipBoard — docs-only ship evidence board (US-136)
+
+**Question:** are the 7 docs files committed with 0 product-code edits, is the PR green, and did the merge land honestly?
+**Flows:** verify-files, view-pr, check-ci, read-waiver, confirm-merge.
+**Layout (ship evidence board, docs view):**
+
+```
+┌─ [ds/GateBoard] docs-only ship — fix/stdio-host-shutdown-log ┐
+│ files: 3 WINDOW addenda · 3 VERIFICATION-UPDATE · gaps 1     │
+│ pr: 1 to main from branch · head = 7-file commit             │
+│ ci: verify 22.x · verify 24.x · site · audit · guard         │
+│ merge: squash 1 time · waiver: owner billing waiver          │
+│ [gate-row-link 24x24] [pr-commit-link 24x24] [merge-record-link 24x24] │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+- `default.files`: files row reads `7 files committed — 3 WINDOW.md addenda · 3 VERIFICATION-UPDATE-20261127.md · host-plugin-gaps.md GAP-43-03 closed; 0 files under src/ or test/ edited` (AC-109). PR row reads `1 open pull request targets main from fix/stdio-host-shutdown-log · head commit matches the 7-file commit` (AC-110). CI row reads `5 check runs (verify 22.x · verify 24.x · site · audit · guard) report success · 0 failed runs` (AC-111). Merge row reads `ready to merge — awaiting ship flow` before merge and `merged — 1 squash merge on main` after (AC-112). All verdicts are text, never colour-only; `color.text.primary` on `color.background.primary` 17.73, `color.status.error` on white 6.47 (measured this run via `ux_contrast`).
+- `loading.checks`: `ship: running 5 CI checks…` with elapsed; the board never reads green while any check is running.
+- `error.ci-fail`: the failing check named with its run (`audit exit 1`) and 1 remedy; other rows keep last truthful verdicts, never erased. A red CI row never repaints as pass.
+- `error.validation`: usage line + code; an unknown branch, PR id, or file path reads `not run`, never pass.
+- `empty.no-run`: `no commit or CI run for this branch` (not pass). Empty is stated, never blank.
+- `success.merged`: `7 files on main · 1 squash merge · 5 of 5 CI green · waiver line present in PR body (owner billing waiver for Greptile 5/5 · 0 Greptile gate required)` with `0 files outside docs and planning changed` stated as a count (AC-112, AC-113). The waiver note reuses `color.surface.advisory` with `color.text.primary` 15.93 and `color.status.warning` 6.36 (measured this run); it is `ds/NoticeBanner` advisory, never a pass chip.
+
+**Copy bans (design rule):** never claim Greptile `5 of 5` passes — the ship flow records 1 waiver line citing the owner billing waiver and requires 0 Greptile verdict (AC-113); never count a `src/` or `test/` edit as docs-only (AC-109, AC-113); never fabricate a merge commit before it exists. No dark pattern: ship state stated as counts and labels, never as urgency or praise.
+**Components:** `ds/GateBoard@1.0` (props: gates ["verify-22", "verify-24", "site", "audit", "guard"]), `ds/CheckList@1.0` (props: rows ["files", "pr", "ci", "merge"]), `ds/StatusReadout@1.0` (props: labels ["ready to merge", "merged"]), `ds/NoticeBanner@1.0` (props: waiver "owner-billing-waiver", neverSilent true).
+**Focus order:** `gate-row-link`, `pr-commit-link`, `merge-record-link`. Waiver note is `role="status"` `aria-live="polite"`, non-interactive, never in tab order.
+**A11y:** target WCAG-2.2-AA; min_contrast 6.36 (warning-on-advisory this run). Links meet SC 2.5.8 (24x24, `ux_target_size_check` compliant true). Focus ring `#2563eb` lowest 4.64 across white/advisory/widget/secondary, `ux_focus_contrast_check` meets true (SC 1.4.11 needs 3).
+
+```json
+{ "screen_id": "SCR-DocsShipBoard", "flows": ["verify-files", "view-pr", "check-ci", "read-waiver", "confirm-merge"], "states": ["default.files", "loading.checks", "error.ci-fail", "error.validation", "empty.no-run", "success.merged"], "components": [{ "ref": "ds/GateBoard@1.0", "props": { "gates": ["verify-22", "verify-24", "site", "audit", "guard"] } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["files", "pr", "ci", "merge"] } }, { "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ready to merge", "merged"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "waiver": "owner-billing-waiver", "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["gate-row-link", "pr-commit-link", "merge-record-link"], "min_contrast": 6.36 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-109", "AC-110", "AC-111", "AC-112", "AC-113"] }
+```
+
+## T8345 motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| docs-ship-board-swap | 0 ms | instant text replace (no transition) |
+
+Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `pr-commit-link` 24x24, `merge-record-link` 24x24 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Waiver note is non-interactive and has no target.
