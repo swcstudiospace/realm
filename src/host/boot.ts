@@ -9,7 +9,7 @@
 // its own: withStartupBudget delegates to withTimeout, which clears its timer as soon as the work settles.
 
 import type { PolicyMode } from "../contract/validate.js";
-import { RealmError, type ErrorCode } from "../core/errors.js";
+import { ERROR_CODES, RealmError, type ErrorCode } from "../core/errors.js";
 import { withTimeout } from "../core/timeout.js";
 import type { HostGuardVerdict, HostLinkStatus, HostPluginManifest } from "./types.js";
 
@@ -127,6 +127,24 @@ export function isLinkLostCode(code: string): boolean {
 // is terminal. Exact match only.
 export function isRetryableAttachCode(code: string): boolean {
   return BOOT_BOUNDS.retryableAttachCodes.some((listed) => listed === code);
+}
+
+// The sanitized cause text a refused attach may carry: "cause: CODE" for a catalogue cause, or
+// undefined when there is none. Only a catalogue code (ERROR_CODES) is ever rendered, so no path,
+// environment value or daemon text can enter a paint, a retry reply or a notice through this helper.
+export function refusalCauseText(causeCode: unknown): string | undefined {
+  if (typeof causeCode !== "string") {
+    return undefined;
+  }
+  return (ERROR_CODES as readonly string[]).includes(causeCode) ? `cause: ${causeCode}` : undefined;
+}
+
+// The display form of a failed attach code with its sanitized cause: "CODE (cause: CAUSE)", or the
+// bare code when the cause is not a catalogue code. The code itself is never changed, so the
+// retryable/terminal disposition a code carries is unchanged by its cause.
+export function withRefusalCause(code: string, causeCode: unknown): string {
+  const cause = refusalCauseText(causeCode);
+  return cause === undefined ? code : `${code} (${cause})`;
 }
 
 // The guard backstop. A tool name that is not a string cannot be classified and is refused. A name in passThrough is never

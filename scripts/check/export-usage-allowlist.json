@@ -1037,5 +1037,21 @@
       "name": "renderStateFailure",
       "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
     }
+    ,
+    {
+      "file": "src/omp/status-render.ts",
+      "name": "PaintedBucket",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/status-render.ts",
+      "name": "bucketOfPaint",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/omp/advisory-render.ts",
+      "name": "paintAdvisory",
+      "reason": "D-1306 test-only seam: kept as a documented seam, referenced only by tests"
+    }
   ]
 }
