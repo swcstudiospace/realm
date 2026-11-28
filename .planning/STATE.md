@@ -2,19 +2,19 @@
 gsd_state_version: "1.0"
 milestone: v9.0
 milestone_name: Doctor health and concurrent binding
-status: Starting
-stopped_at: Milestone v9.0 started, phases 55 to 59 planned
-last_updated: "2026-11-25T00:00:00.000Z"
-last_activity: 2026-11-25
-last_activity_desc: Milestone v9.0 close-out running (55/59 verified; 56-58 carried — see phase VERIFICATIONs)
-state_head: 63bbc7e
+status: Complete
+stopped_at: Milestone v9.0 complete with accepted limitations (audit .planning/v9.0-MILESTONE-AUDIT.md)
+last_updated: "2026-11-28T00:00:00.000Z"
+last_activity: 2026-11-28
+last_activity_desc: v9.0 audited complete (55/59 passed; 56-58 gaps_found carried with 2026-11-27 live evidence); ultrathink n1-n7 executed
+state_head: 56cce3f
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 2
-  completed_plans: 2
-  percent: 40
-current_phase: 56
+  completed_phases: 5
+  total_plans: 5
+  completed_plans: 5
+  percent: 100
+current_phase: 60
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-11-20)
 Phase: v9.0 complete (55 passed, 59 passed; 56/57/58 gaps_found carried with 2026-11-27 live evidence + SUMMARIES + v9.0-MILESTONE-AUDIT.md passed_with_accepted_limitations)
 Plan: v9.0 close-out: 56 OTHER-FAILURE 33/36 clean (row-absent x3, no dirty teardown); 57 carried (cold+warm attribution fail, host leaves 1.3-3.7s); 58 KIMV-02 met (wire log shows tools/list response, GAP-43-03 closed; cleanup-down TOOL_TIMEOUT under load noted)
 Status: Milestone v9.0 audited and complete with accepted limitations (.planning/v9.0-MILESTONE-AUDIT.md); ultrathink graph n1-n7 executed (inventory, decomposition, composition B/P2, clarifications, controls, Omp proof, N7 plan)
-Last activity: 2026-11-28 — v9.0 milestone audit + ultrathink wave close-out; image sha256:6272a3ac (check:image-digests ok); Linear SPE-39194..39394-series tracked; check:docs exit 0
+Last activity: 2026-11-28 — v9.0 milestone audit + ultrathink wave close-out; image sha256:6272a3ac (check:image-digests ok); Linear SPE-39194..39200 series tracked; check:docs exit 0
 
 ## Current Recovery Boundaries
 
