@@ -201,3 +201,76 @@ wins on conflict.
 States: `default.verdicts`, `loading.recording`, `error.red-gate`, `error.validation`,
 `empty.no-verdicts`, `success.ready`. Focus: `gate-row-link`, `release-readiness-link`.
 Links 24x24 (SC 2.5.8).
+
+## T8580 addendum — boot binding diagnosis (SCR-BootBindingDiag, AC-114..AC-116, tokens 1.2.0)
+
+**Bound:** `design.system.tokens@1.2.0` (`docs/ux/tokens.json`), `API-RealmBoot@1.0.0`
+(`docs/architecture/contracts/api-realm-boot.yaml`: `diagnoseBoot` `POST /diagnose`,
+`bootStatus` `GET /status`). Blueprint `docs/architecture/blueprint.md` §23. Zero new
+components — reuse `ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0` (`neverSilent: true`),
+`ds/CheckList@1.0`. Zero new dependency, zero token change. Fail-closed stays (D4): while
+the realm is not active, host `edit` and Realm `write` refuse with `REALM_NOT_ACTIVE`,
+0 successes, 0 host files changed; this screen only names the cause, it never lifts the guard.
+
+```ts
+// ds/StatusReadout — NFR-A1: exactly one of two labels, shape cue redundant with text.
+// Contract StatusResponse.label ("realm active" | "realm disconnected") maps to the
+// display label below; colour.status.success may reinforce ACTIVE only, never replace it.
+type BootStatusLabel = "ACTIVE" | "DISCONNECTED";
+// API-RealmBoot DiagnoseResponse (1.0.0): 1 frozen catalogue code, 1 failed binding, 1 remedy.
+type BootBinding = "daemon" | "driver" | "image" | "config";
+type BootCode =
+  | "REALM_NOT_ACTIVE"
+  | "POLICY_DENIED"
+  | "AGENTOS_NOT_CONFIGURED"
+  | "OPENSHELL_START_FAILED"
+  | "OPENSHELL_GATEWAY_LOST";
+interface BootDiagnostic {
+  code: BootCode;
+  binding: BootBinding;
+  remedy: string;              // one operator action; 0 token values, 0 secret values (NFR-S3)
+  cause: string;               // one missing item, path class / digest prefix only
+  verify: string;              // one check that proves the fix
+  failedStep?: string;         // driver: create | exec-child start | stop | start
+}
+// ds/CheckList — verdicts in text, never colour-only. Rows render in spec order
+// daemon, driver, image, config. Probing order (blueprint §23.1) is
+// config → daemon → driver → image: the first failing binding decides the single code,
+// later bindings are not probed and read "not probed" — never "pass".
+interface BootBindingRow {
+  binding: BootBinding;
+  verdict: "pass" | "fail" | "not probed";
+}
+interface BootBindingDiagProps {
+  label: BootStatusLabel;
+  rows: [BootBindingRow, BootBindingRow, BootBindingRow, BootBindingRow]; // daemon, driver, image, config
+  diagnostic?: BootDiagnostic;         // absent only in loading / success / empty.no-config uses its own notice
+  containerId?: string;                // present only when label is ACTIVE (active proof: up + readback)
+  notice: string;                      // ds/NoticeBanner neverSilent: one line, never empty
+  elapsedMs?: number;                   // loading only, within the 200s startup budget (NFR-P1)
+}
+```
+
+**Named-code mapping (exactly 1 code per failure; driver never reports as `POLICY_DENIED`):**
+
+| State | Binding | Code | Cause (path class / digest prefix only) | Remedy |
+|---|---|---|---|---|
+|---|---|---|---|---|
+| `error.daemon` (BOOTF-01) | daemon | `REALM_NOT_ACTIVE` | daemon socket absent (state-dir relative) after 1 start + 1 status wait | fix daemon, then retry up |
+| `error.driver` (BOOTF-02) | driver | `OPENSHELL_GATEWAY_LOST` (lost after active) or `OPENSHELL_START_FAILED` (failed start), failed step named | gateway unanswered / driver socket absent or stale | fix driver, then retry up |
+| `error.image-config` (BOOTF-03) | image | `POLICY_DENIED` | pulled image digest ≠ configured digest: image ref + expected digest prefix named, 0 containers created | point config at the pinned image digest, then retry up |
+| `error.image-config` (BOOTF-04) | config | `AGENTOS_NOT_CONFIGURED` or `POLICY_DENIED` (outside-root / missing root) | no generated config selects matching daemon and driver; missing workspace root named | run `realm init`, then retry up |
+
+**States (exact parity with ux.spec; no extra, no missing):** `default` (`DISCONNECTED` +
+`up: probing 4 bindings…` with elapsed; 4-row checklist), `loading` (`up: starting daemon
+(≤200s budget, NFR-P1)…` with elapsed; never waits silently), `error.daemon`,
+`error.driver`, `error.image-config`, `empty.no-config` (`no generated config selects
+matching daemon and driver — run realm init (writes templates without overwrite, private
+roots 0700)`), `success` (`ACTIVE` + 1 container id + 1 readback + 0 `ERR_MODULE_NOT_FOUND`).
+**Focus order:** `workspace-selector` (24×24), `up-action` (44×44), `diagnostic-area`
+(non-interactive `role="status"` `aria-live="polite"`, never in tab order). No positive
+tabindex; DOM order is the focus order. **A11y:** WCAG-2.2-AA; `color.text.primary` on
+`color.background.primary` 17.73, `color.status.error` on white 6.47 (min contrast 6.47);
+status and checklist verdicts are text (`pass`/`fail`/`not probed`), never colour-only;
+survives `NO_COLOR`/pipe/`2>&1` (code first, reason second). Diagnostic text carries path
+classes and digest prefixes only — 0 file content, 0 tokens, 0 secrets (NFR-S3).

@@ -317,3 +317,29 @@ Addendum. The T5471 quality bar (8-gate baseline then ratchet, Linear continuati
 - **Fail-closed.** A missing gate number is absent, never asserted: a transcribed baseline citing an exit code never recorded is a bug, not a pass (ADR-0016). A missing or red gate keeps the release blocked; a blocked `LinearState` without `cause` is `SCHEMA_INVALID`, not silent.
 - **ERD / FK.** The quality-gate slice adds no foreign key and no edge: `data_fk_cycle_check` over the existing edges (`SessionAnswer -> SessionRecord`, `AuditLine -> AuditAnchor`, `CheckpointManifest -> ManifestEntry`) returns `has_cycle=false`. No new index is created; no query is added, so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: gate-state-render baseline 1 vs shadow 1, max 0%, within 20%).
 - **Retention / deletion.** Retained with the repo docs history; superseded by a newer record on the same key, never edited in place. Rollback of M-2026-010 is additive-only (stop emitting the 4 record kinds) and carries no backfill and no retention entry.
+
+## 18. Boot bindings — 4-binding diagnosis + active proof (T8580, M-2026-011)
+
+Addendum. The T8580 boot repair (blueprint §23, UX SCR-BootBindingDiag) persists 1 new record kind, `BootBindingRecord`, keyed by `sessionId`. The §0 ERD gains 1 node (`BootBindingRecord *──1 SessionRecord` by `sessionId`) and 1 edge; no new relation crosses a partition boundary. The presence marker (`hosts/<host>-active/<pid>.json`, `src/host/presence.ts`) is unchanged: it records attach outcome only and is not proof the sandbox is healthy — the active proof lives only on `BootBindingRecord.activeProof`.
+
+### `BootBindingRecord` (1 per sessionId; re-boot overwrites its own row only)
+
+| Field | Type | Rule |
+|---|---|---|
+| `sessionId` | string, required | Partition key; joins the record to its `SessionRecord` |
+| `correlationId` | string, optional | Per-operation join key (existing convention) |
+| `schemaVersion` | integer, optional | `1` |
+| `bindings.daemon` | object, optional | `{ status: pass/fail/unprobed, code: catalogue code or null, checkedAt: RFC3339 }` — control socket `run/control.sock` answering within the startup bound |
+| `bindings.driver` | object, optional | Same shape + `failedStep: create/exec-child start/stop/start` — driver socket + gateway answer; a driver failure never carries `POLICY_DENIED` |
+| `bindings.image` | object, optional | Same shape + `digestPrefix` (short pinned prefix only) — pulled digest must equal `sandbox/expected-digests.json` exactly; `up` refused with 0 containers otherwise |
+| `bindings.config` | object, optional | Same shape — generated config selects matching daemon+driver; `workspaceRoot` present (bind-time fact, never schema fact) |
+| `code` | string, optional | 1 frozen catalogue code: the first failing binding's code, or null when all 4 pass |
+| `activeProof` | object, optional | `{ containerId: string or null, readbackConfirmed: boolean, confirmedAt: RFC3339 or null }` — active ⇔ `up` 1 container id + 1 readback validated against `(sessionId, bound root)` (BOOTF-05) |
+| `guardLifted` | boolean, optional | `true` only when `readbackConfirmed` is `true`; `up` alone never lifts the Omp guard |
+
+- **Binding order (first failure decides, later bindings `unprobed`).** `config → daemon → driver → image → active-proof` (blueprint §23.1): the first failing binding sets `code`; later bindings are not probed and no generic boot error is emitted. The 4-row `ds/CheckList` (SCR-BootBindingDiag) renders `daemon`, `driver`, `image`, `config` from these `status` values in text, never color-only (NFR-A1); the run under bar reads `realm active` only when `guardLifted` is `true`.
+- **Audit and log (same code, 0 secrets).** Boot failures append an audit line carrying the same catalogue `code` as the daemon log line for the same failure (AC-120, NFR-S3); audit lines may gain the optional redacted payload fields `binding` (one of the 4) and `failedStep` — `seq`/`prev` semantics unchanged (see `contracts.md` C15). Remedy text, path classes and digest prefixes stay in the operator-local diagnose envelope (`API-RealmBoot`, `docs/architecture/contracts/api-realm-boot.yaml`) and are never persisted to audit/log/evidence.
+- **Fail-closed.** A record failing schema validation (unknown keys rejected, closed keys, D-12) is refused, never coerced. While `readbackConfirmed` is not `true` the Omp guard stays fail-closed: host `edit` and Realm `write` refuse with `REALM_NOT_ACTIVE` (retryable), 0 successes, 0 host files changed (AC-117). Shutdown never sends `down` (BOOTF-08): close client, remove the 1 presence marker, sandbox stays up for the next attach.
+- **ERD / FK.** One new edge (`BootBindingRecord → SessionRecord`): `data_fk_cycle_check` over the boot edges (`BootBindingRecord -> SessionRecord`, `SessionAnswer -> SessionRecord`, `AuditLine -> AuditAnchor`) returns `has_cycle=false`. No new index is created; restore is a keyed lookup by `sessionId` (no scan), so the EXPLAIN budget is satisfied vacuously (`data_explain_regression_check`: checked 1, `max_pct=0`, `within_budget=true`).
+- **PII.** All new fields are not PII (join keys, catalogue code, digest prefix, booleans, timestamps): `data_pii_tag_coverage` over the 7 `boot_binding.*` columns returns coverage `1.0` with `untagged=[]`. `workspaceRoot` stays the only `PII-indirect` field and is referenced by the config binding, never copied into this record, audit, or log.
+- **Retention / deletion.** Lives with the session store (0600, state dir); removing the session record set removes the binding record. Rollback of M-2026-011 is additive-only (stop emitting the record kind) and carries no backfill and no retention entry.

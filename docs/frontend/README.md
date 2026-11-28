@@ -104,3 +104,17 @@ dependency; zero token change (`design.system.tokens@1.2.0`; `API-QualityGates@1
 display recorded evidence and make no new API call). Execution (recording 8 gate exit codes,
 coverage floors, 4 verdicts, Linear states) is downstream (A05 / A08 / A01); this catalog states
 display + forbidden copy only.
+
+## T8580 addendum — SCR-BootBindingDiag (AC-114..AC-116, tokens 1.2.0, contract API-RealmBoot@1.0.0)
+
+Screen: `SCR-BootBindingDiag` — which of 4 bindings failed (`daemon`/`driver`/`image`/
+`config`), in 1 named catalogue code. Details: `component-spec.md` T8580 addendum (typed
+`BootBindingDiagProps`, named-code mapping, exact state parity); exact operator strings:
+`copy-table.md` T8580 section; A08 test matrix: `test-notes.md` T8580 addendum.
+Components reused: `ds/StatusReadout@1.0` (`ACTIVE`/`DISCONNECTED` + `●`/`○`, colour never
+sole cue), `ds/NoticeBanner@1.0` (`neverSilent: true`, `role="status"` `aria-live="polite"`),
+`ds/CheckList@1.0` (4 rows, text `pass`/`fail`/`not probed`). Token binding unchanged:
+`color.text.primary` on `color.background.primary` 17.73, `color.status.error` on white
+6.47, min contrast 6.47; focus `workspace-selector` → `up-action` → `diagnostic-area` at
+24×24 / 44×44 / non-interactive. Fail-closed stays (D4): the screen names the cause; it
+never lifts the `REALM_NOT_ACTIVE` guard.

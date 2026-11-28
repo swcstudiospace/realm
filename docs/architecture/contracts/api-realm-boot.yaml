@@ -1,0 +1,113 @@
+openapi: 3.1.0
+info:
+  title: Realm Boot Diagnosis
+  version: 1.0.0
+  description: >
+    Additive boot-binding diagnosis contract for agent-realm boot repair
+    (T8580-arch, spec docs/requirements/spec-T8580-req.md).
+    Each boot failure names 1 frozen catalogue code, the failed binding,
+    and the remedy. Fail-closed default (D4): while the realm is not
+    active, host edit and Realm write refuse with REALM_NOT_ACTIVE.
+    Diagnostic text carries path classes and digest prefixes only,
+    never file content, tokens, or secrets (NFR-S3).
+servers:
+  - url: unix:///state/control.sock
+    description: User-only socket (directory 0700, socket 0600). No network listeners.
+paths:
+  /diagnose:
+    post:
+      summary: Diagnose which boot binding failed with 1 named cause
+      operationId: diagnoseBoot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiagnoseRequest'
+      responses:
+        '200':
+          description: Active, or 1 named cause with the failed binding and remedy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnoseResponse'
+        '409':
+          description: Fail-closed refusal naming the failed binding and 1 catalogue code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnoseResponse'
+      x-nfr-bindings:
+        - NFR-B1
+        - NFR-S3
+        - NFR-I1
+  /status:
+    get:
+      summary: Realm status with color-independent text label
+      operationId: bootStatus
+      responses:
+        '200':
+          description: Exactly 1 of 2 text labels with a color-independent cue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+      x-nfr-bindings:
+        - NFR-A1
+        - NFR-S1
+components:
+  schemas:
+    DiagnoseRequest:
+      type: object
+      required: [workspaceRoot, stateDir, correlationId]
+      properties:
+        workspaceRoot:
+          type: string
+          description: Operator workspace path class; existence is a bind-time fact
+        stateDir:
+          type: string
+          description: State directory holding run/control.sock (0700)
+        imageRef:
+          type: string
+          description: Configured sandbox image reference
+        correlationId:
+          type: string
+    DiagnoseResponse:
+      type: object
+      required: [active, code, binding, remedy, correlationId]
+      properties:
+        active:
+          type: boolean
+          description: True only after up returns 1 container id plus 1 readback (BOOTF-05)
+        code:
+          type: string
+          description: Frozen catalogue code from src/core/errors.ts (NFR-I1)
+          enum: [REALM_NOT_ACTIVE, POLICY_DENIED, AGENTOS_NOT_CONFIGURED, OPENSHELL_START_FAILED, OPENSHELL_GATEWAY_LOST]
+        binding:
+          type: string
+          description: Failed binding name
+          enum: [daemon, driver, image, config]
+        remedy:
+          type: string
+          description: One operator remedy step; 0 token values, 0 secret values (NFR-S3)
+        failedStep:
+          type: string
+          description: Failed step (create, exec-child start, stop, or start)
+        containerId:
+          type: string
+          description: Present only when active is true
+        correlationId:
+          type: string
+    StatusResponse:
+      type: object
+      required: [label, code, correlationId]
+      properties:
+        label:
+          type: string
+          enum: [realm active, realm disconnected]
+          description: NFR-A1 — exactly 1 of 2 labels, distinguishable without color
+        code:
+          type: string
+          description: Frozen catalogue code from src/core/errors.ts
+        correlationId:
+          type: string

@@ -49,6 +49,10 @@ Default, loading, error, empty, success — specified per screen below as dotted
 | SCR-LinearContinuationBoard | AC-103, AC-104, AC-105 |
 | SCR-GateEnforcementBoard | AC-106, AC-107, AC-108 |
 | SCR-DocsShipBoard | AC-109, AC-110, AC-111, AC-112, AC-113 |
+| SCR-BootBindingDiag | AC-114, AC-115, AC-116 |
+| SCR-BootRefusal | AC-117, AC-118, AC-120 |
+| SCR-BootActiveProof | AC-118, AC-119 |
+| SCR-BootRunbook | AC-130, AC-131 |
 
 Coverage: AC-1..AC-113 all referenced at least once (overlaps are intentional where two surfaces show the same fact).
 
@@ -871,3 +875,102 @@ Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). T
 | docs-ship-board-swap | 0 ms | instant text replace (no transition) |
 
 Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `gate-row-link` 24x24, `pr-commit-link` 24x24, `merge-record-link` 24x24 with 24-40 px centre-to-nearest-edge clearance (SC 2.5.8; measured `compliant: true` this run). Waiver note is non-interactive and has no target.
+
+## T8580 boot failure addendum (T8580-ux) — US-137, US-138, US-142 (tokens 1.2.0 unchanged)
+
+**Scope:** Policy + AgentOS boot errors, `realm up` / `realm status` diagnostics. Source: `docs/requirements/spec-T8580-req.md` (BOOTF-01..BOOTF-08, NFR-A1). No new tokens (tokens 1.2.0 unchanged), no new component (reuse `ds/StatusReadout`, `ds/NoticeBanner`, `ds/RefusalCard`, `ds/CheckList`), no brand change. Copy is fact-stating (what happened, what it means, what to do next); 0 dark patterns; secrets never rendered (capability-token refusal names mode `enforce` + key id only, NFR-S3; sockets/paths are path-class with socket mode 0600, NFR-S1).
+
+## SCR-BootBindingDiag — which of 4 bindings failed (US-137, BOOTF-01..BOOTF-04)
+
+**Question:** why did `realm up` / `realm status` fail, in 1 named code? **Flows:** diagnose-daemon, diagnose-driver, diagnose-image-config, retry-up.
+**Layout (CLI, lofi):**
+
+```
+┌─ [ds/StatusReadout] [DISCONNECTED] ────────────┐
+│ [ds/NoticeBanner] <CODE> — <binding>           │
+│ cause: <1 missing item, path class only>        │
+│ remedy: <1 action> · verify: <1 check>          │
+│ [ds/CheckList] daemon/driver/image/config ✓/✗   │
+└────────────────────────────────────────────────┘
+```
+
+- `default`: `disconnected` + `up: probing 4 bindings…` with elapsed. 4-row `ds/CheckList` (`daemon`, `driver`, `image`, `config`) reads `pass`/`fail` in text, never color-only.
+- `loading`: `up: starting daemon (≤200s budget, NFR-P1)…` with elapsed; never waits silently.
+- `error.daemon` (BOOTF-01): `REALM_NOT_ACTIVE — daemon socket absent (state-dir relative) after 1 start + 1 status wait` + remedy `fix daemon, then retry up`.
+- `error.driver` (BOOTF-02): `OPENSHELL_GATEWAY_LOST` or `OPENSHELL_START_FAILED` + failed step named; never rendered as `POLICY_DENIED` (AC-116).
+- `error.image-config` (BOOTF-03/04): `AGENTOS_NOT_CONFIGURED` or `POLICY_DENIED` + missing item named (image ref + expected digest prefix, or missing config/workspace root); 0 containers created (AC-115). Success prints `ACTIVE` + 1 container id + 0 `ERR_MODULE_NOT_FOUND` (AC-114).
+- `empty.no-config`: `no generated config selects matching daemon and driver — run realm init (writes templates without overwrite, private roots 0700)` (BOOTF-04).
+
+**Components:** `ds/StatusReadout@1.0` (labels ACTIVE/DISCONNECTED), `ds/NoticeBanner@1.0` (diagnostic card), `ds/CheckList@1.0` (4 bindings). **Focus order:** `workspace-selector`, `up-action`, `diagnostic-area`. **A11y:** WCAG-2.2-AA; `color.text.primary` on `color.background.primary` 17.73, `color.status.error` on white 6.47 (`ux_contrast` this run); min_contrast 6.47.
+
+```json
+{ "screen_id": "SCR-BootBindingDiag", "flows": ["diagnose-daemon", "diagnose-driver", "diagnose-image-config", "retry-up"], "states": ["default", "loading", "error.daemon", "error.driver", "error.image-config", "empty.no-config", "success"], "components": [{ "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ACTIVE", "DISCONNECTED"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "neverSilent": true } }, { "ref": "ds/CheckList@1.0", "props": { "rows": ["daemon", "driver", "image", "config"] } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["workspace-selector", "up-action", "diagnostic-area"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-114", "AC-115", "AC-116"] }
+```
+
+## SCR-BootRefusal — refused write names code + remedy (US-138, BOOTF-06/07)
+
+**Question:** why was 1 host `edit` / 1 Realm `write` refused? **Flows:** issue-write, read-refusal, follow-remedy.
+**Layout (Omp tool panel):**
+
+```
+┌─ [ds/ModeBanner] fail-closed ──────────────────┐
+│ [ds/RefusalCard] CODE + denied action + remedy │
+│ policy: <path class> · key id (never a token)  │
+└────────────────────────────────────────────────┘
+```
+
+- `default`: `fail-closed` banner + 5 Realm tools list; refusal pending.
+- `loading`: `omp: checking realm state…`.
+- `error.realm-not-active` (BOOTF-05 pre-active): 1 catalogue code each, 0 host files changed (AC-117).
+- `error.policy-denied` (BOOTF-06): denied action + policy file identity (path class, never file content) + remedy; capability-token case names mode `enforce` + 1 key id, 0 token values, 0 secret values (AC-120).
+- `error.agentos` (BOOTF-07): 1 catalogue code + failed step (`create`, `exec-child start`, `stop`) + sandbox id; daemon log and audit carry the same code.
+- `empty.tool-list`: mode with 0 tools stated, not blank. `success`: write landed in `/workspace` + 1 admission line + 1 result line under 1 correlation id (AC-118).
+
+**Components:** `ds/ModeBanner@1.0`, `ds/RefusalCard@1.0` (needsNextAction true), `ds/NoticeBanner@1.0`. **Focus order:** `tool-name`, `mode-banner`, `refusal-message`. **A11y:** WCAG-2.2-AA; min_contrast 6.47.
+
+```json
+{ "screen_id": "SCR-BootRefusal", "flows": ["issue-write", "read-refusal", "follow-remedy"], "states": ["default", "loading", "error.realm-not-active", "error.policy-denied", "error.agentos", "empty.tool-list", "success"], "components": [{ "ref": "ds/ModeBanner@1.0", "props": { "modes": ["fail-closed"] } }, { "ref": "ds/RefusalCard@1.0", "props": { "needsNextAction": true } }, { "ref": "ds/NoticeBanner@1.0", "props": { "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["tool-name", "mode-banner", "refusal-message"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-117", "AC-118", "AC-120"] }
+```
+
+## SCR-BootActiveProof — active proof + stdin-end hygiene (US-138, BOOTF-05/08)
+
+**Question:** is the session provably active, and does it survive stdin end? **Flows:** verify-active, end-stdin, reattach.
+**Layout:** `StatusReadout` line + `NoticeBanner` proof line: `container <id> · readback confirmed · markers: 1 removed, down calls: 0`.
+
+- `default`: `active` + container id line pending readback.
+- `loading`: `status: confirming sandbox state (one readback)…` (within NFR-B1 200s).
+- `error.readback`: `REALM_NOT_ACTIVE — readback did not confirm container <id>`; guard lifts only in the same turn readback confirms active (BOOTF-05).
+- `empty.no-session`: `no live session for <ws>` (text label, never blank).
+- `success`: `active` + 1 container id + 1 readback + stdin-end counts stated (1 marker removed, 0 `down` calls, sandbox stays up for next attach) (AC-118, AC-119).
+
+**Components:** `ds/StatusReadout@1.0`, `ds/NoticeBanner@1.0`. **Focus order:** `workspace-selector`, `status-query`, `notice-area`. **A11y:** WCAG-2.2-AA; min_contrast 6.47.
+
+```json
+{ "screen_id": "SCR-BootActiveProof", "flows": ["verify-active", "end-stdin", "reattach"], "states": ["default", "loading", "error.readback", "empty.no-session", "success"], "components": [{ "ref": "ds/StatusReadout@1.0", "props": { "labels": ["ACTIVE", "DISCONNECTED"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["workspace-selector", "status-query", "notice-area"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-118", "AC-119"] }
+```
+
+## SCR-BootRunbook — code-to-remedy lookup (US-142)
+
+**Question:** how does an operator fix a boot code without reading source? **Flows:** look-up-code, follow-remedy, verify-fix.
+**Layout:** table rows `code | remedy | verify` (4 rows: `REALM_NOT_ACTIVE`, `POLICY_DENIED`, `AGENTOS_NOT_CONFIGURED`, `OPENSHELL_GATEWAY_LOST`) + `CheckList` verify row.
+
+- `default`: 4 remedies + 4 verify steps listed (AC-130).
+- `loading`: `runbook: loading <code>…`.
+- `error.unknown-code`: `no remedy for <code> — run realm status` (never guessed).
+- `empty.no-match`: `no runbook entry` (not blank).
+- `success`: `verified — binding passes, active with 1 container id` (AC-131).
+
+**Components:** `ds/CheckList@1.0`, `ds/NoticeBanner@1.0`. **Focus order:** `code-row-link`, `remedy-link`, `verify-link`. **A11y:** WCAG-2.2-AA; min_contrast 6.47.
+
+```json
+{ "screen_id": "SCR-BootRunbook", "flows": ["look-up-code", "follow-remedy", "verify-fix"], "states": ["default", "loading", "error.unknown-code", "empty.no-match", "success"], "components": [{ "ref": "ds/CheckList@1.0", "props": { "rows": ["REALM_NOT_ACTIVE", "POLICY_DENIED", "AGENTOS_NOT_CONFIGURED", "OPENSHELL_GATEWAY_LOST"] } }, { "ref": "ds/NoticeBanner@1.0", "props": { "neverSilent": true } }], "a11y": { "target": "WCAG-2.2-AA", "focus_order": ["code-row-link", "remedy-link", "verify-link"], "min_contrast": 6.47 }, "tokens_version": "1.2.0", "fidelity": "lofi", "provisional": true, "acceptance_refs": ["AC-130", "AC-131"] }
+```
+
+## T8580 motion and targets
+
+| Name | Duration | Reduced-motion variant |
+|---|---|---|
+| boot-diag-swap | 0 ms | instant text replace (no transition) |
+| boot-refusal-swap | 0 ms | instant text replace (no transition) |
+
+Bound: 5000 ms (same convention as earlier screens; no motion tokens in file). Targets: `workspace-selector` 24x24, `up-action` 44x44, `code-row-link` 24x24 with ≥24 px clearance (SC 2.5.8). Status and reminder lines are non-interactive (`role="status"`, `aria-live="polite"`, never in tab order).

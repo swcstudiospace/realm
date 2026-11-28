@@ -673,3 +673,107 @@ Normative evidence set: 3 `WINDOW.md` addenda dated 2026-11-27 (phases 56, 57, 5
 ### 22.12 What was decided vs UNVERIFIED (§22)
 
 Decided (L2): docs-only 7-file evidence ship with 1 recorded billing-waiver line; 0 runtime topology, 0 contract, 0 NFR deltas; 100% NFR allocation; fitness F1–F4/F6/F7 measured pass. UNVERIFIED (never inferred): F5/F10 evidence (A08 NFR measurements; A05 commit + PR + CI + squash records; A12 ship-flow merge) — no commit, PR, merge or gate run under this task; live NFR measurements; A10 noting of the waiver as governance.
+
+## 23. T8580 boot repair — 4-binding diagnosis, up/active proof, guard lift (T8580-arch)
+
+**Capability:** `design.blueprint` · **Task:** `T8580-arch` · **Correlation:** `8580afa9-9458-4765-bc6e-36ca297050c1` · **Branch:** `fix/stdio-host-shutdown-log` · **Status:** IN_REVIEW
+**Sources:** `docs/requirements/spec-T8580-req.md` (US-137..US-142, AC-114..AC-131, BOOTF-01..BOOTF-08, NFR-P1/B1/S1/S3/A1/I1/C1), `src/core/errors.ts` (29-code frozen catalogue), `src/daemon/ensure.ts` (`ensureDaemon`/`daemonAnswers`/`reportingStartFailure`), `src/host/attach.ts` (verified/always/never retention), `src/host/boot.ts` (`BOOT_BOUNDS`, `withStartupBudget`), `src/host/boot-driver.ts` (attach + status readback validation), `src/cli/stdio-host.ts` (teardown: close client, remove marker, never `down`), `src/omp/plugin.ts` (Omp guard/backstop). No product code is written under this task; gates/formatters skipped per brief, parent runs them after join.
+
+### 23.1 Binding order and failure codes (the fix: 1 failure → 1 named cause)
+
+Boot resolves bindings in order `config → daemon → driver → image → active-proof`. The first failing binding decides the single catalogue code; later bindings are not probed and no generic boot error is emitted. This ordering is the design answer to BOOTF-01..BOOTF-04 and AC-114..AC-116.
+
+| Step | Binding | Failure names | Code(s) | Evidence seam (existing, reused) |
+|---|---|---|---|---|
+| 1 | **config** (BOOTF-04) | No generated config selects matching daemon+driver; `workspaceRoot` missing | `AGENTOS_NOT_CONFIGURED` (daemon/driver config) or `POLICY_DENIED` (outside-root/missing root) | `loadRuntimeConfig` shape-only; `bindRoot` realpaths + requires directory; `realm init` writes templates without overwrite, private roots 0700 |
+| 2 | **daemon** (BOOTF-01) | Control socket `run/control.sock` under state dir absent; one spawn, one status wait inside startup bound | `DAEMON_START_TIMEOUT` (cause = last probe code: `REALM_NOT_ACTIVE` / `TOOL_TIMEOUT` / `SCHEMA_INVALID`); `reportingStartFailure` surfaces the daemon's own `daemon.failed` code | `ensureDaemon` (spawn at most once, only when socket absent) + `daemonAnswers` probe; `withStartupBudget` = `STARTUP_BUDGET_EXCEEDED` at 200 s |
+| 3 | **driver** (BOOTF-02) | Compute-driver socket absent/stale; gateway unanswered | `OPENSHELL_GATEWAY_LOST` (lost after active) or `OPENSHELL_START_FAILED` (failed start), failed step named; **never** `POLICY_DENIED` | `driverAnswers()` socket probe (OBS-04) behind gateway answer; driver `startSocketServer` refuses `LOCK_CONFLICT` vs removes only a stale socket |
+| 4 | **image** (BOOTF-03) | Pulled sandbox image digest ≠ `sandbox/expected-digests.json` configured digest | `POLICY_DENIED` with image ref + expected digest **prefix** named (prefix only, 0 full-digest/secret leak beyond the pinned short prefix), `up` refused, 0 containers created | `compute-driver-create.ts` "must be the configured digest exactly"; `hardening.ts` `image-digest` check; `src/runtime/config.ts` requires digest-pinned ref |
+| 5 | **active-proof** (BOOTF-05) | `up` + readback does not confirm this session+root | `REALM_NOT_ACTIVE` (retryable) until adopted; `STARTUP_BUDGET_EXCEEDED` at bound | `attach.ts` connect+idempotent-up → `boot-driver` status readback validated against selection (session id, bound root); non-matching reply → client closed, state `error` |
+
+Policy/AgentOS error paths (BOOTF-06/BOOTF-07): a `POLICY_DENIED` in boot names **action + policy file identity (path class, never content) + remedy**; a capability-token refusal names `capabilityTokens` mode + key id, **0 token values**. An AgentOS boot error names **1 catalogue code + failed step (`create` | `exec-child start` | `stop`) + sandbox id**; the daemon log and audit line carry the same code for the same failure (AC-120, NFR-S3). Shutdown hygiene (BOOTF-08, AC-119): stdin-end/signal → close client, remove 1 presence marker, **0 `down` calls**; sandbox stays up for next attach (already implemented in `stdio-host.ts`; this blueprint pins it as a regression gate).
+
+### 23.2 Active-proof and guard-lift sequence (BOOTF-05, AC-114/AC-118)
+
+```mermaid
+flowchart LR
+  Cfg[1 config check] --> Daemon[2 ensureDaemon spawn-once]
+  Daemon --> Driver[3 driverAnswers + gateway]
+  Driver --> Img[4 digest-pinned image]
+  Img --> Up[5 idempotent up under startupBudgetMs 200s]
+  Up --> Read[6 status readback valid vs selection]
+  Read --> Active[active: guard lifts same turn]
+  Active --> Write[Realm write lands: 1 admission + 1 result, 1 correlation id]
+```
+
+While steps 1–6 are incomplete the Omp guard stays fail-closed (D4): host `edit` and Realm `write` refuse with `REALM_NOT_ACTIVE` (retryable), **0 successes, 0 host files changed** (AC-117). The guard lifts **in the same turn** the readback confirms active — never on `up` alone (an `up` reply without a validating readback does not adopt the client). Control-socket reads stay within the 10 s budget (NFR-P1); diagnosis prints 1 named cause within 10 s of the failed step (NFR-B1).
+
+### 23.3 Container model and coupling budget (boot slice)
+
+`arch_c4_fanout`: `container_count=10`, `relation_count=12`, `max_fan_out=4` (BootDriver → Daemon/PolicyGuard/AuditLog + 1), `over_budget=[]`, `isolated=[]` against fan-out budget **8**. Containers: Operator, RealmCLI, OmpHost, BootDriver, Daemon, ControlSocket, DriverGateway, Sandbox, PolicyGuard, AuditLog. **No new container is introduced** — BootDriver, ensureDaemon and the driver probe already exist; the fix is ordering + naming, not topology. Trust zones unchanged from §2; the only crossing added is the operator-readable diagnose output (Operator ← BootDriver), which carries path classes only and 0 secrets (NFR-S3; STRIDE spoof/tamper is bounded by socket modes 0700/0600, already in §9 — no new high-risk crossing, A10 co-sign of §9 unchanged).
+
+### 23.4 Module layering and cycles (boot slice)
+
+`layer_order`: `surface → orchestration → runtime → domain → platform` (unchanged from §4). `arch_layer_violations`: `violation_count=0`, `checked_edges=10`, `unassigned=[]` (cli/omp-plugin surface; boot-driver/daemon-ensure/daemon orchestration; driver-gateway/sandbox runtime; policy-guard/audit-chain domain; core-errors platform). `arch_cycle_check`: `has_cycle=false`, `node_count=9`, `cyclic_node_count=0`, `cyclic_components=[]`. Binding checks (config/daemon/driver/image) live in their owning layers: config in caller edge, daemon in orchestration, driver in runtime, image in runtime, policy text in domain — **no upward edge, no new cross-layer import**. `shared_verdict` on `["info"]`: `pass`.
+
+### 23.5 Contracts (additive only — 0 breaking)
+
+| Contract | File | Version | Operations | Breaking? |
+|---|---|---|---|---|
+| API-RealmBoot (new) | `docs/architecture/contracts/api-realm-boot.yaml` (OpenAPI 3.1.0) | 1.0.0 | 2 (`diagnoseBoot`, `bootStatus`) | No — new contract, additive by construction; existing `API-RealmControl` 1.0.0 (7 ops), `API-GsdLinear` 1.0.0, `API-RealmOmpPlugin` 1.0.0 untouched |
+
+`arch_contract_ops` on the boot document: `operations=2`. `arch_field_breaks` (response, `label`/`code`/`correlationId` required, unchanged): `breaking_change=false`, `breaking=[]`, `additive=[]`. Existing `API-RealmControl` clauses already cover `/up` (200 s), `/status` (1-of-2 labels + gateway-loss code distinct from `AGENTOS_CRASH_LOOP`), `/tools/write` (fail-closed) — the boot contract only names the binding/remedy envelope over them. Consumers: A05, A06, A08. Pin to digest after parent computes it; N-1 30-day window applies to any future revision.
+
+### 23.6 NFR bindings (7 NFRs, 100%)
+
+`arch_nfr_allocation`: `nfr_count=7`, `allocated=[NFR-P1, NFR-B1, NFR-S1, NFR-S3, NFR-A1, NFR-I1, NFR-C1]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`. Detail in `nfr-allocation.md` §23 addendum.
+
+| NFR | Kind | Binding (clause / component budget) | Limit |
+|---|---|---|---|
+| NFR-P1 | quantitative | Component budget: `realm up` → active | 200 s on 5.7.1 stack |
+| NFR-P1 | quantitative | Component budget: control-socket read | 10 s, 1 response |
+| NFR-B1 | quantitative | Component budget: boot diagnosis 1 named cause | 10 s from failed step |
+| NFR-B1 | quantitative | Component budget: active proof (container + readback) | 200 s |
+| NFR-S1 | quantitative | Clause: `API-RealmControl /tools/write` fail-closed | 0 successes while disconnected; socket dir 0700 / socket 0600; 0 scanner secrets |
+| NFR-S3 | quantitative | Clause: `API-RealmBoot /diagnose` refusal/diagnostic text | 0 token values; 0 secret values |
+| NFR-A1 | qualitative | Clause: `API-RealmControl /status` 1 of 2 labels + color-independent cue | 1 label per paint |
+| NFR-I1 | quantitative | Clause: `API-ToolResult` frozen catalogue codes C + en_US, English text | 0 locale parses |
+| NFR-C1 | qualitative | Clause: `API-AuditLine` redaction sentinel, AGPL-3.0-only | 0 telemetry; 0 PII fields |
+
+`arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, diagnose_s max 10, disconnect_successes max 0} and 0 measurements: `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, diagnose_s, disconnect_successes]` — honest fail-closed reading; measurements are pending A08 live proof on the realm account (checkout host has no live stack). UNVERIFIED, never a pass.
+
+### 23.7 Decisions (L2 — catalog patterns, 0 new infrastructure, 0 new dependency)
+
+| Decision | Record | Effect |
+|---|---|---|
+|---|---|---|
+| Bind 4 boot bindings in `config → daemon → driver → image` order; first failure names 1 catalogue code; driver failure never reports as `POLICY_DENIED` | This §23 (ADR filing deferred to parent script run — see §23.9) | `BOOTF-01..04`, AC-114..116, US-137; fail-closed stands (D4) |
+| Active ⇔ `up` 1 container id + 1 validating readback; Omp guard lifts in the same turn as readback confirmation | This §23 | `BOOTF-05`, AC-118, US-138; `up` alone never adopts |
+| Diagnose/refusal text carries path classes + digest prefix + key id only; 0 tokens/secrets; daemon log and audit share the code | This §23 | `BOOTF-06/07`, AC-120, NFR-S3 |
+| Shutdown never sends `down`; close client + remove marker only | Pinned from `stdio-host.ts` (no change) | `BOOTF-08`, AC-119 |
+| Additive `API-RealmBoot` 1.0.0 (2 ops); 0 changes to 1.0.0 published contracts | `docs/architecture/contracts/api-realm-boot.yaml` | Contract-before-tasks (decision_logic #2); non-breaking L2 |
+
+No novel infrastructure, no new first-party dependency, no licence change (AGPL-3.0-only preserved): all four bindings reuse `ensureDaemon`, `attach`, `boot-driver`, `driverAnswers`, digest check and `withStartupBudget`. Deviations carried, not waived: DEVT-01 (Greptile skip, owner ratifies at merge) and Q2 (Phase 59 gated on `53-DESIGN.md` ratification D-v9-6) stay owner decisions — A03 neither waives nor ratifies them.
+
+### 23.8 Supply-chain, tech stack, tracking/ship/quality (carry-forward, changes: none)
+
+SBOM/attestation, dependency allowlist and licence matrix (§10/§22.8) unchanged: Node 22.13+ strict TS ESM single package (`node:test`, `fast-check`), rootless Podman 5.x digest-pinned, OpenShell 0.1.5 + Realm compute driver, GitHub Actions attested release. Quality bar (US-140): 0 suppression comments, 0 silent catches beyond the 10 named QUAL-01 exceptions, module ratchet ≤1000 lines, coverage floors for `src/fs`/`src/core`/`src/tools` (F10, A08 measures). Tracking (US-139): 5 Linear issues + 5 Notion pages (phases 55–59), deduplicated before creation, bidirectionally linked — A01 executes; A03 bounds (this §23 for phases 55–59 relies on `API-GsdLinear` 1.0.0 + documented phase ids, never creates tracking rows). Ship (US-141): 5 CI green (verify ×2, site, audit, guard), 1 PR, 1 squash via ship flow, 0 version/CHANGELOG edits, 1 DEVT-01 waiver line; Greptile handling per DEVT-01 owner ratification. Runbook (US-142): maps 4 boot codes (`REALM_NOT_ACTIVE`, `POLICY_DENIED`, `AGENTOS_NOT_CONFIGURED`, `OPENSHELL_GATEWAY_LOST`) → remedy + verification step (extends Phase 55 HEALTH-01/02 runbook work).
+
+### 23.9 Fitness functions (CI, boot slice)
+
+| # | Function | Check | Budget / rule |
+|---|---|---|---|
+| F1 | Layer direction | `arch_layer_violations` (§23.4) | 0 violations (measured pass) |
+| F2 | Acyclicity | `arch_cycle_check` (§23.4) | `has_cycle=false` (measured pass) |
+| F3 | Coupling | `arch_c4_fanout` (§23.3) | fan-out ≤ 8; 0 isolated (measured pass) |
+| F4 | NFR allocation | `arch_nfr_allocation` (§23.6) | 100% allocated (measured pass) |
+| F5 | NFR budget | `arch_nfr_budget` vs A08 live measurements | within budget or named skip (skip ≠ pass; currently UNVERIFIED) |
+| F6 | Contract conformance | `arch_contract_ops` (2 ops) + `arch_field_breaks` (`breaking_change=false`) | additive new contract, 0 breaking (measured pass; `arch_contract_check` script skipped per brief — parent runs after join, UNVERIFIED here and never inferred) |
+| F7 | ADR lifecycle | Decisions recorded in §23.7 as proposed copy | Parent files via `arch_adr.py` after join (script skipped per brief; drafts listed with `status: proposed` in the task result) |
+| F8 | Quality/ship evidence | 8 gates exit 0; 5 CI green; 1 PR + 1 squash; 4 runbook mappings (A05/A08/A12 runs) | UNVERIFIED here — no build/test/lint/commit/PR/merge under this task |
+
+Tier rule: fitness-fail on F1–F4/F6/F7 blocks downstream CLAIMED tasks; F5/F8 are `UNVERIFIED`, not passes, until the owning suite/ship/tracker operation reports.
+
+### 23.10 What was decided vs UNVERIFIED (§23)
+
+Decided (L2): binding order + 1-code-per-failure mapping; active-proof definition and same-turn guard lift; secret-free diagnose envelope; additive `API-RealmBoot` 1.0.0; 100% NFR allocation; fitness F1–F4/F6 measured pass; 0 topology/dependency/licence deltas. UNVERIFIED (never inferred): `arch_contract_check` script run, ADR file recording, live NFR measurements and live boot receipt (realm account, Podman 5.7.1 / OpenShell 0.1.5), 8-gate/5-CI/PR/squash evidence, A10 threat co-sign, DEVT-01/Phase-59 owner ratifications, Linear/Notion rows (A01 executes).
