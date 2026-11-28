@@ -119,3 +119,23 @@ unmeasured row reads `unknown — not measured` and is never green. Blocked rows
 | SCR-GateEnforcementBoard.error.validation | usage line + code; unknown gate name reads `not run`, never pass |
 | SCR-GateEnforcementBoard.empty.no-verdicts | `0 verdicts recorded for this branch` (not pass; release held) |
 | SCR-GateEnforcementBoard.success.ready | `4 of 4 verdicts present · most-restrictive wins · release ready`; `100 percent of 4 stories trace to 1 or more criteria, 0 uncovered requirements` (label `held`/`ready` + shape cue, NFR-A3) |
+
+## T8580 — SCR-BootBindingDiag exact copy (AC-114..AC-116)
+
+stdout carries the catalogue code/result; stderr carries the human reason. Exactly 1 code,
+1 binding, 1 remedy per failure; later bindings read `not probed`, never `pass`. All text
+survives `NO_COLOR`/pipe. Diagnostic text never carries file content, tokens, or secrets.
+
+| Screen.state | Operator copy |
+|---|---|
+| SCR-BootBindingDiag.default | `[DISCONNECTED]` + `up: probing 4 bindings…` with elapsed; checklist `daemon: pass/fail/not probed · driver: … · image: … · config: …` in text |
+| SCR-BootBindingDiag.loading | `up: starting daemon (≤200s budget, NFR-P1)…` with elapsed; never waits silently |
+| SCR-BootBindingDiag.error.daemon | `REALM_NOT_ACTIVE — daemon socket absent (state-dir relative) after 1 start + 1 status wait` · `cause: daemon socket absent` · `remedy: fix daemon, then retry up` · `verify: up prints 1 container id and status reads ACTIVE` |
+| SCR-BootBindingDiag.error.driver | `OPENSHELL_GATEWAY_LOST — gateway unanswered` or `OPENSHELL_START_FAILED — driver failed to start (failed step: <step>)` · `cause: driver socket absent/stale` · `remedy: fix driver, then retry up` · `verify: up prints 1 container id and status reads ACTIVE`; never rendered as `POLICY_DENIED` |
+| SCR-BootBindingDiag.error.image-config | `POLICY_DENIED — image digest mismatch: <image ref>, expected digest <prefix>…` · `cause: pulled image digest ≠ configured digest; 0 containers created` · `remedy: point config at the pinned image digest, then retry up` — or `AGENTOS_NOT_CONFIGURED` / `POLICY_DENIED` naming the missing config or workspace root (path class only) |
+| SCR-BootBindingDiag.empty.no-config | `no generated config selects matching daemon and driver — run realm init (writes templates without overwrite, private roots 0700)` |
+| SCR-BootBindingDiag.success | `[ACTIVE]` + `container <id> · readback confirmed · 0 ERR_MODULE_NOT_FOUND` (1 container id + 1 valid readback; `up` alone never adopts) |
+
+NoticeBanner (`neverSilent: true`): the diagnostic card above is the single notice line —
+always rendered, `role="status"` `aria-live="polite"`, never in tab order. A disconnected
+realm still refuses host `edit` / Realm `write` with `REALM_NOT_ACTIVE` (fail-closed, D4).

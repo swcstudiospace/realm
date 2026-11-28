@@ -102,3 +102,16 @@ authority; no axe run in this repo (no axe dependency, A08 runs per story) — d
 `critical` as 0 from static checks. CLI/daemon boards ship no web bundle (no browser JS), so no
 bundle bytes / Lighthouse / CWV numbers are claimed here (UNVERIFIED unless a docs build is
 measured downstream).
+
+## T8580 addendum — test plan for A08 (SCR-BootBindingDiag, AC-114..AC-116)
+
+| Screen | Must-assert cases (counts; A08 verifies, A06 does not claim) |
+|---|---|
+| SCR-BootBindingDiag | exactly 1 of `ACTIVE`/`DISCONNECTED` (`●`/`○` redundant); 4 checklist rows (`daemon`,`driver`,`image`,`config`, text verdicts, `not probed` after first failure, never `pass`); `error.daemon` reads `REALM_NOT_ACTIVE`, `error.driver` reads `OPENSHELL_GATEWAY_LOST`/`OPENSHELL_START_FAILED` and never `POLICY_DENIED`, `error.image-config` reads `AGENTOS_NOT_CONFIGURED`/`POLICY_DENIED` with 0 containers created; each failure = 1 code + 1 binding + 1 cause + 1 remedy + 1 verify; `empty.no-config` names `realm init`; `success` = `ACTIVE` + 1 container id + 1 readback + 0 `ERR_MODULE_NOT_FOUND`; disconnected write refuses `REALM_NOT_ACTIVE` with 0 host files changed |
+
+State parity input = `default, loading, error.daemon, error.driver, error.image-config,
+empty.no-config, success` (7, dotted sub-states count separately). Focus order
+`workspace-selector, up-action, diagnostic-area` (24×24 / 44×44 / non-interactive status,
+0 positive tabindex). Mono/no-colour + pipe-order (code first, reason second) apply as
+before. Axe in component tests remains the authority; no axe run claimed here. CLI/daemon
+surfaces ship no web bundle, so no Lighthouse/CWV/bundle numbers are claimed (UNVERIFIED).

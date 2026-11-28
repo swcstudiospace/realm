@@ -318,6 +318,56 @@
       "reason": "D-1306 test-only seam: the operation detail shape that the cross-host contract checker (test/support/host-contract.ts) reads from install, uninstall and status; kept exported so the checker types match the adapter's result"
     },
     {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "ActiveProofInput",
+      "reason": "T8580 test-only seam: the active-proof shape pinned by test/host/boot-diagnose.test.ts"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "BindingProbes",
+      "reason": "T8580 test-only seam: the probe shape pinned by test/host/boot-diagnose.test.ts"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "bindingRows",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "capabilityRefusal",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "confirmActiveProof",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "diagnoseBoot",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "digestPrefix",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "guardLifted",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "planShutdown",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
+      "file": "src/host/boot-diagnose.ts",
+      "name": "secretFree",
+      "reason": "T8580 test-only seam: kept as a documented seam, referenced only by tests"
+    },
+    {
       "file": "src/host/boot-driver.ts",
       "name": "STDIO_TOOLS",
       "reason": "D-1306 test-only seam: the six Realm tool names the driver's guard passes, pinned by test/host/boot-driver.test.ts"

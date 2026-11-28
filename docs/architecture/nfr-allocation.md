@@ -101,3 +101,23 @@ Measured by `arch_nfr_allocation`: `nfr_count=5`, `allocated=[NFR-P1, NFR-S1, NF
 | NFR-C1 | qualitative | clause | Redaction sentinel, AGPL-3.0-only | 0 | telemetry | `API-RealmControl /audit/verify` |
 
 **Budgets vs measurements:** `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, disconnect_successes max 0} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, disconnect_successes]`. Measurements are pending A08 on the 5.7.1 realm account. UNVERIFIED, not a pass.
+
+## T8580 boot-repair addendum (T8580-arch)
+
+**Inputs:** `docs/requirements/spec-T8580-req.md` §5 (NFR-P1, NFR-B1, NFR-S1, NFR-S3, NFR-A1, NFR-I1, NFR-C1) over US-137..US-142, AC-114..AC-131, BOOTF-01..BOOTF-08. No NFR is invented; every ID is verbatim from A02 spec §5.
+
+Measured by `arch_nfr_allocation`: `nfr_count=7`, `allocated=[NFR-P1, NFR-B1, NFR-S1, NFR-S3, NFR-A1, NFR-I1, NFR-C1]`, `unallocated=[]`, `unmeasurable=[]`, `unknown_nfr_ids=[]`, `coverage_pct=100`, `fully_allocated=true`.
+
+| NFR id | Kind | Target kind | Target ref | Limit | Unit | Clause in contract |
+|---|---|---|---|---|---|---|
+| NFR-P1 | quantitative | component_budget | ControlSocket `/up` startupBudgetMs | 200 | s | `API-RealmControl /up` |
+| NFR-P1 | quantitative | component_budget | ControlSocket `/status` read budget | 10 | s | `API-RealmControl /status` |
+| NFR-B1 | quantitative | component_budget | Boot diagnosis 1 named cause within | 10 | s | `API-RealmBoot /diagnose` |
+| NFR-B1 | quantitative | component_budget | Active proof container + readback | 200 | s | `API-RealmBoot /diagnose` |
+| NFR-S1 | quantitative | clause | `/tools/write` fail-closed refusal | 0 | successes | `API-RealmControl /tools/write` |
+| NFR-S3 | quantitative | clause | `/diagnose` refusal text secret-free | 0 | secret values | `API-RealmBoot /diagnose` |
+| NFR-A1 | qualitative | clause | `/status` label enum + color-independent cue | 1 | label | `API-RealmControl /status` |
+| NFR-I1 | quantitative | clause | Frozen catalogue codes C + en_US | 0 | locale parses | `API-ToolResult` |
+| NFR-C1 | qualitative | clause | Redaction sentinel, AGPL-3.0-only | 0 | telemetry | `API-RealmControl /audit/verify` |
+
+**Budgets vs measurements:** `arch_nfr_budget` with budgets {startup_s max 200, control_read_s max 10, diagnose_s max 10, disconnect_successes max 0} and 0 measurements returns `checked=0`, `within_budget=false`, `unmeasured=[startup_s, control_read_s, diagnose_s, disconnect_successes]`. Measurements are pending A08 live proof on the 5.7.1 realm account. UNVERIFIED, not a pass.
