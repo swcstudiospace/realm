@@ -25,11 +25,22 @@ function fixture(t: TestContext) {
 }
 
 function assertDenied(action: () => unknown): void {
-  assert.throws(
-    action,
-    (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
-  );
-}
+   assert.throws(
+     action,
+     (error: unknown) => error instanceof RealmError && error.code === "POLICY_DENIED",
+   );
+ }
+
+ // The outside-policy-roots refusal carries its catalogue cause: the canonical
+ // request escapes the allowed roots, so PATH_ESCAPE (D-22). Bare bindRoot
+ // failures (relative/missing/non-directory) keep assertDenied above.
+function assertDeniedWithCause(action: () => unknown, causeCode: string): void {
+   assert.throws(
+     action,
+     (error: unknown) =>
+       error instanceof RealmError && error.code === "POLICY_DENIED" && error.causeCode === causeCode,
+   );
+ }
 
 void test("bindWorkspaceUnderPolicy accepts a directory inside a policy root and returns its real path (D-22)", (t) => {
   const { ws, inner } = fixture(t);
@@ -43,33 +54,32 @@ void test("bindWorkspaceUnderPolicy refuses a relative path with POLICY_DENIED (
 });
 
 void test("bindWorkspaceUnderPolicy refuses a path outside every policy root with POLICY_DENIED (D-22)", (t) => {
-  const { ws, outside } = fixture(t);
-  assertDenied(() => bindWorkspaceUnderPolicy([ws], outside));
-});
+   const { ws, outside } = fixture(t);
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([ws], outside), "PATH_ESCAPE");
+ });
 
 void test("bindWorkspaceUnderPolicy refuses a sibling whose name starts with a policy root name (D-22)", (t) => {
-  const { ws, sibling } = fixture(t);
-  assert.ok(sibling.startsWith(ws), "the sibling name must share the root name as a prefix");
-  assertDenied(() => bindWorkspaceUnderPolicy([ws], sibling));
-});
+   const { ws, sibling } = fixture(t);
+   assert.ok(sibling.startsWith(ws), "the sibling name must share the root name as a prefix");
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([ws], sibling), "PATH_ESCAPE");
+ });
 
 void test("bindWorkspaceUnderPolicy refuses a symbolic link that escapes the policy root (D-22)", (t) => {
-  const { ws, outside } = fixture(t);
-  const escape = join(ws, "escape");
-  symlinkSync(outside, escape, "dir");
-  assertDenied(() => bindWorkspaceUnderPolicy([ws], escape));
-});
+   const { ws, outside } = fixture(t);
+   const escape = join(ws, "escape");
+   symlinkSync(outside, escape, "dir");
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([ws], escape), "PATH_ESCAPE");
+ });
 
 void test("bindWorkspaceUnderPolicy refuses when any policy root cannot be canonicalized (D-22)", (t) => {
   const { base, ws, inner } = fixture(t);
   assertDenied(() => bindWorkspaceUnderPolicy([ws, join(base, "missing")], inner));
 });
-
 void test("bindWorkspaceUnderPolicy refuses every path when the policy has no workspace roots (D-21, D-22)", (t) => {
-  const { ws, inner } = fixture(t);
-  assertDenied(() => bindWorkspaceUnderPolicy([], inner));
-  assertDenied(() => bindWorkspaceUnderPolicy([], ws));
-});
+   const { ws, inner } = fixture(t);
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([], inner), "PATH_ESCAPE");
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([], ws), "PATH_ESCAPE");
+ });
 
 void test("verifyPinnedAt returns the pinned root when the path still names the directory pinned earlier (D-22, FS-02)", (t) => {
   const { ws } = fixture(t);
@@ -139,13 +149,13 @@ void test("bindWorkspaceUnderPolicy binds a project nested in another project to
 });
 
 void test("bindWorkspaceUnderPolicy refuses a sibling named after the root with a trailing 2 with POLICY_DENIED (MULTI-02)", (t) => {
-  const { base } = fixture(t);
-  const root = join(base, "proj-root");
-  const sibling = join(base, "proj-root2");
-  mkdirSync(root);
-  mkdirSync(sibling);
-  assertDenied(() => bindWorkspaceUnderPolicy([root], sibling));
-});
+   const { base } = fixture(t);
+   const root = join(base, "proj-root");
+   const sibling = join(base, "proj-root2");
+   mkdirSync(root);
+   mkdirSync(sibling);
+   assertDeniedWithCause(() => bindWorkspaceUnderPolicy([root], sibling), "PATH_ESCAPE");
+ });
 
 void test("bindWorkspaceUnderPolicy accepts the configured root itself by equality (MULTI-02)", (t) => {
   const { ws } = fixture(t);

@@ -84,7 +84,8 @@ export interface ResolvedSelection {
 }
 
 // Binds, verifies and derives the identity of the project a selection names. An admitted session is checked against its
-// pinned directory: a renamed or swapped directory is POLICY_DENIED. An unknown session is bound under the policy roots and the
+// pinned directory: a renamed or swapped pin is POLICY_DENIED caused by SANDBOX_NAME_IN_USE (the session id is the
+// sandbox-name derivation of its workspace). An unknown session is bound under the policy roots and the
 // configured workspace root, and its id must be the one the selection names (SCHEMA_INVALID otherwise). No runtime I/O.
 export function resolveSelection(input: ResolveSelectionInput): ResolvedSelection {
   const { selection, policy, ceiling, registry } = input;
@@ -92,13 +93,13 @@ export function resolveSelection(input: ResolveSelectionInput): ResolvedSelectio
   if (entry !== undefined) {
     const pinned = verifyPinnedAt(entry.pinned, selection.workspaceRoot);
     if (sessionIdOfWorkspace(entry.pinned.realPath) !== selection.sessionId) {
-      throw makeRealmError("POLICY_DENIED");
+      throw makeRealmError("POLICY_DENIED", "SANDBOX_NAME_IN_USE");
     }
     return { sessionId: selection.sessionId, pinned, entry };
   }
   const pinned = bindWorkspaceUnderPolicy(policy.workspaceRoots, selection.workspaceRoot);
   if (!isInsideRoot(ceiling, pinned.realPath)) {
-    throw makeRealmError("POLICY_DENIED");
+    throw makeRealmError("POLICY_DENIED", "PATH_ESCAPE");
   }
   const sessionId = sessionIdOfWorkspace(pinned.realPath);
   if (sessionId !== selection.sessionId) {

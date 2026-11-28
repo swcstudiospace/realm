@@ -2037,6 +2037,7 @@ void test("T1 (b): up for a directory under a policy root but outside the config
 
   const reply = await sendRequest(daemon.socketPath, upRequest("ub", sibling));
   assert.equal(reply.error?.code, "POLICY_DENIED");
+  assert.equal(reply.error.causeCode, "PATH_ESCAPE", "the ceiling refusal carries cause PATH_ESCAPE so Omp paints POLICY_DENIED (cause: PATH_ESCAPE)");
   assert.equal(parts.events.includes("probe"), false, "no probe ran");
   assert.equal(parts.exec.callCount("create"), 0, "no container was created");
   assert.deepEqual(new SessionStore(fixture.stateDir).list(), [], "no record was written");

@@ -51,7 +51,7 @@ export function bindWorkspaceUnderPolicy(
   if (roots.some((policyRoot) => isInsideRoot(policyRoot, root.realPath))) {
     return root;
   }
-  throw makeRealmError("POLICY_DENIED");
+  throw makeRealmError("POLICY_DENIED", "PATH_ESCAPE");
 }
 
 // Returns the pinned root when requested names the same directory now, and throws POLICY_DENIED
