@@ -4,6 +4,14 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.14] - 2026-11-28
+
+### Fixed
+- fix(omp): named refusal causes and transition-only status notifications (44514b8d)
+
+### Maintenance
+- chore(gates): allowlist grown plugin file, drop self-only export (339407e7)
+
 ## [0.9.13] - 2026-11-28
 
 ### Fixed
