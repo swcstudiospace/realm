@@ -2,7 +2,7 @@
 phase: 57-htier-01-attribution-retest
 verified: 2026-11-25
 head: 404da2b
-status: passed-with-gaps
+status: gaps_found
 score: 2/3 criteria verified, 1 carried (gate-blocked)
 ---
 
