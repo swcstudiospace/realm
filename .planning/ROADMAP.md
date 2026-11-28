@@ -699,11 +699,11 @@ Milestone v9.0 phases (55 to 59) are independent in code and each depends on Pha
 | 52. Legacy kimi cause (GAP-43-03) | 1/1 | Complete | 2026-11-19 |
 | 53. Concurrent binding design (HITL, owner-approved scope) | 1/1 | Complete | 2026-11-19 |
 | 54. Snapshots design (HITL, owner-approved scope) | 1/1 | Complete | 2026-11-19 |
-| 55. Omp plugin health check | 0/0 | Planned | - |
-| 56. F-51-1 cause | 0/0 | Planned | - |
-| 57. HTIER-01 attribution retest | 0/0 | Planned | - |
-| 58. KIMV-02 recorder fix and rerun | 0/0 | Planned | - |
-| 59. Concurrent binding implementation | 0/0 | Planned | - |
+| 55. Omp plugin health check | 1/1 | Complete | 2026-11-22 |
+| 56. F-51-1 cause | 1/1 | Complete (gaps_found carried; 2026-11-27 live window: 33/36 clean, row-absent x3) | 2026-11-27 |
+| 57. HTIER-01 attribution retest | 1/1 | Complete (gaps_found carried; 2026-11-27 cold+warm attribution fail evidence) | 2026-11-27 |
+| 58. KIMV-02 recorder fix and rerun | 1/1 | Complete (gaps_found; live criterion met 2026-11-27, GAP-43-03 closed) | 2026-11-27 |
+| 59. Concurrent binding implementation | 1/1 | Complete | 2026-11-22 |
 
 ### Phase 21: Host plugin contract and installer
 

@@ -1,8 +1,8 @@
 ---
 phase: 58-kimi-recorder-fix-and-rerun
 verified: 2026-11-25T00:00:00Z
-status: passed-with-gaps
-score: 1/3 criteria verified, 2/3 carried (gate-blocked)
+status: gaps_found
+score: gaps_found (live criterion met 2026-11-27 per 58-VERIFICATION-UPDATE-20261127.md; cleanup-down TOOL_TIMEOUT under load remains open)
 head: 404da2b
 date: 2026-11-25
 ---
