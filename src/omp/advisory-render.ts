@@ -115,3 +115,42 @@ export function renderRestoreFailedLine(cause: string): string {
 export function renderMatrixVerifiedLine(): string {
   return MATRIX_VERIFIED_LINE;
 }
+
+/** The minimal host surface an advisory paint needs: the widget region plus notices. */
+export interface AdvisoryPaintUi {
+  setWidget?: (key: string, text: string | string[]) => void;
+  notify(message: string): void;
+}
+
+// The exact advisory text a host last painted, so unchanged polls repaint
+// nothing and never re-notify. Kept beside the pure render, which stays
+// side-effect free.
+const advisoryPainted = new WeakMap<object, string>();
+
+// Paints advisory lines once per content change and notifies once with the
+// headline. Null (a complete plan, AC-78) paints and notifies nothing, an
+// unchanged poll repaints nothing and never re-notifies, and a host without
+// the widget region (toggle off) paints and notifies nothing. Returns true
+// while the advisory is on screen (freshly painted or already showing it).
+export function paintAdvisory(ui: AdvisoryPaintUi, lines: string[] | null): boolean {
+  if (lines === null || lines.length === 0) {
+    return false;
+  }
+  if (typeof ui.setWidget !== "function") {
+    return false;
+  }
+  const text = lines.join("\n");
+  if (advisoryPainted.get(ui) === text) {
+    return true;
+  }
+  // Cached only after the write succeeds, like the status funnel: a throw
+  // leaves the cache stale, so the next render retries instead of skipping.
+  ui.setWidget(ADVISORY_WIDGET_KEY, lines);
+  advisoryPainted.set(ui, text);
+  try {
+    ui.notify(lines[0] ?? CONTINUES_LINE);
+  } catch {
+    // The paint stands; the text stays recorded so the next poll stays quiet.
+  }
+  return true;
+}

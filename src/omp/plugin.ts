@@ -20,7 +20,7 @@
 // The daemon owns policy; the startup budget default (BOOT_BOUNDS.startupBudgetMs in src/host/boot.ts) mirrors its default. Bounded
 // re-attach adds no handshake (O4). Every bound, code list, the sub-state table and the jitter function live in src/host/boot.ts.
 
-import { makeRealmError, RealmError } from "../core/errors.js";
+import { makeRealmError, RealmError, type ErrorCode } from "../core/errors.js";
 import type { MutationDenyCode } from "../core/policy.js";
 import type { DaemonClient, DaemonStatus } from "../daemon/client.js";
 import { SentRequestError } from "../daemon/channel.js";
@@ -40,11 +40,13 @@ import {
   isLinkLostCode,
   isRetryableAttachCode,
   reattachTransitionAllowed,
+  refusalCauseText,
+  withRefusalCause,
   type BootLink,
   type ResolvedBoot,
 } from "../host/boot.js";
 import { hostToolSetOf, modeOf, setHostMode, type HostToolSet } from "./host-tools.js";
-import { nowIso, paint, paintError, paintRefusal, paintStatusRead, paintToggleOnce, shownBySession } from "./status-render.js";
+import { nowIso, notifyPaintTransition, paint, paintError, paintRefusal, paintStatusRead, paintToggleOnce, shownBySession } from "./status-render.js";
 
 // Status rendering lives in ./status-render.js (extracted to keep this module under the size
 // ratchet); the names below stay importable from here, unchanged.
@@ -169,9 +171,10 @@ export interface ActiveSession {
   // The error the poll last painted, with the stamp it carried. A repeat of the same error reuses the
   // stamp, so the repaint stays quiet until the transition really changes.
   errorStamp: { readonly code: string; readonly at: string } | null;
-  // The refusal the last attach reported, with the state the daemon reported alongside it. It stays on screen while the
-  // daemon keeps reporting that state; a status read that reports a different state replaces it. Null when none stands.
-  refusal: { readonly code: string; readonly state: StateSnapshot["state"] } | null;
+  // The refusal the last attach reported, with the state the daemon reported alongside it and the
+  // sanitized catalogue cause the refusal carried, if any. It stays on screen while the daemon keeps
+  // reporting that state; a status read that reports a different state replaces it. Null when none stands.
+  refusal: { readonly code: string; readonly state: StateSnapshot["state"]; readonly causeCode: ErrorCode | undefined } | null;
   // The re-attach sub-state: "off" while re-attach is disabled, otherwise linked, reconnecting, attaching or failed (BootLink).
   link: BootLink;
   // Re-attach waits armed in the current streak. It resets on linked and on a user retry.
@@ -291,13 +294,29 @@ function runCallback(session: ActiveSession, callback: () => void): void {
   }
 }
 
+// Paints a refusal the attach reported, carrying its sanitized cause as a fixed suffix of catalogue
+// codes only ("CODE (cause: CAUSE)", via refusalCauseText in src/host/boot.ts): never a path, an
+// environment value or daemon text. The stamp and the shown code keep the bare code, so the
+// retryable/terminal disposition of the code never changes with its cause. Without a catalogue
+// cause this is paintRefusal unchanged, so causeless paints stay byte-identical.
+function paintRefusalWithCause(session: ActiveSession, code: string, causeCode: unknown, confirmed = false): void {
+  const cause = refusalCauseText(causeCode);
+  if (cause === undefined) {
+    paintRefusal(session, code, confirmed);
+    return;
+  }
+  const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
+  session.errorStamp = { code, at };
+  paint(session, { state: "error", reason: code, lastTransitionAt: at }, session.mode, confirmed, cause, code);
+}
+
 // The retry command's reply for one attach outcome.
 function describeRetry(outcome: AttachOutcome): string {
   if (outcome.outcome === "attached") {
     return `realm retry: ${outcome.snapshot.state} (${outcome.snapshot.reason})`;
   }
   if (outcome.outcome === "failed") {
-    return `realm retry refused: ${outcome.code}`;
+    return `realm retry refused: ${withRefusalCause(outcome.code, outcome.causeCode)}`;
   }
   return "realm retry superseded";
 }
@@ -307,7 +326,7 @@ function describeRetry(outcome: AttachOutcome): string {
 
 type AttachOutcome =
   | { readonly outcome: "attached"; readonly snapshot: StateSnapshot }
-  | { readonly outcome: "failed"; readonly code: string }
+  | { readonly outcome: "failed"; readonly code: string; readonly causeCode: ErrorCode | undefined }
   | { readonly outcome: "superseded" };
 
 // Registers the Realm tools, the retry command and the lifecycle handlers. Returns the host tool set this registration shares,
@@ -442,10 +461,14 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       readonly hostCode: "POLICY_DENIED" | null;
     } | null = null;
     let code = "OPENSHELL_START_FAILED";
+    let causeCode: ErrorCode | undefined = undefined;
     try {
       attached = await Promise.race([pending, budget]);
     } catch (error: unknown) {
-      code = error instanceof RealmError ? error.code : "OPENSHELL_START_FAILED";
+      if (error instanceof RealmError) {
+        code = error.code;
+        causeCode = error.causeCode;
+      }
     }
     disarmTimer(session, timer);
 
@@ -457,13 +480,14 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
     if (attached === null) {
       // The budget or the attach failed. A client that lands later is released, never adopted.
       void pending.then(({ client }) => { client.close(); }, () => undefined);
-      paintRefusal(session, code);
-      return { outcome: "failed", code };
+      paintRefusalWithCause(session, code, causeCode);
+      return { outcome: "failed", code, causeCode };
     }
-    // The daemon answered, so the client is adopted for tool calls, a refused up included. The mode is published only once the tool set has taken it.
     session.client = attached.client;
     session.refusal =
-      attached.refusal === null ? null : { code: attached.refusal.code, state: attached.status.snapshot.state };
+      attached.refusal === null
+        ? null
+        : { code: attached.refusal.code, state: attached.status.snapshot.state, causeCode: attached.refusal.causeCode };
     if (attached.hostCode === null) {
       session.mode = attached.status.mode;
       if (attached.refusal === null) {
@@ -471,7 +495,7 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
         paint(session, attached.status.snapshot, session.mode, true);
       } else {
         session.errorStamp = null;
-        paintRefusal(session, attached.refusal.code, true);
+        paintRefusalWithCause(session, attached.refusal.code, attached.refusal.causeCode, true);
       }
     } else {
       paintRefusal(session, attached.hostCode);
@@ -484,10 +508,10 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       ctx.ui.notify(attached.status.notice);
     }
     if (attached.hostCode !== null) {
-      return { outcome: "failed", code: attached.hostCode };
+      return { outcome: "failed", code: attached.hostCode, causeCode: undefined };
     }
     if (attached.refusal !== null) {
-      return { outcome: "failed", code: attached.refusal.code };
+      return { outcome: "failed", code: attached.refusal.code, causeCode: attached.refusal.causeCode };
     }
     return { outcome: "attached", snapshot: attached.status.snapshot };
   };
@@ -509,7 +533,7 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       return;
     }
     moveLink(session, "failed");
-    session.ctx.ui.notify(`realm link failed (${outcome.code}); run /${REALM_RETRY_COMMAND} to try again`);
+    session.ctx.ui.notify(`realm link failed (${withRefusalCause(outcome.code, outcome.causeCode)}); run /${REALM_RETRY_COMMAND} to try again`);
   };
 
   // Arms the next re-attach wait: one timer, one notice, and the connecting paint. Its expiry runs the attempt. Its end action only
@@ -601,6 +625,8 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
           const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
           session.errorStamp = { code, at };
           paintError(session, code, at, false);
+          // Poll-owned transition notice: exactly once per bucket change, silent on identical polls (dedup in helper).
+          notifyPaintTransition(session);
         }
         try {
           await reassertLastMode(session, isCurrent);
@@ -610,10 +636,14 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
             const deniedAt = session.errorStamp?.code === denied ? session.errorStamp.at : nowIso();
             session.errorStamp = { code: denied, at: deniedAt };
             paintError(session, denied, deniedAt, false);
+            // Poll-owned transition notice: exactly once per bucket change, silent on identical polls (dedup in helper).
+            notifyPaintTransition(session);
           }
         }
         if (lost) {
           reportLinkLoss(session, code, isCurrent);
+          // The re-attach wait above paints connecting (retrying bucket); notify its transition once, silent on repeats.
+          notifyPaintTransition(session);
         }
         return;
       }
@@ -629,6 +659,8 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
           const at = session.errorStamp?.code === code ? session.errorStamp.at : nowIso();
           session.errorStamp = { code, at };
           paintError(session, code, at, false);
+          // Poll-owned transition notice: exactly once per bucket change, silent on identical polls (dedup in helper).
+          notifyPaintTransition(session);
         }
         return;
       }
@@ -637,18 +669,27 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       }
       session.mode = status.mode;
       paintStatusRead(session, status.snapshot);
+      // Poll-owned transition notice: exactly once per bucket change, silent on identical polls (dedup in helper).
+      notifyPaintTransition(session);
     } finally {
       session.refreshing = false;
     }
   };
 
-  // Dispatcher-owned retry: the command re-runs the attach path and reports its outcome.
+  // Dispatcher-owned retry: the command re-runs the attach path and reports its outcome. A manual
+  // retry starts clean: any stale adopted-after-refusal client is released and the error stamp is
+  // reset, so the connecting paint carries no stale code and the old client terminates exactly
+  // once. The in-flight attach refusal above stays untouched, as do the wait cancel and the
+  // counter reset below. attach() would close the client itself; the release here only moves the
+  // termination before the new attempt, and the stamp reset only clears what the new paints rewrite.
   const retryRealm = async (): Promise<string> => {
     const session = live;
     if (session === null) {
       return "realm not started";
     }
     if (reattach === null) {
+      releaseClient(session);
+      session.errorStamp = null;
       return describeRetry(await attachAndReport(session));
     }
     if (session.link === "attaching") {
@@ -656,6 +697,8 @@ export function createRealmPlugin(pi: OmpExtensionApi, options: RealmPluginOptio
       moveLink(session, "attaching");
       return "realm retry: an attach is already in progress";
     }
+    releaseClient(session);
+    session.errorStamp = null;
     cancelWait(session);
     session.reattachCount = 0;
     moveLink(session, "attaching");

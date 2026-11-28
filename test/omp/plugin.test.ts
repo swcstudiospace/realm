@@ -737,11 +737,20 @@ void test("OMP-02: a daemon transition reaches the indicator on the poll, with n
   pollOf(fixture.ctx).callback();
   await waitUntil(() => lastLabel(fixture.ui) === DISCONNECTED_LABEL);
   assert.equal(lastDetail(fixture.ui), `AGENTOS_CRASH_LOOP · ${CLOCK_ISO}`);
+  // First poll after attach only sets the silent baseline (connected -> terminal baselines; startup/link notices stay attach-owned).
+  assert.deepEqual(fixture.ui.notifications, []);
 
   fixture.daemon.snapshot = ACTIVE;
   pollOf(fixture.ctx).callback();
   await waitUntil(() => lastLabel(fixture.ui) === ACTIVE_LABEL);
   assert.equal(lastDetail(fixture.ui), `container running · ${CLOCK_ISO}`);
+  // Second poll notifies the terminal -> connected transition exactly once.
+  assert.deepEqual(fixture.ui.notifications, ["realm status: connected"]);
+
+  pollOf(fixture.ctx).callback();
+  await yieldTurn();
+  // Identical poll stays silent (dedup in notifyPaintTransition).
+  assert.deepEqual(fixture.ui.notifications, ["realm status: connected"]);
   assert.equal(fixture.daemon.count("call"), 0, "the repaint dispatches no tool");
 });
 
@@ -2646,4 +2655,69 @@ void test("registerRealmPlugin still returns the host tool set", () => {
   assert.deepEqual(tools.removed, []);
   assert.equal(tools.inFlight, 0);
   assert.ok(tools.queue instanceof Promise);
+});
+// ---- SPE-40145 / SPE-40148: named refusal cause is carried, disposition frozen ----
+
+// The three named attach-refusal scenarios, each a fixed (code, cause) pair of catalogue codes only.
+const REFUSAL_CAUSES: ReadonlyArray<{ readonly name: string; readonly code: ErrorCode; readonly cause: ErrorCode }> = [
+  { name: "out-of-roots workspace", code: "POLICY_DENIED", cause: "PATH_ESCAPE" },
+  { name: "no compute driver", code: "AGENTOS_NOT_CONFIGURED", cause: "PODMAN_MISSING" },
+  { name: "admission refused", code: "POLICY_DENIED", cause: "LOCK_CONFLICT" },
+];
+
+void test("refusal cause: a refused up paints CODE (cause: CAUSE), keeps the bare code in view, and reports the bare code onAttach", async () => {
+  for (const { name, code, cause } of REFUSAL_CAUSES) {
+    const events: PluginAttachOutcome[] = [];
+    const fixture = makeFixture({
+      snapshot: UNBOUND,
+      attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError(code, cause) }),
+      extra: { onAttach: (outcome) => { events.push(outcome); } },
+    });
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, code);
+    assert.match(lastDetail(fixture.ui) ?? "", new RegExp(`^${code} \\(cause: ${cause}\\) · `), `${name}: the paint carries the named suffix`);
+    assert.equal((statusTexts(fixture.ui).at(-1) ?? "").includes(WORKSPACE), false, `${name}: the paint carries no workspace path`);
+    assert.deepEqual(fixture.view(), { state: "error", mode: "fail-closed", link: "off", code }, `${name}: the view keeps the bare code`);
+    assert.deepEqual(events, [{ outcome: "failed", code }], `${name}: onAttach reports the bare code only`);
+  }
+});
+
+void test("refusal cause: a thrown attach failure with a cause paints the suffix and the retry reply names it", async () => {
+  for (const { name, code, cause } of REFUSAL_CAUSES) {
+    const fixture = makeFixture({
+      attach: () => Promise.reject(makeRealmError(code, cause)),
+    });
+    startHandlerOf(fixture.pi)(fixture.ctx);
+    await waitForDetail(fixture.ui, code);
+    assert.match(lastDetail(fixture.ui) ?? "", new RegExp(`^${code} \\(cause: ${cause}\\) · `), `${name}: the thrown refusal paints the suffix`);
+    assert.equal(await retryCommandOf(fixture.pi).handler(), `realm retry refused: ${code} (cause: ${cause})`, `${name}: the retry reply carries the suffix`);
+    assert.equal(fixture.attachCalls.length, 2, `${name}: the retry ran the attach again`);
+  }
+});
+
+void test("refusal cause: a terminal refusal notifies once with the suffix; manual retry releases the stale client exactly once and drops the stale stamp", async () => {
+  const fixture = makeFixture({
+    snapshot: UNBOUND,
+    attach: (daemon) => Promise.resolve({ client: daemon, refusal: makeRealmError("POLICY_DENIED", "PATH_ESCAPE") }),
+    reattach: { enabled: true, random: seededRandom(40145) },
+  });
+  startHandlerOf(fixture.pi)(fixture.ctx);
+  await waitUntil(() => fixture.ui.notifications.some((text) => text.includes(`/${REALM_RETRY_COMMAND}`)));
+  assert.match(lastDetail(fixture.ui) ?? "", /^POLICY_DENIED \(cause: PATH_ESCAPE\) · /);
+  const failed = fixture.ui.notifications.filter((text) => text.startsWith("realm link failed"));
+  assert.equal(failed.length, 1, "one terminal, one notice");
+  assert.equal(failed[0], "realm link failed (POLICY_DENIED (cause: PATH_ESCAPE)); run /realm-retry to try again");
+  assert.deepEqual(pendingWaits(fixture.ctx), [], "a terminal refusal arms no re-attach wait");
+  assert.equal(fixture.attachCalls.length, 1, "POLICY_DENIED never auto-retries, even with a cause");
+  assert.equal(fixture.daemon.count("close"), 0, "the adopted refusal client stays until a manual retry");
+
+  const paintedBefore = detailsOf(fixture.ui).length;
+  assert.equal(await retryCommandOf(fixture.pi).handler(), "realm retry refused: POLICY_DENIED (cause: PATH_ESCAPE)");
+  assert.equal(fixture.attachCalls.length, 2, "the retry attaches once");
+  assert.equal(fixture.daemon.count("close"), 1, "the stale adopted client is terminated exactly once");
+  const connecting = detailsOf(fixture.ui).slice(paintedBefore).find((detail) => detail.startsWith("connecting"));
+  assert.ok(connecting !== undefined && !connecting.includes("POLICY_DENIED"), `the retry starts without the stale stamp: ${connecting ?? ""}`);
+  const failedAfter = fixture.ui.notifications.filter((text) => text.startsWith("realm link failed"));
+  assert.equal(failedAfter.length, 2, "the second terminal notifies once more, with the suffix");
+  assert.equal(failedAfter[1], failed[0]);
 });

@@ -10,7 +10,9 @@ import {
   isLinkLostCode,
   isRetryableAttachCode,
   reattachTransitionAllowed,
+  refusalCauseText,
   resolveBoot,
+  withRefusalCause,
   withStartupBudget,
   type BootLink,
 } from "../../src/host/boot.js";
@@ -242,4 +244,49 @@ void test("src/host/boot.ts imports nothing from src/omp and reads no environmen
     .replace(/^\s*\/\/.*$/gm, "");
   assert.equal(source.includes('from "../omp'), false);
   assert.equal(source.includes("process.env"), false);
+});
+
+// ---- Refusal-cause suffix (SPE-40145 / SPE-40148) ----------------------------------
+
+void test("refusalCauseText carries only catalogue codes, never free text", () => {
+  for (const code of ERROR_CODES) {
+    assert.equal(refusalCauseText(code), `cause: ${code}`, code);
+  }
+  const bad: readonly unknown[] = [
+    "",
+    "POLICY_DENIED ",
+    " policy_denied",
+    "/ws",
+    "/var/lib/realm",
+    "daemon exploded: ENOENT",
+    "cause: POLICY_DENIED",
+    null,
+    undefined,
+    7,
+    true,
+    {},
+    ["POLICY_DENIED"],
+  ];
+  for (const [index, value] of bad.entries()) {
+    assert.equal(refusalCauseText(value), undefined, `bad[${String(index)}]`);
+  }
+});
+
+void test("withRefusalCause appends the fixed suffix, or nothing when the cause is not a catalogue code", () => {
+  assert.equal(withRefusalCause("POLICY_DENIED", "PATH_ESCAPE"), "POLICY_DENIED (cause: PATH_ESCAPE)");
+  assert.equal(withRefusalCause("POLICY_DENIED", undefined), "POLICY_DENIED");
+  assert.equal(withRefusalCause("POLICY_DENIED", null), "POLICY_DENIED");
+  assert.equal(withRefusalCause("POLICY_DENIED", "/ws"), "POLICY_DENIED");
+  assert.equal(withRefusalCause("AGENTOS_NOT_CONFIGURED", "PODMAN_MISSING"), "AGENTOS_NOT_CONFIGURED (cause: PODMAN_MISSING)");
+});
+
+void test("a refusal cause never changes the disposition: terminal stays terminal and POLICY_DENIED never retries", () => {
+  assert.equal(attachFailureDisposition(makeRealmError("POLICY_DENIED", "PATH_ESCAPE")), "terminal");
+  assert.equal(attachFailureDisposition(makeRealmError("AGENTOS_NOT_CONFIGURED", "PODMAN_MISSING")), "terminal");
+  assert.equal(attachFailureDisposition(makeRealmError("OPENSHELL_START_FAILED", "PODMAN_MISSING")), "terminal");
+  assert.equal(isRetryableAttachCode("POLICY_DENIED"), false);
+  assert.deepEqual(
+    [...BOOT_BOUNDS.retryableAttachCodes],
+    ["REALM_NOT_ACTIVE", "TOOL_TIMEOUT", "STARTUP_BUDGET_EXCEEDED", "DAEMON_START_TIMEOUT"],
+  );
 });
