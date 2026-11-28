@@ -17,11 +17,8 @@ import { displayStatus, STATUS_LABELS } from "../core/status.js";
 // operator-relevant distinctions: connected (active), retrying (a re-attach wait
 // is armed, so the connecting paint carries its catalogue code), denied (the
 // error paint carries POLICY_DENIED), terminal (any other error paint), and
-// disconnected (every other non-active paint). Defined beside the funnel so the
-// plugin closure gains no new module (OMPR-05).
-export const PAINTED_BUCKETS = Object.freeze(["connected", "disconnected", "denied", "retrying", "terminal"] as const);
-
-export type PaintedBucket = (typeof PAINTED_BUCKETS)[number];
+// disconnected (every other non-active paint).
+export type PaintedBucket = "connected" | "disconnected" | "denied" | "retrying" | "terminal";
 
 // Maps one paint to its notify bucket. code is the catalogue code the paint
 // carries (the reconnect code on a connecting paint, the error code on an error
