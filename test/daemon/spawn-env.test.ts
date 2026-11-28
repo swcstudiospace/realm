@@ -10,21 +10,22 @@ import { launchFilteredDaemon, startDetachedDaemon } from "../../src/daemon/laun
 
 const SENTINEL = "REALM_SENTINEL_MUST_NOT_LEAK";
 
-// The exact names daemonSpawnEnv keeps, besides the REALM_HOST_PIN_ prefix. The gateway endpoint and its CA are not among them (ONB-04).
+// The exact names daemonSpawnEnv keeps, besides the REALM_HOST_PIN_ prefix. The gateway endpoint and its CA are among them: realm
+// doctor runs inside the daemon and probes that endpoint with the CA (ONB-07). Neither is a credential.
 const ALLOWED_NAMES = [
   "PATH",
   "HOME",
   "XDG_RUNTIME_DIR",
   "XDG_CONFIG_HOME",
   "REALM_DRIVER_SOCKET",
+  "REALM_DRIVER_GATEWAY_ENDPOINT",
+  "REALM_DRIVER_GATEWAY_CA",
   "REALM_DRIVER_SUPERVISOR_BINARY",
   "REALM_DRIVER_SUPERVISOR_SHA256",
   "REALM_LOG_LEVEL",
 ] as const;
 const HOST_PIN_NAMES = ["REALM_HOST_PIN_PODMAN_SHA256", "REALM_HOST_PIN_OPENSHELL_VERSION"] as const;
 const REFUSED_NAMES = [
-  "REALM_DRIVER_GATEWAY_ENDPOINT",
-  "REALM_DRIVER_GATEWAY_CA",
   "ANTHROPIC_API_KEY",
   "AWS_SECRET_ACCESS_KEY",
   "REALM_DRIVER_SECRET_ROOT",
@@ -135,14 +136,14 @@ void test("a sentinel variable does not reach the daemon on the CLI spawn or sta
     const omp = (await waitFor(ompOut)) as ChildEnv;
     assert.equal(cli.sentinel, null);
     assert.equal(cli.socket, "/run/realm/driver.sock");
-    assert.equal(cli.gateway, null);
-    assert.equal(cli.ca, null);
+    assert.equal(cli.gateway, "https://127.0.0.1:17671");
+    assert.equal(cli.ca, "/run/realm/ca.crt");
     assert.equal(cli.level, "error");
     assert.equal(cli.staleSecretRoot, null);
     assert.equal(omp.sentinel, null);
     assert.equal(omp.socket, "/run/realm/driver.sock");
-    assert.equal(omp.gateway, null);
-    assert.equal(omp.ca, null);
+    assert.equal(omp.gateway, "https://127.0.0.1:17671");
+    assert.equal(omp.ca, "/run/realm/ca.crt");
     assert.equal(omp.level, "error");
     assert.equal(omp.staleSecretRoot, null);
   } finally {
