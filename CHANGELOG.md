@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.12] - 2026-11-28
+
+### Fixed
+- fix(host): name boot failures by binding to restore Omp writes (2bedac3)
+
 ## [0.9.11] - 2026-11-28
 
 ### Changed
