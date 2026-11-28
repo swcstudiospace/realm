@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.15] - 2026-11-28
+
+### Fixed
+- fix(daemon): name the cause on workspace attach refusals (23f3c571)
+
 ## [0.9.14] - 2026-11-28
 
 ### Fixed
