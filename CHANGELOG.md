@@ -4,6 +4,11 @@ This changelog follows Keep a Changelog 1.1.0, and the project follows Semantic 
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-11-28
+
+### Fixed
+- fix(daemon): keep gateway endpoint and CA in spawn env so doctor probes gateway (4cc2b311)
+
 ## [0.9.12] - 2026-11-28
 
 ### Fixed
