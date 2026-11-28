@@ -541,7 +541,7 @@ void test("E9: with no policy file at all the daemon enforces: its keyring exist
   // policy file with roots and no capabilityTokens key. What a missing file proves is the posture, read through the two requests that
   // need no project.
   const project = world.project("e9");
-  assert.deepEqual(await staleFrame(world, project), { id: "stale-1", error: { code: "POLICY_DENIED" } });
+  assert.deepEqual(await staleFrame(world, project), { id: "stale-1", error: { code: "POLICY_DENIED", causeCode: "PATH_ESCAPE" } }, "no roots admits nothing; the cause names the escape");
   const doctor = await sendRequest(world.fixture.socketPath, { id: "enf-doctor", method: "doctor" }, { timeoutMs: BOUND_MS });
   assert.equal(doctor.error, undefined);
   const checks: unknown = doctor.result;
